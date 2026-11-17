@@ -38,15 +38,23 @@ Procfile `release` command sees add-on URLs and manifest env. Formation
 quantities replace the implicit `web=1`.
 
 The app is already configured, and the file is skipped, when any of these is
-true: a release exists (other than the pipeline preview seed release), a
+true: a release exists (other than the pipeline preview seed release or the
+blueprint env-only release), a
 resource is attached, a route exists besides the included HTTP route and the
 preview route, strategy is not `all-at-once`, deploy timeout is not 120,
 `protected` is true, meta contains anything other than controller-managed
 keys, or `meta["flynn-app.json"]` is `applied`. A blueprint environment is
-the exception: `meta["flynn-blueprint"]` is `pending`, and the new databases
-it created for that app do not skip the file. Connecting a GitHub
+the exception: `meta["flynn-blueprint"]` is `pending`, `meta["flynn-blueprint-env"]`
+and `meta["flynn-blueprint-slot"]` are set, and the new databases it created
+for that app do not skip the file. The env-only release blueprint writes is
+marked `meta["flynn-blueprint.seed"]=true` on that release, the same kind of
+exception as the preview seed release. Connecting a GitHub
 repository does not skip the file. A normal new app uses the root manifest.
 `environments.preview` applies only when the app is a preview.
+`environments.blueprint` applies when the app is a blueprint provision, not
+because a pipeline environment is named blueprint. A blueprint apply runs the
+Procfile `release` command and `scripts.postdeploy`, then scales web. A
+preview apply is unchanged and still scales before postdeploy.
 The skip line is:
 
 ```
@@ -89,7 +97,7 @@ provisioned.
 | `addons` | String, or `{type, as, options}`. `flynn addons:create`. No plan tiers. `options` match `addons:create` (`runtime` default `small` for databases, `follow`, `replication`, `auto_failover`, and `cpu` / `memory` / `disk` only when that type allows custom sizes and a cluster admin enabled them). `as` matches `--as` (`ANALYTICS` becomes `ANALYTICS_URL`). The provider still injects `DATABASE_URL`, `REDIS_URL`, and the other default URL when `as` is omitted. Do not also set those under `env`. Order is array order. Apply returns once the instance is scheduled. |
 | `scripts.postdeploy` | One-shot after the first create. String or `{command, runtime}`. |
 | `scripts.preview_destroy` | One-shot when a pipeline preview app is destroyed, before the app is removed. No-op when the app is not a preview. `flynn pipeline:preview-destroy <pipeline> <app>` runs it. |
-| `environments` | `development`, `staging`, `production`, `preview`, `test`. `review` is another name for `preview`. A file with no `environments` block is the normal app: the root `formation`, `addons`, `env`, and `scripts` apply on the first git push. An app whose pipeline environment has no matching block also keeps the root. `environments.preview` applies only when the app is a preview. `test` applies only when the pipeline environment is `test`. Each block replaces whole root keys that are present (`env`, `formation`, `addons`, `routes`, `scripts`, `stack`, `buildpacks`, `image`, `github`, `strategy`, `deploy_timeout`, `protected`). Keys that are absent stay at the root. This is not a deep merge: a `preview` block that sets `env` and omits `WEB_CONCURRENCY` does not keep the root `WEB_CONCURRENCY`. Preview env values and script commands may use `{{pr}}`, `{{branch}}`, `{{sha}}`, `{{sha_short}}`, `{{app}}`, `{{pipeline}}`, `{{owner}}`, `{{repo}}`, `{{base}}`, `{{cluster}}`. |
+| `environments` | `development`, `staging`, `production`, `preview`, `blueprint`, `test`. `review` is another name for `preview`. A file with no `environments` block is the normal app: the root `formation`, `addons`, `env`, and `scripts` apply on the first git push. An app whose pipeline environment has no matching block also keeps the root. `environments.preview` applies only when the app is a preview. `environments.blueprint` applies only when blueprint provision created the app (`meta["flynn-blueprint"]` is `pending`). `test` applies only when the pipeline environment is `test`. Unknown names are rejected. Each block replaces whole root keys that are present (`env`, `formation`, `addons`, `routes`, `scripts`, `stack`, `buildpacks`, `image`, `github`, `strategy`, `deploy_timeout`, `protected`). Keys that are absent stay at the root. This is not a deep merge: a `preview` block that sets `env` and omits `WEB_CONCURRENCY` does not keep the root `WEB_CONCURRENCY`. A `blueprint` block follows the same rule. Preview and blueprint env values and script commands may use `{{pr}}`, `{{branch}}`, `{{sha}}`, `{{sha_short}}`, `{{app}}`, `{{pipeline}}`, `{{owner}}`, `{{repo}}`, `{{base}}`, `{{slot}}`, `{{cluster}}`. Unknown placeholders stay literal. Blueprint provision fills `{{base}}`, `{{slot}}`, `{{app}}`, `{{cluster}}`, and `{{branch}}` / `{{sha}}` when a commit was resolved. |
 | `routes` | Extra HTTP or TCP routes. The included app route is not listed. `type` is `http` or `tcp`. `domain` is required for HTTP. `service` defaults to the app web service. `port`, `sticky` (HTTP), `leader`, `https` (Let's Encrypt when that is enabled), `tls_mode` (`passthrough` or `terminate` for TCP), `drain_backends` (default true; false matches `--no-drain-backends`), `disable_keep_alives` (HTTP). Path-based HTTP routes are rejected. |
 | `github` | Applied only when `flynn-plugin-github` is installed. Otherwise apply fails. `repository` is `owner/repo`. `branch` defaults to the repository default, then `main`. `auto_deploy`, `wait_checks`. |
 | `strategy` | `all-at-once`, `one-by-one`, `one-down-one-up`, or `in-batches`. `sirenia` and `discoverd-meta` are rejected. Omitted leaves the strategy already on the app. `apps:create` sets `all-at-once`. |
@@ -158,6 +166,10 @@ provisioned.
     },
     "production": {
       "formation": {"web": {"quantity": 2, "runtime": "medium"}}
+    },
+    "blueprint": {
+      "formation": {"web": {"quantity": 1, "runtime": "small"}},
+      "scripts": {"postdeploy": "bundle exec rake db:seed"}
     }
   }
 }
@@ -177,6 +189,19 @@ repo is already connected on GitHub. A preview app's first receive applies
 root `env`, so `WEB_CONCURRENCY` is not kept.
 `pipeline:preview-destroy` runs `scripts.preview_destroy` and then deletes
 the app. The pipeline plugin does not apply the file a second time.
+
+Blueprint provision applies this file itself. It selects `environments.blueprint`
+because the app is a blueprint app. With no `blueprint` block, the root
+manifest is used. The Procfile `release` process is the migration and stays
+there. `scripts.postdeploy` in the applied manifest (root or
+`environments.blueprint`) is the one-time seed. Copying database rows finishes
+before either command. Web is scaled only after both exit 0. A later git push
+does not apply the file again and does not run postdeploy again. The release
+command still runs on those later deploys. An addon the blueprint graph
+already created for the same env key is not created again. An addon the graph
+did not create is still created. The Flynn image that receives git pushes
+must include this blueprint behavior; install it together with the blueprint
+plugin.
 
 ## Container example
 

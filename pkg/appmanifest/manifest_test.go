@@ -71,6 +71,13 @@ func TestParseDocsExamples(t *testing.T) {
 	if _, ok := review.Env["WEB_CONCURRENCY"]; ok {
 		t.Fatal("review maps to preview")
 	}
+	bp := m.WithEnvironment("blueprint")
+	if bp.Scripts.Postdeploy.Command != "bundle exec rake db:seed" {
+		t.Fatalf("blueprint postdeploy: %q", bp.Scripts.Postdeploy.Command)
+	}
+	if _, ok := bp.Env["WEB_CONCURRENCY"]; !ok {
+		t.Fatal("blueprint omits env, so the root env stays")
+	}
 	container, err := Parse([]byte(blocks[1]))
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +198,62 @@ func TestDecide(t *testing.T) {
 	pushing.App.Meta["flynn-controller.building"] = "2026-11-04T23:00:00Z"
 	if Decide(pushing, true) != ActionApply {
 		t.Fatal("a new app's first git push applies the root manifest while the build mark is set")
+	}
+	blueprintSeed := base()
+	blueprintSeed.Head = &ct.Release{ID: "rel", Meta: map[string]string{MetaBlueprintSeed: "true"}}
+	if Decide(blueprintSeed, true) != ActionApply {
+		t.Fatal("blueprint seed release stays untouched")
+	}
+	normal := base()
+	normal.Head = &ct.Release{ID: "rel"}
+	if Decide(normal, true) != ActionSkip {
+		t.Fatal("a normal release still skips")
+	}
+	marked := base()
+	marked.App.Meta[MetaBlueprint] = StatusPending
+	marked.App.Meta[MetaBlueprintEnv] = "shop"
+	marked.App.Meta[MetaBlueprintSlot] = "web"
+	if Decide(marked, true) != ActionApply {
+		t.Fatal("blueprint env and slot marks must not skip flynn-app.json")
+	}
+}
+
+func TestBlueprintEnvironmentOverlaysLikePreview(t *testing.T) {
+	m, err := Parse([]byte(`{
+	  "formation": {"web": {"quantity": 2}},
+	  "scripts": {"postdeploy": "echo root"},
+	  "env": {"WEB_CONCURRENCY": {"value": "2"}, "APP_ENV": {"value": "root"}},
+	  "environments": {
+	    "blueprint": {
+	      "formation": {"web": {"quantity": 1}},
+	      "scripts": {"postdeploy": "echo blueprint-{{slot}}"}
+	    },
+	    "preview": {"env": {"APP_ENV": {"value": "preview-{{branch}}"}}}
+	  }
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bp := m.WithEnvironment("blueprint")
+	web := bp.Formation["web"]
+	if web.Quantity == nil || *web.Quantity != 1 || bp.Scripts.Postdeploy.Command != "echo blueprint-{{slot}}" {
+		t.Fatalf("blueprint overlay: %+v %q", web, bp.Scripts.Postdeploy.Command)
+	}
+	if bp.Env["WEB_CONCURRENCY"].Value != "2" {
+		t.Fatal("blueprint keeps root env when the block omits env")
+	}
+	preview := m.WithEnvironment("preview")
+	if preview.Env["APP_ENV"].Value != "preview-{{branch}}" {
+		t.Fatalf("preview overlay: %+v", preview.Env)
+	}
+	if _, ok := preview.Env["WEB_CONCURRENCY"]; ok {
+		t.Fatal("preview still replaces the whole env")
+	}
+	if m.WithEnvironment("").Scripts.Postdeploy.Command != "echo root" {
+		t.Fatal("no environment keeps the root manifest")
+	}
+	if _, err := Parse([]byte(`{"environments":{"qa":{"scripts":{"postdeploy":"x"}}}}`)); err == nil || !strings.Contains(err.Error(), `unknown environment "qa"`) {
+		t.Fatalf("unknown environment: %v", err)
 	}
 }
 
@@ -402,9 +465,13 @@ func ioDiscard() *bytes.Buffer { return &bytes.Buffer{} }
 type fakeBackend struct {
 	apps        map[string]*ct.App
 	head        *ct.Release
+	resources   []*ct.Resource
 	provisions  int
+	providers   []string
 	scales      []ct.ScaleOptions
 	commands    int
+	events      []string
+	seedCmd     string
 	failCommand error
 	deleted     int
 	github      string
@@ -468,6 +535,7 @@ func (f *fakeBackend) SaveRelease(_ string, rel *ct.Release, _ bool) error {
 
 func (f *fakeBackend) Provision(req *ct.ResourceReq) (*ct.Resource, error) {
 	f.provisions++
+	f.providers = append(f.providers, req.ProviderID)
 	env := map[string]string{"DATABASE_URL": "postgres://db", "FLYNN_POSTGRES": "postgresql-concave-48291"}
 	if req.ProviderID == "mongodb" {
 		env = map[string]string{"DATABASE_URL": "mongodb://db", "FLYNN_MONGODB": "mongodb-harbor-48291"}
@@ -483,6 +551,7 @@ func (f *fakeBackend) CreateRoute(string, *router.Route) error { return nil }
 
 func (f *fakeBackend) Scale(_ string, _ string, opts ct.ScaleOptions) error {
 	f.scales = append(f.scales, opts)
+	f.events = append(f.events, "scale")
 	return nil
 }
 
@@ -494,14 +563,140 @@ func (f *fakeBackend) Settings() (*ct.RuntimeSettings, error) {
 	return &ct.RuntimeSettings{}, nil
 }
 
-func (f *fakeBackend) RunCommand(string, *ct.Release, string, resource.Resources) error {
+func (f *fakeBackend) RunCommand(_ string, _ *ct.Release, command string, _ resource.Resources) error {
 	f.commands++
+	f.seedCmd = command
+	f.events = append(f.events, "seed")
 	return f.failCommand
+}
+
+func (f *fakeBackend) RunRelease(string, *ct.Release) error {
+	f.events = append(f.events, "release")
+	return nil
 }
 
 func (f *fakeBackend) Formation(string, string) (*ct.Formation, error) { return nil, nil }
 
-func (f *fakeBackend) Resources(string) ([]*ct.Resource, error) { return nil, nil }
+func (f *fakeBackend) Resources(string) ([]*ct.Resource, error) { return f.resources, nil }
+
+func TestBlueprintApplyUsesOverlayAndScalesAfterSeed(t *testing.T) {
+	fake := newFakeBackend()
+	fake.apps["app"].Meta = map[string]string{
+		MetaBlueprint:     StatusPending,
+		MetaBlueprintEnv:  "shop",
+		MetaBlueprintSlot: "web",
+	}
+	fake.head = &ct.Release{
+		ID:          "rel",
+		ArtifactIDs: []string{"slug"},
+		Env:         map[string]string{"DATABASE_URL": "postgres://copied"},
+		Processes: map[string]ct.ProcessType{
+			"web":     {},
+			"release": {Command: "rake db:migrate", Args: []string{"/runner/init", "start", "release"}},
+		},
+	}
+	fake.resources = []*ct.Resource{{ID: "pg", ProviderID: "postgres"}}
+	a := &Applier{b: fake, Catalog: testCatalog(), Log: ioDiscard()}
+	raw := []byte(`{
+	  "addons": ["postgres", "redis"],
+	  "scripts": {"postdeploy": "echo root"},
+	  "environments": {
+	    "blueprint": {
+	      "formation": {"web": {"quantity": 1}},
+	      "scripts": {"postdeploy": "echo seed-{{slot}}-{{base}}-{{sha}}-{{unknown}}"}
+	    },
+	    "preview": {"scripts": {"postdeploy": "echo preview"}}
+	  }
+	}`)
+	if _, err := a.Prepare("app", raw, PrepareOptions{Placeholders: map[string]string{"sha": "abc123"}}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.provisions != 1 || len(fake.providers) != 1 || fake.providers[0] != "redis" {
+		t.Fatalf("graph postgres must be kept and redis still created: %+v n=%d", fake.providers, fake.provisions)
+	}
+	rel := fake.head
+	if err := a.Finish("app", FinishInput{Release: rel, Processes: rel.Processes}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fake.events, ",") != "release,seed,scale" {
+		t.Fatalf("order %v", fake.events)
+	}
+	if fake.seedCmd != "echo seed-web-shop-abc123-{{unknown}}" {
+		t.Fatalf("seed %q", fake.seedCmd)
+	}
+	if len(fake.scales) != 1 || fake.scales[0].Processes["web"] != 1 {
+		t.Fatalf("scale %+v", fake.scales)
+	}
+	st := AppState{App: fake.apps["app"], Head: fake.head}
+	if Decide(st, true) != ActionSkip {
+		t.Fatal("a later push skips flynn-app.json")
+	}
+	if err := a.Finish("app", FinishInput{Release: fake.head, Processes: fake.head.Processes}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.commands != 1 {
+		t.Fatalf("postdeploy ran %d times", fake.commands)
+	}
+}
+
+func TestBlueprintFailedSeedDoesNotScale(t *testing.T) {
+	fake := newFakeBackend()
+	fake.apps["app"].Meta = map[string]string{MetaBlueprint: StatusPending, MetaBlueprintSlot: "web"}
+	fake.head = &ct.Release{
+		ID:          "rel",
+		ArtifactIDs: []string{"slug"},
+		Processes:   map[string]ct.ProcessType{"web": {}, "release": {Command: "rake db:migrate"}},
+	}
+	a := &Applier{b: fake, Catalog: testCatalog(), Log: ioDiscard()}
+	raw := []byte(`{"scripts":{"postdeploy":"rake db:seed"}}`)
+	if _, err := a.Prepare("app", raw, PrepareOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	fake.failCommand = errors.New("seed exited 1")
+	rel := fake.head
+	err := a.Finish("app", FinishInput{Release: rel, Processes: rel.Processes})
+	var post *PostdeployError
+	if !errors.As(err, &post) {
+		t.Fatalf("postdeploy error: %v", err)
+	}
+	if len(fake.scales) != 0 || fake.apps["app"].Meta[MetaStatus] == StatusApplied {
+		t.Fatalf("scaled %d status %s", len(fake.scales), fake.apps["app"].Meta[MetaStatus])
+	}
+	fake.failCommand = nil
+	err = a.Finish("app", FinishInput{Release: rel, Processes: rel.Processes})
+	if !errors.As(err, &post) {
+		t.Fatalf("retry must not seed again or scale: %v", err)
+	}
+	if fake.commands != 1 || len(fake.scales) != 0 {
+		t.Fatalf("commands %d scales %d", fake.commands, len(fake.scales))
+	}
+}
+
+func TestPreviewFinishStillScalesBeforePostdeploy(t *testing.T) {
+	fake := newFakeBackend()
+	fake.head = &ct.Release{
+		ID:          "rel",
+		ArtifactIDs: []string{"slug"},
+		Processes:   map[string]ct.ProcessType{"web": {}},
+	}
+	a := &Applier{b: fake, Catalog: testCatalog(), Log: ioDiscard()}
+	raw := []byte(`{
+	  "scripts": {"postdeploy": "echo root"},
+	  "environments": {"preview": {"formation": {"web": {"quantity": 1}}, "scripts": {"postdeploy": "echo preview"}}}
+	}`)
+	if _, err := a.Prepare("app", raw, PrepareOptions{Environment: "preview"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Finish("app", FinishInput{Release: fake.head, Processes: fake.head.Processes}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(fake.events, ",") != "scale,seed" {
+		t.Fatalf("preview order %v", fake.events)
+	}
+	if fake.seedCmd != "echo preview" {
+		t.Fatalf("seed %q", fake.seedCmd)
+	}
+}
 
 func TestPlanBuildpacks(t *testing.T) {
 	m := Manifest{Stack: "heroku-24", Buildpacks: []Buildpack{{URL: "https://example.com/a"}}}

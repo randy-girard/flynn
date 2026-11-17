@@ -41,6 +41,18 @@ const (
 	// MetaBlueprint is pending while a blueprint environment created this app
 	// and its new databases. Those resources do not make the app configured.
 	MetaBlueprint = "flynn-blueprint"
+	// MetaBlueprintEnv is the provisioned environment name, such as shop.
+	// It does not make the app configured.
+	MetaBlueprintEnv = "flynn-blueprint-env"
+	// MetaBlueprintSlot is the blueprint slot, such as web. It does not make
+	// the app configured.
+	MetaBlueprintSlot = "flynn-blueprint-slot"
+	// MetaBlueprintSeed marks the env-only release blueprint writes before
+	// the slug is attached. That release does not make the app configured.
+	MetaBlueprintSeed = "flynn-blueprint.seed"
+	// MetaFile is the raw flynn-app.json stored on a release built from a
+	// repo that contained the file. Copying the release copies the file.
+	MetaFile = "flynn-app.json.body"
 	// MetaPreviewSeed marks the env release a pipeline writes before the
 	// first preview receive. That release does not make the app configured.
 	MetaPreviewSeed = "flynn-pipeline.preview-seed"
@@ -256,6 +268,9 @@ var envNames = map[string]struct{}{
 	"staging":     {},
 	"production":  {},
 	"preview":     {},
+	// blueprint is selected when the app was created by blueprint provision,
+	// not when a pipeline environment is named blueprint.
+	"blueprint": {},
 	// test is selected only when the pipeline environment is test.
 	"test": {},
 }
@@ -356,7 +371,7 @@ func parseOverlay(raw json.RawMessage) (Overlay, error) {
 }
 
 // canonicalEnv maps review to preview. Other names must be one of
-// development, staging, production, preview, or test.
+// development, staging, production, preview, blueprint, or test.
 func canonicalEnv(name string) string {
 	n := strings.ToLower(strings.TrimSpace(name))
 	if n == "review" {

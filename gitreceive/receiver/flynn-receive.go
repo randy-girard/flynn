@@ -24,6 +24,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
 	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/appmanifest"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/dockerimage"
@@ -341,7 +342,7 @@ Options:
 	resetFlynnTree()
 	skipDefaultScale = false
 	afterDeploy = nil
-	if err := prepareReceiveManifest(client, app, releaseEnv); err != nil {
+	if err := prepareReceiveManifest(client, app, releaseEnv, args.String["<rev>"], meta); err != nil {
 		cleanupBuildInput()
 		return err
 	}
@@ -886,6 +887,12 @@ func dropBuildPlaceholder(client releaseDropper, app *ct.App, id string) error {
 
 func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release, release *ct.Release, procs map[string]ct.ProcessType, placeholderID string) error {
 	defer saveReleaseProgress(client, app, release)
+	if release != nil && len(receiveManifestBody) > 0 && len(receiveManifestBody) <= 1<<20 {
+		if release.Meta == nil {
+			release.Meta = map[string]string{}
+		}
+		release.Meta[appmanifest.MetaFile] = string(receiveManifestBody)
+	}
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		return fmt.Errorf("Error creating release: %s", err)
 	}

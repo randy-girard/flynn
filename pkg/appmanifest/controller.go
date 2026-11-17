@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -30,6 +31,7 @@ type backend interface {
 	Profiles() ([]*ct.RuntimeProfile, error)
 	Settings() (*ct.RuntimeSettings, error)
 	RunCommand(appID string, rel *ct.Release, command string, resources resource.Resources) error
+	RunRelease(appID string, rel *ct.Release) error
 	Formation(appID, releaseID string) (*ct.Formation, error)
 	Resources(appID string) ([]*ct.Resource, error)
 }
@@ -190,6 +192,51 @@ func (c controllerBackend) Formation(appID, releaseID string) (*ct.Formation, er
 
 func (c controllerBackend) Resources(appID string) ([]*ct.Resource, error) {
 	return c.client.AppResourceList(appID)
+}
+
+func (c controllerBackend) RunRelease(appID string, rel *ct.Release) error {
+	req := ct.ReleasePhaseNewJob(rel)
+	if req == nil || rel == nil || rel.ID == "" {
+		return nil
+	}
+	jobs, err := c.client.JobList(appID)
+	if err != nil {
+		return err
+	}
+	if ct.ReleasePhaseCompleted(jobs, rel.ID) {
+		return nil
+	}
+	timeout := time.Duration(ct.DefaultDeployTimeout) * time.Second
+	if app, err := c.client.GetApp(appID); err == nil && app != nil && app.DeployTimeout > 0 {
+		timeout = time.Duration(app.DeployTimeout) * time.Second
+	}
+	out := c.log
+	if out == nil {
+		out = io.Discard
+	}
+	fmt.Fprintln(out, "-----> Running release command")
+	if cmd := ct.ProcessDisplayCommand(rel.Processes[ct.ProcessTypeRelease]); cmd != "" {
+		fmt.Fprintf(out, "       %s\n", cmd)
+	}
+	job, err := c.client.RunJobDetached(appID, req)
+	if err != nil {
+		return fmt.Errorf("release command: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		got, err := c.client.GetJob(appID, job.ID)
+		if err == nil && got != nil && got.State == ct.JobStateDown {
+			if got.ExitStatus != nil && *got.ExitStatus != 0 {
+				return ct.ReleasePhaseExitError(int(*got.ExitStatus))
+			}
+			fmt.Fprintln(out, "-----> Release command complete")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("release command timed out after %s", timeout)
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func (c controllerBackend) RunCommand(appID string, rel *ct.Release, command string, resources resource.Resources) error {

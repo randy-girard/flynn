@@ -189,6 +189,8 @@ func (f *setupBackend) RunCommand(string, *ct.Release, string, resource.Resource
 	return nil
 }
 
+func (f *setupBackend) RunRelease(string, *ct.Release) error { return nil }
+
 func (f *setupBackend) Formation(string, string) (*ct.Formation, error) { return nil, nil }
 
 func (f *setupBackend) Resources(string) ([]*ct.Resource, error) { return nil, nil }

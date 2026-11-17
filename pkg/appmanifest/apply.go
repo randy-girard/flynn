@@ -45,6 +45,9 @@ type Applier struct {
 	Hooks        Hooks
 	manifest     *Manifest
 	placeholders map[string]string
+	// blueprint is set when this app was created by blueprint provision.
+	// Finish then runs the release command and postdeploy before scaling.
+	blueprint bool
 }
 
 // PrepareOptions controls one apply.
@@ -80,6 +83,9 @@ type FinishInput struct {
 	Release       *ct.Release
 	Processes     map[string]ct.ProcessType
 	DefaultScaled bool
+	// ReleaseAlreadyRan is set when gitreceive already ran the Procfile
+	// release command. Blueprint finish does not run it again.
+	ReleaseAlreadyRan bool
 }
 
 // PostdeployError is a non-zero postdeploy. The app is left in place, the
@@ -118,6 +124,7 @@ func (a *Applier) Prepare(appID string, raw []byte, opt PrepareOptions) (*Prepar
 		return nil, err
 	}
 	pending := metaValue(app, MetaStatus) == StatusPending
+	a.blueprint = metaValue(app, MetaBlueprint) == StatusPending
 
 	ctx, err := a.pipelineContext(app, opt)
 	if err != nil {
@@ -131,6 +138,9 @@ func (a *Applier) Prepare(appID string, raw []byte, opt PrepareOptions) (*Prepar
 	if envName == "" {
 		envName = ctx.Environment
 	}
+	if a.blueprint {
+		envName = "blueprint"
+	}
 	applied := m.WithEnvironment(envName)
 	a.placeholders = mergePlaceholders(ctx.Placeholders, opt.Placeholders)
 	if a.placeholders == nil {
@@ -138,6 +148,12 @@ func (a *Applier) Prepare(appID string, raw []byte, opt PrepareOptions) (*Prepar
 	}
 	if a.placeholders["app"] == "" {
 		a.placeholders["app"] = app.Name
+	}
+	if a.placeholders["base"] == "" {
+		a.placeholders["base"] = metaValue(app, MetaBlueprintEnv)
+	}
+	if a.placeholders["slot"] == "" {
+		a.placeholders["slot"] = metaValue(app, MetaBlueprintSlot)
 	}
 	applied.Scripts.Postdeploy.Command = Substitute(applied.Scripts.Postdeploy.Command, a.placeholders)
 	applied.Scripts.PreviewDestroy.Command = Substitute(applied.Scripts.PreviewDestroy.Command, a.placeholders)
@@ -195,6 +211,9 @@ func (a *Applier) Finish(appID string, in FinishInput) error {
 		return err
 	}
 	m := a.manifest
+	if a.blueprint || metaValue(app, MetaBlueprint) == StatusPending {
+		return a.finishBlueprint(app, m, in)
+	}
 	deferred := false
 	if m.ScalesFormation() {
 		ok, err := a.applyFormation(app, m, in)
@@ -225,6 +244,44 @@ func (a *Applier) Finish(appID string, in FinishInput) error {
 	if deferred {
 		fmt.Fprintln(a.Log, "-----> flynn-app.json will finish on the first code deploy")
 		return nil
+	}
+	return a.updateMeta(app, func(meta map[string]string) {
+		meta[MetaStatus] = StatusApplied
+	})
+}
+
+// finishBlueprint runs the release command and the one-time seed before any
+// web process is scaled, so the router has nothing to send traffic to until
+// both commands exit 0.
+func (a *Applier) finishBlueprint(app *ct.App, m *Manifest, in FinishInput) error {
+	if !in.ReleaseAlreadyRan {
+		if err := a.b.RunRelease(app.ID, in.Release); err != nil {
+			return err
+		}
+	}
+	if _, err := a.runPostdeploy(app, m, in.Release); err != nil {
+		return err
+	}
+	// A failed seed is not run again. Leave web and the route down so the
+	// router has nothing to send traffic to, and a retry can still destroy
+	// the environment.
+	if metaValue(app, MetaPostdeploy) == PostdeployFailed {
+		return &PostdeployError{Err: fmt.Errorf("scripts.postdeploy failed")}
+	}
+	if m.ScalesFormation() {
+		if _, err := a.applyFormation(app, m, in); err != nil {
+			return err
+		}
+	} else if !in.DefaultScaled {
+		if err := a.scaleDefault(app, in); err != nil {
+			return err
+		}
+	}
+	if err := a.applyRoutes(app, m); err != nil {
+		return err
+	}
+	if err := a.connectGitHub(app, m); err != nil {
+		return err
 	}
 	return a.updateMeta(app, func(meta map[string]string) {
 		meta[MetaStatus] = StatusApplied
@@ -374,9 +431,22 @@ func (a *Applier) applyAppFields(app *ct.App, m *Manifest) error {
 
 func (a *Applier) provisionAddons(app *ct.App, m *Manifest) error {
 	done := decodeAddons(metaValue(app, MetaAddons))
+	existing := map[string]string{}
+	if head, err := a.b.Head(app.ID); err == nil && head != nil && head.Env != nil {
+		existing = head.Env
+	}
 	for _, addon := range m.Addons {
 		if addonSeen(done, addon) {
 			continue
+		}
+		if a.blueprint {
+			skip, err := a.addonSatisfied(app.ID, addon, existing)
+			if err != nil {
+				return err
+			}
+			if skip {
+				continue
+			}
 		}
 		spec, cfg, err := a.prepareAddon(addon)
 		if err != nil {
@@ -418,6 +488,49 @@ func (a *Applier) provisionAddons(app *ct.App, m *Manifest) error {
 		}
 	}
 	return nil
+}
+
+// addonSatisfied reports a database the blueprint graph already attached.
+// The manifest must not create a second one for that same env key. An addon
+// whose env key is not already set is still created.
+func (a *Applier) addonSatisfied(appID string, addon Addon, existing map[string]string) (bool, error) {
+	if a.Catalog == nil {
+		return false, nil
+	}
+	spec := a.Catalog.AddonByType(addon.Type)
+	if spec == nil || strings.TrimSpace(spec.Provider) == "" {
+		return false, nil
+	}
+	key := addonEnvKey(addon, spec.Provider)
+	if strings.TrimSpace(existing[key]) == "" {
+		return false, nil
+	}
+	list, err := a.b.Resources(appID)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range list {
+		if r != nil && strings.EqualFold(strings.TrimSpace(r.ProviderID), spec.Provider) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func addonEnvKey(addon Addon, provider string) string {
+	if key := resname.AsURLKey(addon.As); key != "" {
+		return key
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "redis":
+		return "REDIS_URL"
+	case "kafka":
+		return "KAFKA_URL"
+	case "clickhouse":
+		return "CLICKHOUSE_URL"
+	default:
+		return "DATABASE_URL"
+	}
 }
 
 func (a *Applier) prepareAddon(addon Addon) (*plugin.AddonSpec, []byte, error) {
@@ -570,7 +683,8 @@ func (a *Applier) putEnv(appID string, kv map[string]string, deleteEmpty bool) e
 		}
 		rel.Env[k] = v
 	}
-	return a.b.SaveRelease(appID, rel, len(rel.ArtifactIDs) > 0)
+	deploy := len(rel.ArtifactIDs) > 0 && !a.blueprint
+	return a.b.SaveRelease(appID, rel, deploy)
 }
 
 func (a *Applier) applyFormation(app *ct.App, m *Manifest, in FinishInput) (bool, error) {
@@ -636,7 +750,7 @@ func (a *Applier) applyFormation(app *ct.App, m *Manifest, in FinishInput) (bool
 		ArtifactIDs:      append([]string{}, rel.ArtifactIDs...),
 		LegacyArtifactID: rel.LegacyArtifactID,
 	}
-	if err := a.b.SaveRelease(app.ID, updated, len(updated.ArtifactIDs) > 0); err != nil {
+	if err := a.b.SaveRelease(app.ID, updated, len(updated.ArtifactIDs) > 0 && !a.blueprint); err != nil {
 		return false, err
 	}
 	if len(scale) == 0 {

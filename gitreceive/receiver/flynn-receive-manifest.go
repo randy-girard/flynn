@@ -28,6 +28,11 @@ var skipDefaultScale bool
 // is current.
 var afterDeploy func(release *ct.Release, procs map[string]ct.ProcessType) error
 
+// receiveManifestBody is the root flynn-app.json from this push. finishDeploy
+// stores it on the release so a later blueprint copy can apply the same file
+// without GitHub and without a local slug.
+var receiveManifestBody []byte
+
 func archiveReader() io.Reader {
 	if buildInput != nil {
 		return buildInput
@@ -46,7 +51,8 @@ func cleanupBuildInput() {
 	buildInput = nil
 }
 
-func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv map[string]string) error {
+func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv map[string]string, rev string, meta map[string]string) error {
+	receiveManifestBody = nil
 	spooled, err := appmanifest.Spool(os.Stdin)
 	if err != nil {
 		return err
@@ -63,6 +69,7 @@ func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv ma
 		return err
 	}
 	buildInput = spooled
+	receiveManifestBody = append([]byte(nil), bytes.TrimSpace(manifest)...)
 
 	pending := false
 	if app != nil && app.Meta != nil && strings.TrimSpace(app.Meta[appmanifest.MetaStatus]) == appmanifest.StatusPending {
@@ -102,10 +109,7 @@ func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv ma
 		}
 	}
 
-	ph := map[string]string{"app": app.Name}
-	if domain := strings.TrimSpace(os.Getenv("DEFAULT_ROUTE_DOMAIN")); domain != "" {
-		ph["cluster"] = domain
-	}
+	ph := receivePlaceholders(app, rev, meta)
 	res, err := ap.Prepare(app.ID, manifest, appmanifest.PrepareOptions{
 		ExistingEnv:       releaseEnv,
 		Placeholders:      ph,
@@ -115,12 +119,14 @@ func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv ma
 	if err != nil {
 		return err
 	}
-	skipDefaultScale = res.HasFormation
+	blueprint := blueprintPending(app)
+	skipDefaultScale = res.HasFormation || blueprint
 	afterDeploy = func(release *ct.Release, procs map[string]ct.ProcessType) error {
 		return ap.Finish(app.ID, appmanifest.FinishInput{
-			Release:       release,
-			Processes:     procs,
-			DefaultScaled: !res.HasFormation,
+			Release:           release,
+			Processes:         procs,
+			DefaultScaled:     !res.HasFormation && !blueprint,
+			ReleaseAlreadyRan: true,
 		})
 	}
 	if len(res.InjectBuildpacks) == 0 {
@@ -148,6 +154,46 @@ func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv ma
 	os.Remove(spooled.Name())
 	buildInput = rewritten
 	return nil
+}
+
+func blueprintPending(app *ct.App) bool {
+	return app != nil && app.Meta != nil && strings.TrimSpace(app.Meta[appmanifest.MetaBlueprint]) == appmanifest.StatusPending
+}
+
+func receivePlaceholders(app *ct.App, rev string, meta map[string]string) map[string]string {
+	ph := map[string]string{}
+	if app != nil {
+		ph["app"] = app.Name
+		if app.Meta != nil {
+			if v := strings.TrimSpace(app.Meta[appmanifest.MetaBlueprintEnv]); v != "" {
+				ph["base"] = v
+			}
+			if v := strings.TrimSpace(app.Meta[appmanifest.MetaBlueprintSlot]); v != "" {
+				ph["slot"] = v
+			}
+		}
+	}
+	if domain := strings.TrimSpace(os.Getenv("DEFAULT_ROUTE_DOMAIN")); domain != "" {
+		ph["cluster"] = domain
+	}
+	if sha := firstMeta(meta, "git.commit", "rev"); sha != "" {
+		ph["sha"] = sha
+	} else if strings.TrimSpace(rev) != "" {
+		ph["sha"] = strings.TrimSpace(rev)
+	}
+	if branch := firstMeta(meta, "git.branch", "branch"); branch != "" {
+		ph["branch"] = branch
+	}
+	return ph
+}
+
+func firstMeta(meta map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if v := strings.TrimSpace(meta[key]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func pipelineEnvironment(appID string) (appmanifest.PipelineContext, error) {

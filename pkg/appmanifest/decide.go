@@ -85,7 +85,7 @@ func releaseBlocks(rel *ct.Release) bool {
 	if rel == nil || strings.TrimSpace(rel.ID) == "" {
 		return false
 	}
-	if rel.Meta != nil && rel.Meta[MetaPreviewSeed] == "true" {
+	if rel.Meta != nil && (rel.Meta[MetaPreviewSeed] == "true" || rel.Meta[MetaBlueprintSeed] == "true") {
 		return false
 	}
 	return true
@@ -94,6 +94,9 @@ func releaseBlocks(rel *ct.Release) bool {
 // ManagedMeta is set by the controller, gitreceive, or the pipeline plugin
 // and does not by itself make an app configured.
 func ManagedMeta(key string) bool {
+	if key == MetaBlueprint || strings.HasPrefix(key, "flynn-blueprint") {
+		return true
+	}
 	switch key {
 	case ct.MetaGCMaxInactiveSlugReleases,
 		ct.MetaAppBuilding,
@@ -104,8 +107,7 @@ func ManagedMeta(key string) bool {
 		MetaPreviewRoute,
 		MetaPreviewBranch,
 		MetaPreviewSHA,
-		"flynn-pipeline.preview-pr",
-		MetaBlueprint:
+		"flynn-pipeline.preview-pr":
 		return true
 	}
 	return key == MetaStatus || strings.HasPrefix(key, MetaStatus+".")
