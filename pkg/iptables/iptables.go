@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/randy-girard/flynn/pkg/netpolicy"
@@ -464,6 +465,65 @@ func PlanForwardDrop(save, bridge, keep string) RulePlan {
 		plan.Insert = UserOverlayDropArgs(keepNet)
 	}
 	return plan
+}
+
+// IPTables runs one iptables invocation. args do not include the binary name.
+type IPTables func(args ...string) ([]byte, error)
+
+// ApplyOverlayRules replaces masquerade and user-overlay DROP destinations
+// with overlay. The wider DROP is inserted before the bridge egress ACCEPT,
+// and before the stale DROP is deleted, so datastore exceptions stay ahead.
+func ApplyOverlayRules(run IPTables, bridge, hostSubnet, overlay string) error {
+	if run == nil {
+		return errors.New("iptables runner is nil")
+	}
+	natSave, err := run("-t", "nat", "-S", "POSTROUTING")
+	if err != nil {
+		return fmt.Errorf("reading nat rules: %s", err)
+	}
+	nat := PlanMasquerade(string(natSave), bridge, hostSubnet, overlay)
+	if len(nat.Insert) > 0 {
+		if _, err := run(append([]string{"-I"}, nat.Insert...)...); err != nil {
+			return fmt.Errorf("installing overlay masquerade: %s", err)
+		}
+	}
+	for _, rule := range nat.Delete {
+		if _, err := run(append([]string{"-D"}, rule...)...); err != nil {
+			return fmt.Errorf("removing stale masquerade: %s", err)
+		}
+	}
+	fwdSave, err := run("-S", "FORWARD")
+	if err != nil {
+		return fmt.Errorf("reading filter rules: %s", err)
+	}
+	fwd := PlanForwardDrop(string(fwdSave), bridge, overlay)
+	if len(fwd.Insert) > 0 {
+		args := []string{"-I", "FORWARD"}
+		if fwd.InsertBefore > 0 {
+			args = append(args, strconv.Itoa(fwd.InsertBefore))
+		}
+		if len(fwd.Insert) > 1 {
+			args = append(args, fwd.Insert[1:]...)
+		}
+		if _, err := run(args...); err != nil {
+			return fmt.Errorf("installing overlay drop: %s", err)
+		}
+	}
+	for _, rule := range fwd.Delete {
+		if _, err := run(append([]string{"-D"}, rule...)...); err != nil {
+			return fmt.Errorf("removing stale overlay drop: %s", err)
+		}
+	}
+	return nil
+}
+
+// UseOverlayExclusion installs overlay as the live masquerade and DROP
+// destination on this host. It is a no-op for the rule set when overlay
+// already matches and no stale exclusion remains.
+func UseOverlayExclusion(bridge, hostSubnet, overlay string) error {
+	return ApplyOverlayRules(func(args ...string) ([]byte, error) {
+		return Raw(args...)
+	}, bridge, hostSubnet, overlay)
 }
 
 func saveRules(save, chain string) [][]string {
