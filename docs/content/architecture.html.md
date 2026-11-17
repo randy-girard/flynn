@@ -113,6 +113,12 @@ the correct host.
 This combined with discoverd's DNS service discovery allows well-known ports to
 be used, avoiding complicated port allocation and NAT.
 
+The default network is `100.100.0.0/16`. Bootstrap can set `FLANNEL_NETWORK`
+and `FLANNEL_SUBNET_LEN` before metadata exists. On a running cluster,
+`flynn-host overlay:set` is the way to widen that network or change the
+per-host prefix. Existing leases stay. Extra hosts beyond the Raft voter
+set remain discoverd proxies. See [Production — Overlay](production.html.md#overlay).
+
 ## PostgreSQL
 
 A state machine persisted in discoverd powers automatic configuration and

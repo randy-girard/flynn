@@ -36,6 +36,25 @@ func TestResolveCommandDiskReclaimAlias(t *testing.T) {
 	}
 }
 
+func TestResolveCommandOverlayAlias(t *testing.T) {
+	name, args, from := ResolveCommand("overlay", []string{"set", "--network", "100.64.0.0/10"})
+	if name != "overlay:set" || from != "overlay set" || !reflect.DeepEqual(args, []string{"--network", "100.64.0.0/10"}) {
+		t.Fatalf("overlay set got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("overlay", []string{"show"})
+	if name != "overlay:show" || from != "overlay show" || len(args) != 0 {
+		t.Fatalf("overlay show got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("overlay", nil)
+	if name != "overlay:show" || from != "overlay" || len(args) != 0 {
+		t.Fatalf("bare overlay got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("overlay:set", []string{"--network=100.64.0.0/10"})
+	if name != "overlay:set" || from != "" || !reflect.DeepEqual(args, []string{"--network=100.64.0.0/10"}) {
+		t.Fatalf("colon got %q %q from=%q", name, args, from)
+	}
+}
+
 func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 	name, args, from := ResolveCommand("plugin", []string{"install", "redis", "--ref", "v1"})
 	if name != "plugin:install" || from != "plugin install" || !reflect.DeepEqual(args, []string{"redis", "--ref", "v1"}) {
@@ -126,6 +145,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 	want := []string{
 		"volume", "volume:list", "volume:create", "volume:delete", "volume:gc",
 		"disk:reclaim",
+		"overlay:set", "overlay:show",
 		"log-sink", "log-sink:add", "log-sink:list", "log-sink:remove",
 		"otel", "otel:add", "otel:remove",
 		"plugin", "plugin:install", "plugin:list", "plugin:update", "plugin:update-all", "plugin:uninstall",

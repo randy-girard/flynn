@@ -50,7 +50,7 @@ not migrate the blobstore, set `flynn-max-processes` or
 | `clickhouse-availability` | Same rule as `mongodb-availability`, from `GET /cluster/clickhouse-availability`. Set it with `flynn-host clickhouse:availability` or Cluster → Settings. |
 | `backup` | No Postgres primary and no MongoDB, Kafka, or ClickHouse resource: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A Postgres primary or a MongoDB, Kafka, or ClickHouse resource whose last dump is missing or strictly older than 24h plus 1h is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources`, `GET /providers/mongodb/resources`, `GET /providers/kafka/resources`, and `GET /providers/clickhouse/resources`. A 404 on a provider means that engine has no resources. Any other list error fails the line. It reads `GET /tenant-backups` only when at least one counted resource exists. It does not dump. |
 | `log-sink` | `GET /sinks` once. It does not call `log-sink:list` on a host and it does not dial. Hosted is `fail` and self-hosted is `warn` unless the list covers system and app logs. A qualifying sink is `kind=syslog`, empty app, `syslog+tls` with a host, `insecure` false, format empty or `rfc6587`, and an empty prefix. Scope `all` (an empty scope is `all`) is enough. So is one `system` sink and one `apps` sink. `syslog://`, `insecure`, `newline`, `prefixed_newline`, a prefix, a per-app sink, and `kind=logaggregator` do not count. A list error, an unknown tenancy mode, or a failed tenancy read is `fail` in either mode. That is not a self-hosted warning. The same mux, disk files, and drop counter run in both modes. `tenancy_mode` only changes this line's severity. |
-| `overlay` | Informational. Prints the live flannel network and subnet length. |
+| `overlay` | Informational. Prints the live flannel network and subnet length. Change it with `flynn-host overlay:set`. |
 
 ZFS is local, so run the check on each host. `log-sink` is the controller
 sink list, not the sinks bolted onto one host. The other lines are cluster
@@ -165,6 +165,65 @@ The overlay line prints the live network, subnet length, and the ceilings from
 that config: container addresses are `2^(32-subnet length)-3` (253 on a `/24`),
 and the host count is flannel's range after the first subnet is skipped (255
 hosts on a `/16` with subnet length 24). It does not change flannel.
+Change the overlay with `flynn-host overlay:set`. Re-run the same command
+if a host does not apply it. See [Overlay](#overlay).
+
+## Overlay
+
+The default overlay is `100.100.0.0/16` with a `/24` per host. Flannel skips
+the first subnet, so that is 255 hosts. `FLANNEL_NETWORK` and
+`FLANNEL_SUBNET_LEN` (plus `FLANNEL_SUBNET_MIN` and `FLANNEL_SUBNET_MAX`)
+apply only when bootstrap creates flannel metadata that does not exist yet.
+A later edit of the flannel app env is ignored. The live path is
+`flynn-host`.
+
+```text
+$ sudo flynn-host overlay:show
+$ sudo flynn-host overlay:set --network 100.64.0.0/10
+$ sudo flynn-host overlay:set --network 100.64.0.0/10 --subnet-len 24
+```
+
+`overlay:show` prints the CIDR, subnet length, allocated leases, free
+capacity, and whether each host has applied that CIDR. A host with no stored
+overlay is using the `/16` inferred from its bridge subnet. On a default
+install that is not behind.
+
+Use a wider network when you need more than 255 hosts and want to keep a
+`/24` per host (`100.64.0.0/10` with subnet length 24 is 16383 host subnets).
+Use a longer subnet length when each host needs fewer container addresses
+and you want more hosts inside the current network. The command refuses a
+prefix outside 8–28, a subnet length that is not strictly longer than the
+overlay prefix, a network outside `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, and `100.64.0.0/10`, and a network that contains a current
+host API address. It refuses a shrink or a move that would drop an allocated
+lease, and it refuses a move where neither network contains the other.
+
+Existing leases stay. New hosts take unused subnets from the updated pool.
+Running jobs keep their addresses. The command does not restart flannel or
+jobs. A flannel process that is already running keeps allocating at its
+current subnet length until that process starts again; it still reuses its
+preferred subnet, so the bridge address does not move.
+
+Widening applies the new exclusion and link route on every host, then writes
+discoverd metadata. If a host fails, metadata is unchanged. Shrinking writes
+metadata first, then narrows host rules. If that apply fails, metadata stays
+at the smaller network and the wider exclusion is still safe. Repeating the
+same CIDR and subnet length does not write metadata. If a host is behind, the
+same command updates that host only.
+
+A failure names the host and tells you to re-run the same `overlay:set`.
+That is the recovery path. Do not edit flannel metadata by hand and do not
+roll a partially applied change back under leases that already fit. You
+cannot shrink under allocated leases.
+
+Masquerade and the user-overlay drop use the real overlay CIDR. Traffic
+between subnets inside a network wider than `/16` is not masqueraded. A
+default `/16` install does not change those rules until you run the command.
+
+Raft voters stay the initial consensus set (3 or 5). Extra hosts remain
+discoverd proxies. Postgres, MariaDB, and MongoDB sirenia replica sets stay
+at their current size. `overlay:set` does not call those APIs.
+`production:configure` still only prints the overlay.
 
 ## Tenancy mode
 
