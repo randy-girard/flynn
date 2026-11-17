@@ -322,16 +322,13 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 
 	// Set up iptables for outbound traffic masquerading from containers to the
 	// rest of the network. EnableOutboundNAT excludes the /16 inferred from
-	// the bridge subnet. A wider stored overlay replaces that exclusion.
+	// the bridge subnet. Job isolation creates flynn-net-user before a wider
+	// overlay replaces that exclusion: the user-overlay DROP references the
+	// set, and installing it first makes flynn-host exit on reboot.
 	if err := iptables.EnableOutboundNAT(l.BridgeName, l.bridgeNet.String()); err != nil {
 		return err
 	}
 	overlay := iptables.ExclusionCIDR(l.bridgeNet.String(), config.Overlay)
-	if iptables.NeedsExplicitExclusion(l.bridgeNet.String(), config.Overlay) {
-		if err := iptables.UseOverlayExclusion(l.BridgeName, l.bridgeNet.String(), overlay); err != nil {
-			return err
-		}
-	}
 	if err := enableBridgeNetfilter(); err != nil {
 		log.Error("error enabling br_netfilter", "err", err)
 		return err
@@ -339,6 +336,11 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 	if err := iptables.EnableJobIsolation(overlay, l.bridgeAddr.String()); err != nil {
 		log.Error("error enabling job isolation", "err", err)
 		return err
+	}
+	if iptables.NeedsExplicitExclusion(l.bridgeNet.String(), config.Overlay) {
+		if err := iptables.UseOverlayExclusion(l.BridgeName, l.bridgeNet.String(), overlay); err != nil {
+			return err
+		}
 	}
 	l.envMtx.RLock()
 	extIP := l.defaultEnv["EXTERNAL_IP"]
