@@ -19,6 +19,8 @@ func TestOverlayNetworkFor(t *testing.T) {
 		{"192.168.1.0/24", "192.168.0.0/16"},
 		{"10.0.0.1/32", "10.0.0.0/16"},
 		{"10.0.0.0/8", "10.0.0.0/8"},
+		{"100.64.0.0/10", "100.64.0.0/10"},
+		{"100.100.0.0/16", "100.100.0.0/16"},
 		{"2001:db8::1/64", "2001:db8::/64"},
 		{"", ""},
 		{"not-a-cidr", "not-a-cidr"},
@@ -28,6 +30,112 @@ func TestOverlayNetworkFor(t *testing.T) {
 			t.Errorf("OverlayNetworkFor(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
+}
+
+func TestExclusionCIDRUsesRealOverlay(t *testing.T) {
+	// A host /24 inside 100.64.0.0/10 must not be treated as 100.100.0.0/16.
+	// OverlayNetworkFor keeps the /16 inference when no explicit overlay is set.
+	if got := OverlayNetworkFor("100.100.9.1/24"); got != "100.100.0.0/16" {
+		t.Fatalf("default inference = %q", got)
+	}
+	if got := ExclusionCIDR("100.100.9.1/24", ""); got != "100.100.0.0/16" {
+		t.Fatalf("empty explicit = %q", got)
+	}
+	if NeedsExplicitExclusion("100.100.9.1/24", "") || NeedsExplicitExclusion("100.100.9.1/24", "100.100.0.0/16") {
+		t.Fatal("default /16 must not take the explicit-exclusion path")
+	}
+	if got := ExclusionCIDR("100.100.9.1/24", "100.64.0.1/10"); got != "100.64.0.0/10" {
+		t.Fatalf("explicit /10 = %q", got)
+	}
+	if !NeedsExplicitExclusion("100.100.9.1/24", "100.64.0.0/10") {
+		t.Fatal("wider overlay must replace the inferred /16 exclusion")
+	}
+	got := OutboundMasqueradeArgsFor("flynnbr0", "100.100.9.1/24", "100.64.0.0/10")
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "! -d 100.64.0.0/10") {
+		t.Fatalf("masquerade = %s", joined)
+	}
+	if strings.Contains(joined, "100.100.0.0/16") || strings.Contains(joined, "100.64.0.0/16") {
+		t.Fatalf("masquerade still uses a /16: %s", joined)
+	}
+	if !strings.Contains(joined, "-s 100.100.9.0/24") {
+		t.Fatalf("source must be the masked host subnet: %s", joined)
+	}
+}
+
+func TestMasqueradePlanDropsStaleOverlayDest(t *testing.T) {
+	save := strings.Join([]string{
+		"-P POSTROUTING ACCEPT",
+		"-A POSTROUTING -s 100.100.9.0/24 ! -o flynnbr0 ! -d 100.100.0.0/16 -j MASQUERADE",
+		"-A POSTROUTING -s 100.100.9.0/24 ! -o flynnbr0 ! -d 100.64.0.0/12 -j MASQUERADE",
+		"-A POSTROUTING -s 100.100.9.0/24 ! -o flynnbr0 -j MASQUERADE",
+		"-A POSTROUTING -s 10.1.0.0/24 ! -o flynnbr0 ! -d 10.1.0.0/16 -j MASQUERADE",
+	}, "\n")
+	plan := PlanMasquerade(save, "flynnbr0", "100.100.9.1/24", "100.64.0.0/10")
+	var deleted []string
+	for _, rule := range plan.Delete {
+		deleted = append(deleted, strings.Join(rule, " "))
+	}
+	body := strings.Join(deleted, "\n")
+	for _, want := range []string{"100.100.0.0/16", "100.64.0.0/12", "-j MASQUERADE"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("delete plan missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "100.64.0.0/10") {
+		t.Fatalf("delete plan must keep the desired exclusion:\n%s", body)
+	}
+	if strings.Contains(body, "10.1.0.0/24") {
+		t.Fatalf("delete plan must leave other sources alone:\n%s", body)
+	}
+	inserted := strings.Join(plan.Insert, " ")
+	if !strings.Contains(inserted, "! -d 100.64.0.0/10") || !strings.Contains(inserted, "-s 100.100.9.0/24") {
+		t.Fatalf("insert = %s", inserted)
+	}
+	if !strings.Contains(inserted, "-t nat") {
+		t.Fatalf("insert must name the nat table: %s", inserted)
+	}
+
+	again := strings.Join(append(strings.Split(save, "\n"), "-A POSTROUTING -s 100.100.9.0/24 ! -o flynnbr0 ! -d 100.64.0.0/10 -j MASQUERADE"), "\n")
+	kept := PlanMasquerade(again, "flynnbr0", "100.100.9.1/24", "100.64.0.0/10")
+	if len(kept.Insert) != 0 {
+		t.Fatalf("desired rule already present, insert = %v", kept.Insert)
+	}
+}
+
+func TestForwardDropPlanReplacesOverlayDest(t *testing.T) {
+	save := strings.Join([]string{
+		"-P FORWARD ACCEPT",
+		"-A FORWARD -m set --match-set flynn-net-data dst -p tcp --dport 5432 -j ACCEPT",
+		"-A FORWARD -m set --match-set flynn-net-user src -d 100.100.0.0/16 -m conntrack --ctstate NEW -j DROP",
+		"-A FORWARD -i flynnbr0 ! -o flynnbr0 -j ACCEPT",
+		"-A FORWARD -d 100.100.9.0/24 -o flynnbr0 -j ACCEPT",
+	}, "\n")
+	plan := PlanForwardDrop(save, "flynnbr0", "100.64.0.0/10")
+	body := strings.Join(flatten(plan.Delete), "\n")
+	if !strings.Contains(body, "100.100.0.0/16") || !strings.Contains(body, "DROP") {
+		t.Fatalf("delete = %s", body)
+	}
+	if strings.Contains(body, "flynn-net-data") || strings.Contains(body, "5432") {
+		t.Fatalf("delete must leave datastore accepts:\n%s", body)
+	}
+	inserted := strings.Join(plan.Insert, " ")
+	if !strings.Contains(inserted, "-d 100.64.0.0/10") || !strings.Contains(inserted, "flynn-net-user") || !strings.Contains(inserted, "DROP") {
+		t.Fatalf("insert = %s", inserted)
+	}
+	// 1-based line of the bridge egress ACCEPT. The new DROP goes there so
+	// datastore ACCEPTs stay ahead of it.
+	if plan.InsertBefore != 3 {
+		t.Fatalf("insert before = %d, want 3 (the flynnbr0 egress ACCEPT)", plan.InsertBefore)
+	}
+}
+
+func flatten(rules [][]string) []string {
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, strings.Join(rule, " "))
+	}
+	return out
 }
 
 func TestOutboundMasqueradeExcludesOverlayDest(t *testing.T) {

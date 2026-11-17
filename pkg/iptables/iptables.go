@@ -41,9 +41,50 @@ func init() {
 // `! -d <overlay>`.
 // OutboundMasqueradeArgs is the POSTROUTING MASQUERADE rule for underlay
 // egress. Overlay destinations are excluded (! -d overlay) so cross-node
-// VXLAN traffic keeps the real container source IP.
+// VXLAN traffic keeps the real container source IP. The excluded network is
+// the /16 inferred from a host subnet. A wider live overlay uses
+// OutboundMasqueradeArgsFor.
 func OutboundMasqueradeArgs(bridge, network string) []string {
 	return []string{"POSTROUTING", "-t", "nat", "-s", network, "!", "-o", bridge, "!", "-d", OverlayNetworkFor(network), "-j", "MASQUERADE"}
+}
+
+// OutboundMasqueradeArgsFor is the masquerade rule that excludes explicit
+// overlay instead of the /16 inferred from the host subnet. hostSubnet is
+// masked to its network address so the rule matches the kernel's saved form.
+func OutboundMasqueradeArgsFor(bridge, hostSubnet, overlay string) []string {
+	return []string{"POSTROUTING", "-t", "nat", "-s", canonicalCIDR(hostSubnet), "!", "-o", bridge, "!", "-d", ExclusionCIDR(hostSubnet, overlay), "-j", "MASQUERADE"}
+}
+
+// ExclusionCIDR is the destination omitted from MASQUERADE. An empty or
+// unparseable explicit overlay keeps OverlayNetworkFor, so a default /16
+// install is unchanged.
+func ExclusionCIDR(hostSubnet, explicit string) string {
+	explicit = strings.TrimSpace(explicit)
+	if explicit == "" {
+		return OverlayNetworkFor(hostSubnet)
+	}
+	ip, network, err := net.ParseCIDR(explicit)
+	if err != nil || ip.To4() == nil || network == nil {
+		return OverlayNetworkFor(hostSubnet)
+	}
+	return network.String()
+}
+
+// NeedsExplicitExclusion reports whether explicit names a different overlay
+// than the /16 inferred from hostSubnet. Empty explicit does not.
+func NeedsExplicitExclusion(hostSubnet, explicit string) bool {
+	if strings.TrimSpace(explicit) == "" {
+		return false
+	}
+	return ExclusionCIDR(hostSubnet, explicit) != OverlayNetworkFor(hostSubnet)
+}
+
+func canonicalCIDR(cidr string) string {
+	_, network, err := net.ParseCIDR(strings.TrimSpace(cidr))
+	if err != nil || network == nil {
+		return strings.TrimSpace(cidr)
+	}
+	return network.String()
 }
 
 // LegacyOutboundMasqueradeArgs is the pre-fix rule that SNAT'd overlay
@@ -360,6 +401,141 @@ func insertIfMissing(chain string, args []string) error {
 		return &ChainError{Chain: chain, Output: output}
 	}
 	return nil
+}
+
+// RulePlan is an iptables edit derived from `iptables -S` text. Delete
+// entries are arguments for `iptables -D` (chain, `-t`, table, match).
+// Insert is arguments for `iptables -I`. InsertBefore is the 1-based rule
+// number in that chain; 0 means insert at the head.
+type RulePlan struct {
+	Delete       [][]string
+	Insert       []string
+	InsertBefore int
+}
+
+// PlanMasquerade removes POSTROUTING MASQUERADE rules for hostSubnet whose
+// overlay exclusion is not keep, including the legacy rule with no `-d`.
+// Other sources are left alone. Insert is empty when keep is already present.
+func PlanMasquerade(save, bridge, hostSubnet, keep string) RulePlan {
+	source := canonicalCIDR(hostSubnet)
+	keepNet := ExclusionCIDR(hostSubnet, keep)
+	var plan RulePlan
+	have := false
+	for _, rule := range saveRules(save, "POSTROUTING") {
+		if !isMasqueradeFor(rule, bridge, source) {
+			continue
+		}
+		dest, ok := flagValue(rule, "-d")
+		if ok && canonicalCIDR(dest) == keepNet {
+			have = true
+			continue
+		}
+		plan.Delete = append(plan.Delete, append([]string{"POSTROUTING", "-t", "nat"}, rule...))
+	}
+	if !have {
+		plan.Insert = OutboundMasqueradeArgsFor(bridge, hostSubnet, keep)
+	}
+	return plan
+}
+
+// PlanForwardDrop removes user-overlay DROP rules whose destination is not
+// keep, and inserts the keep rule immediately before bridge egress ACCEPT.
+// Datastore and other accepts are not deleted. InsertBefore is that ACCEPT's
+// current 1-based line so the caller inserts before deleting.
+func PlanForwardDrop(save, bridge, keep string) RulePlan {
+	keepNet := canonicalCIDR(keep)
+	var plan RulePlan
+	have := false
+	for i, rule := range saveRules(save, "FORWARD") {
+		if isBridgeEgress(rule, bridge) && plan.InsertBefore == 0 {
+			plan.InsertBefore = i + 1
+		}
+		dest, ok := userOverlayDropDest(rule)
+		if !ok {
+			continue
+		}
+		if canonicalCIDR(dest) == keepNet {
+			have = true
+			continue
+		}
+		plan.Delete = append(plan.Delete, append([]string{"FORWARD"}, rule...))
+	}
+	if !have {
+		plan.Insert = UserOverlayDropArgs(keepNet)
+	}
+	return plan
+}
+
+func saveRules(save, chain string) [][]string {
+	var rules [][]string
+	prefix := "-A " + chain + " "
+	for _, line := range strings.Split(save, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		rules = append(rules, fields[2:])
+	}
+	return rules
+}
+
+func isMasqueradeFor(rule []string, bridge, source string) bool {
+	if flagValueExact(rule, "-j") != "MASQUERADE" {
+		return false
+	}
+	if canonicalCIDR(flagValueExact(rule, "-s")) != source {
+		return false
+	}
+	return negatedFlag(rule, "-o") && flagValueExact(rule, "-o") == bridge
+}
+
+func isBridgeEgress(rule []string, bridge string) bool {
+	return flagValueExact(rule, "-i") == bridge &&
+		negatedFlag(rule, "-o") &&
+		flagValueExact(rule, "-o") == bridge &&
+		flagValueExact(rule, "-j") == "ACCEPT"
+}
+
+func userOverlayDropDest(rule []string) (string, bool) {
+	if flagValueExact(rule, "-j") != "DROP" {
+		return "", false
+	}
+	joined := strings.Join(rule, " ")
+	if !strings.Contains(joined, netpolicy.ServiceUser) || !strings.Contains(joined, "src") {
+		return "", false
+	}
+	dest := flagValueExact(rule, "-d")
+	if dest == "" {
+		return "", false
+	}
+	return dest, true
+}
+
+func flagValueExact(rule []string, flag string) string {
+	v, _ := flagValue(rule, flag)
+	return v
+}
+
+func flagValue(rule []string, flag string) (string, bool) {
+	for i := 0; i < len(rule); i++ {
+		if rule[i] == flag && i+1 < len(rule) && !strings.HasPrefix(rule[i+1], "-") {
+			return rule[i+1], true
+		}
+	}
+	return "", false
+}
+
+func negatedFlag(rule []string, flag string) bool {
+	for i := 0; i < len(rule); i++ {
+		if rule[i] == flag && i > 0 && rule[i-1] == "!" {
+			return true
+		}
+	}
+	return false
 }
 
 // OverlayNetworkFor returns the flannel overlay CIDR that contains network.
