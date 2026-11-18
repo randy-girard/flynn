@@ -251,6 +251,23 @@ func TestValidateAppNameAllowsSystemReserved(t *testing.T) {
 	}
 }
 
+func TestValidateAppNameRejectsUUID(t *testing.T) {
+	for _, name := range []string{
+		"11111111-2222-3333-4444-555555555555",
+		"1111111122223333444455555555555a",
+		"abcdef01-2345-6789-abcd-ef0123456789",
+	} {
+		for _, sys := range []bool{false, true} {
+			if err := ValidateAppName(name, sys); err == nil {
+				t.Errorf("ValidateAppName(%q, %v) = nil, want an error", name, sys)
+			}
+		}
+	}
+	if err := ValidateAppName("demo-1234", false); err != nil {
+		t.Fatalf("ordinary name rejected: %v", err)
+	}
+}
+
 type expandStub struct {
 	app      *ct.App
 	release  *ct.Release

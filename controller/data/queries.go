@@ -234,7 +234,6 @@ AND (
   NOT $3::bool
   OR owner_account = $4::text
   OR app_id::text = ANY($5::text[])
-  OR name = ANY($5::text[])
 )
 AND (
   $6::timestamptz IS NULL
@@ -252,10 +251,10 @@ SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, upd
 FROM apps WHERE deleted_at IS NULL AND name = $1 FOR UPDATE`
 	appSelectByNameOrIDQuery = `
 SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
-FROM apps WHERE deleted_at IS NULL AND (app_id = $1 OR name = $2) LIMIT 1`
+FROM apps WHERE deleted_at IS NULL AND (app_id = $1 OR name = $2) ORDER BY (app_id = $1) DESC LIMIT 1`
 	appSelectByNameOrIDForUpdateQuery = `
 SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
-FROM apps WHERE deleted_at IS NULL AND (app_id = $1 OR name = $2) LIMIT 1 FOR UPDATE`
+FROM apps WHERE deleted_at IS NULL AND (app_id = $1 OR name = $2) ORDER BY (app_id = $1) DESC LIMIT 1 FOR UPDATE`
 	appInsertQuery = `
 INSERT INTO apps (app_id, name, meta, strategy, deploy_timeout, owner_account, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING created_at, updated_at`
 	appUpdateStrategyQuery = `

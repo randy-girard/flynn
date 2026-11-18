@@ -103,7 +103,7 @@ func (s *S) TestAppListVisiblePage(c *C) {
 
 	tok := s.signUser(c, userID, []*api.AppGrant{
 		{AppId: shared.ID, Permissions: []string{"app:read"}},
-		{AppId: byName.Name, Permissions: []string{"app:deploy"}},
+		{AppId: byName.ID, Permissions: []string{"app:deploy"}},
 		{AppId: emptyGrant.ID, Permissions: nil},
 		{AppId: systemApp.ID, Permissions: []string{"app:read"}},
 	})
@@ -194,4 +194,45 @@ func appIDs(apps []*ct.App) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func (s *S) getAppStatus(c *C, tok, ref string) int {
+	req, err := http.NewRequest(http.MethodGet, s.srv.URL+"/apps/"+ref, nil)
+	c.Assert(err, IsNil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	io.Copy(io.Discard, res.Body)
+	return res.StatusCode
+}
+
+// TestAppNamedAfterOtherAppIDGainsNoGrants: an app whose name is another app's
+// id (set directly in the database; the API now rejects such names) must not
+// let its grants reach the other app, and grants by app id still work by id
+// and by name.
+func (s *S) TestAppNamedAfterOtherAppIDGainsNoGrants(c *C) {
+	victim := s.createTestApp(c, &ct.App{
+		ID: "bbbbbbbb-bbbb-4bbb-8bbb-000000000001", Name: "core05-victim", OwnerAccount: "user:core05-b",
+	})
+	mine := s.createTestApp(c, &ct.App{
+		ID: "bbbbbbbb-bbbb-4bbb-8bbb-000000000002", Name: "core05-mine", OwnerAccount: "user:core05-a",
+	})
+	c.Assert(s.hc.db.Exec(`UPDATE apps SET name = $2 WHERE app_id = $1::uuid`, mine.ID, victim.ID), IsNil)
+
+	byID := s.signUser(c, "", []*api.AppGrant{{AppId: mine.ID, Permissions: []string{"app:read"}}})
+	c.Assert(s.getAppStatus(c, byID, mine.ID), Equals, http.StatusOK)
+	c.Assert(s.getAppStatus(c, byID, victim.ID), Equals, http.StatusForbidden)
+
+	// A grant that really is for the victim's id still works.
+	byName := s.signUser(c, "", []*api.AppGrant{{AppId: victim.ID, Permissions: []string{"app:read"}}})
+	c.Assert(s.getAppStatus(c, byName, victim.ID), Equals, http.StatusOK)
+
+	// A legitimate app addressed by name with an id grant.
+	other := s.createTestApp(c, &ct.App{
+		ID: "bbbbbbbb-bbbb-4bbb-8bbb-000000000003", Name: "core05-other", OwnerAccount: "user:core05-a",
+	})
+	tok := s.signUser(c, "", []*api.AppGrant{{AppId: other.ID, Permissions: []string{"app:read"}}})
+	c.Assert(s.getAppStatus(c, tok, "core05-other"), Equals, http.StatusOK)
+	c.Assert(s.getAppStatus(c, tok, other.ID), Equals, http.StatusOK)
 }

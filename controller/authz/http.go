@@ -94,17 +94,35 @@ func ClusterRegionPublic(method, path string) bool {
 
 // HTTPAllowed returns false if the principal may not call this controller route.
 func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
+	return HTTPAllowedResolved(tok, method, rawPath, nil)
+}
+
+// HTTPAllowedResolved is HTTPAllowed with a resolver that turns the app
+// reference in the path (a name or an id) into the app id. Grants are keyed by
+// id, so the check runs on the resolved id. A nil resolver, or one that returns
+// "", checks the path reference as given.
+func HTTPAllowedResolved(tok *authorizer.Token, method, rawPath string, resolve func(ref string) string) bool {
 	if tok == nil {
 		return false
 	}
 	kind, appID, perm := httpRequirement(method, rawPath)
+	// grantID is the app id the grants are checked against. It is resolved
+	// lazily so routes that never reach a grant check cost no lookup.
+	grantID := func() string {
+		if resolve != nil && appID != "" {
+			if id := resolve(appID); id != "" {
+				return id
+			}
+		}
+		return appID
+	}
 	// Checked before the cluster-admin short-circuit so a cluster:admin JWT
 	// cannot create compiles. The cluster key still can.
 	if kind == rkGitreceiveBuild {
 		if tok.ClusterKey {
 			return true
 		}
-		return hasScope(tok, ScopeGitreceiveBuild) && grantCovers(tok, appID, PermAppWrite)
+		return hasScope(tok, ScopeGitreceiveBuild) && grantCovers(tok, grantID(), PermAppWrite)
 	}
 	if tok.HasClusterAdmin() {
 		return true
@@ -151,7 +169,7 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	if IsPlatformAppName(appID) {
 		return false
 	}
-	return grantCovers(tok, appID, perm)
+	return grantCovers(tok, grantID(), perm)
 }
 
 // TokenContextKey stores the request principal on the handler context.
@@ -280,13 +298,7 @@ func MayReadAppEnv(tok *authorizer.Token, appID, appName string) bool {
 	if tok == nil || tok.HasClusterAdmin() {
 		return true
 	}
-	if HasAppPermission(permissionsForApp(tok, appID), PermAppEnvRead) {
-		return true
-	}
-	if appName != "" && appName != appID {
-		return HasAppPermission(permissionsForApp(tok, appName), PermAppEnvRead)
-	}
-	return false
+	return HasAppPermission(GrantFor(tok, appID), PermAppEnvRead)
 }
 
 func gitAppAllowed(tok *authorizer.Token, appID, appName, need string) bool {
@@ -296,13 +308,7 @@ func gitAppAllowed(tok *authorizer.Token, appID, appName, need string) bool {
 	if tok.HasClusterAdmin() {
 		return true
 	}
-	if HasAppPermission(permissionsForApp(tok, appID), need) {
-		return true
-	}
-	if appName != "" && appName != appID {
-		return HasAppPermission(permissionsForApp(tok, appName), need)
-	}
-	return false
+	return HasAppPermission(GrantFor(tok, appID), need)
 }
 
 // hasScopedBuildArtifact reports whether the token may create a build artifact:
@@ -399,10 +405,7 @@ func GitreceiveBuildAllowed(tok *authorizer.Token, appID, appName string) bool {
 	if !hasScope(tok, ScopeGitreceiveBuild) {
 		return false
 	}
-	if grantCovers(tok, appID, PermAppWrite) {
-		return true
-	}
-	return appName != "" && appName != appID && grantCovers(tok, appName, PermAppWrite)
+	return grantCovers(tok, appID, PermAppWrite)
 }
 
 func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string) {
@@ -716,14 +719,20 @@ func CanCreateReleaseForApp(tok *authorizer.Token, appID string) bool {
 	if tok.HasClusterAdmin() {
 		return true
 	}
-	return CanCreateRelease(permissionsForApp(tok, appID))
+	return CanCreateRelease(GrantFor(tok, appID))
 }
 
 func grantCovers(tok *authorizer.Token, appID, need string) bool {
-	return HasAppPermission(permissionsForApp(tok, appID), need)
+	return HasAppPermission(GrantFor(tok, appID), need)
 }
 
-func permissionsForApp(tok *authorizer.Token, appID string) []string {
+// GrantFor returns the permissions tok holds on the app with this id. It
+// matches the grant's app id exactly and never by name; callers holding only a
+// name resolve it to an id first.
+func GrantFor(tok *authorizer.Token, appID string) []string {
+	if tok == nil || appID == "" {
+		return nil
+	}
 	for _, g := range tok.AppGrants {
 		if g.AppID == appID {
 			return g.Permissions

@@ -96,6 +96,14 @@ func (c *controllerAPI) expandToken(tok *authorizer.Token) error {
 	if err != nil {
 		return err
 	}
+	tok.AppGrants = appGrantsFromAccess(user.ID, rows, tok.AppGrants)
+	return nil
+}
+
+// appGrantsFromAccess folds the apps a user can reach into grants, keyed by
+// app id only: a name key would let an app named after another app's id
+// collect that app's grants.
+func appGrantsFromAccess(userID string, rows []data.AppAccess, grants []authorizer.AppGrant) []authorizer.AppGrant {
 	for _, row := range rows {
 		var ledger []access.LedgerRole
 		if row.OrgRole != "" && row.OwnerAccount != "" {
@@ -105,7 +113,7 @@ func (c *controllerAPI) expandToken(tok *authorizer.Token) error {
 			ledger = append(ledger, access.LedgerRole{Subject: "app:" + row.AppID, Role: row.AppLedgerRole})
 		}
 		res := access.Resolve(access.Input{
-			CallerUserID:   user.ID,
+			CallerUserID:   userID,
 			AppID:          row.AppID,
 			OwnerAccount:   row.OwnerAccount,
 			AccountRole:    row.AccountRole,
@@ -116,12 +124,9 @@ func (c *controllerAPI) expandToken(tok *authorizer.Token) error {
 		if len(res.Permissions) == 0 {
 			continue
 		}
-		tok.AppGrants = unionGrant(tok.AppGrants, row.AppID, res.Permissions)
-		if row.Name != "" {
-			tok.AppGrants = unionGrant(tok.AppGrants, row.Name, res.Permissions)
-		}
+		grants = unionGrant(grants, row.AppID, res.Permissions)
 	}
-	return nil
+	return grants
 }
 
 func unionGrant(grants []authorizer.AppGrant, appID string, perms []string) []authorizer.AppGrant {

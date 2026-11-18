@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 	"time"
 
@@ -123,7 +122,7 @@ func scanApp(s postgres.Scanner) (*ct.App, error) {
 	return app, err
 }
 
-var idPattern = regexp.MustCompile(`^[a-f0-9]{8}-?([a-f0-9]{4}-?){3}[a-f0-9]{12}$`)
+var idPattern = utils.AppIDPattern
 
 func selectApp(db rowQueryer, id string, update bool) (*ct.App, error) {
 	var suffix string

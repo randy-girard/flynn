@@ -179,7 +179,7 @@ func appVisible(tok *authorizer.Token, app *ct.App) bool {
 		return true
 	}
 	for _, g := range tok.AppGrants {
-		if g.AppID == app.ID || g.AppID == app.Name {
+		if g.AppID == app.ID {
 			if authz.HasAppPermission(g.Permissions, "") {
 				return true
 			}
@@ -333,7 +333,7 @@ func grantPerms(tok *authorizer.Token, app *ct.App) []string {
 	}
 	var out []string
 	for _, g := range tok.AppGrants {
-		if g.AppID == app.ID || g.AppID == app.Name {
+		if g.AppID == app.ID {
 			out = append(out, g.Permissions...)
 		}
 	}

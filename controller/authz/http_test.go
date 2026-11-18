@@ -449,7 +449,7 @@ func TestGitPushAllowed(t *testing.T) {
 		{"read_can_fetch_own_app", GitFetchAllowed, appRead, "uuid-1", "myapp", true},
 		{"read_cannot_fetch_other", GitFetchAllowed, appRead, "uuid-2", "other", false},
 		{"wrong_app_cannot_push", GitPushAllowed, otherWrite, "uuid-1", "myapp", false},
-		{"grant_by_name_can_push", GitPushAllowed, grantByName, "uuid-1", "myapp", true},
+		{"grant_by_name_cannot_push", GitPushAllowed, grantByName, "uuid-1", "myapp", false},
 		{"deploy_can_fetch_own", GitFetchAllowed, appDeploy, "uuid-1", "myapp", true},
 	}
 	for _, tc := range cases {

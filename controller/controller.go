@@ -543,7 +543,20 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			httphelper.Forbidden(w, "this account is suspended")
 			return
 		}
-		if !authz.HTTPAllowed(auth, r.Method, r.URL.Path) {
+		var resolveApp func(string) string
+		if api != nil && api.appRepo != nil {
+			resolveApp = func(ref string) string {
+				v, err := api.appRepo.Get(ref)
+				if err != nil {
+					return ""
+				}
+				if app, ok := v.(*ct.App); ok && app != nil {
+					return app.ID
+				}
+				return ""
+			}
+		}
+		if !authz.HTTPAllowedResolved(auth, r.Method, r.URL.Path, resolveApp) {
 			if auth != nil && !auth.HasClusterAdmin() && len(auth.Scopes) > 0 {
 				authz.NoteScopedReject(auth, r.Method, r.URL.Path, "route")
 				logger.Info("scoped token rejected", "scope", strings.Join(auth.Scopes, ","), "caller", auth.UserID, "method", r.Method, "path", r.URL.Path, "reason", "route")

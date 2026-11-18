@@ -177,7 +177,7 @@ func mayCreateReleaseForApp(tok *authorizer.Token, app *ct.App) bool {
 	if authz.IsPlatformAppName(app.Name) {
 		return false
 	}
-	return authz.CanCreateReleaseForApp(tok, app.ID) || authz.CanCreateReleaseForApp(tok, app.Name)
+	return authz.CanCreateReleaseForApp(tok, app.ID)
 }
 
 // releaseBelongsToApp is true when the release is unscoped (legacy / admin

@@ -83,7 +83,7 @@ func eventsGrantMatches(tok *authorizer.Token, appID, appName string) bool {
 		return false
 	}
 	for _, g := range tok.AppGrants {
-		if g.AppID == "" || (g.AppID != appID && (appName == "" || g.AppID != appName)) {
+		if g.AppID == "" || g.AppID != appID {
 			continue
 		}
 		for _, p := range g.Permissions {

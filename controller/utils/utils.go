@@ -414,6 +414,10 @@ func (c clusterClientWrapper) StreamHostEvents(ch chan *discoverd.Event) (stream
 
 var AppNamePattern = regexp.MustCompile(`^[a-z\d]+(-[a-z\d]+)*$`)
 
+// AppIDPattern matches an app id (a UUID, dashes optional). An app name must
+// never match it, or a name could be mistaken for another app's id.
+var AppIDPattern = regexp.MustCompile(`^[a-f0-9]{8}-?([a-f0-9]{4}-?){3}[a-f0-9]{12}$`)
+
 // reservedAppNames cannot be chosen for a user app. Bootstrap and plugin
 // install still create these names with flynn-system-app / flynn-plugin meta.
 var reservedAppNames = map[string]struct{}{}
@@ -507,6 +511,9 @@ func ReservedAppName(name string) bool {
 func ValidateAppName(name string, systemOrPlugin bool) error {
 	if len(name) > 100 || !AppNamePattern.MatchString(name) {
 		return ct.ValidationError{Field: "name", Message: "is invalid"}
+	}
+	if AppIDPattern.MatchString(name) {
+		return ct.ValidationError{Field: "name", Message: "must not look like an app id"}
 	}
 	if !systemOrPlugin && ReservedAppName(name) {
 		return ct.ValidationError{Field: "name", Message: "is reserved"}
