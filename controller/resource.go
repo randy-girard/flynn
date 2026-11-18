@@ -108,7 +108,8 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		config = []byte(`{}`)
 	}
 	if c.providerPassesApp(p) {
-		config = provisionConfigWithApp(config, target)
+		tok := authz.TokenFromContext(ctx)
+		config = provisionConfigWithApp(config, target, tok != nil && tok.ClusterKey)
 	}
 	// The built-in appliance is the platform database. Bootstrap still creates
 	// the controller and blobstore databases (system apps, platform marker).
@@ -238,22 +239,25 @@ func provisionAs(config []byte) string {
 
 // provisionConfigWithApp stamps the tenant app name so database plugins attach
 // the same way as `flynn resource:add` (name, role, FLYNN_POSTGRESQL_<COLOR>_URL, and DATABASE_URL when free).
-func provisionConfigWithApp(config []byte, app *ct.App) []byte {
-	if app == nil || strings.TrimSpace(app.Name) == "" {
-		return config
-	}
+func provisionConfigWithApp(config []byte, app *ct.App, clusterKey bool) []byte {
 	var obj map[string]any
 	if len(config) == 0 {
 		obj = map[string]any{}
 	} else if err := json.Unmarshal(config, &obj); err != nil || obj == nil {
 		return config
 	}
-	if v, ok := obj["app"]; ok {
-		if s, _ := v.(string); strings.TrimSpace(s) != "" {
-			return config
-		}
+	if app != nil && strings.TrimSpace(app.Name) != "" {
+		// The request's app is the only tenant. A caller-supplied "app" or
+		// "tenant" would let a plugin act for another tenant (for example
+		// follow its database), so both are always replaced.
+		obj["app"] = app.Name
+		obj["tenant"] = app.Name
+	} else if clusterKey {
+		return config
+	} else {
+		delete(obj, "app")
+		delete(obj, "tenant")
 	}
-	obj["app"] = app.Name
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return config

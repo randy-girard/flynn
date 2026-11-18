@@ -46,7 +46,9 @@ type AddonSpec struct {
 	// InstancePort asks the controller to stamp FLYNN_INSTANCE_PORT at provision.
 	InstancePort bool `json:"instance_port,omitempty"`
 	// PassApp asks the controller to add the tenant app name to the provision
-	// config. Generic providers do not get that field.
+	// config as "app" and "tenant". The controller always overwrites both from
+	// the request, so a caller-supplied value never reaches the plugin. Generic
+	// providers do not get that field.
 	PassApp bool `json:"pass_app,omitempty"`
 	// App is the installed plugin app. It is not part of flynn-plugin.json.
 	App string `json:"app,omitempty"`

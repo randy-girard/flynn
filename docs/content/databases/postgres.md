@@ -76,6 +76,9 @@ in that instance.
 
 ### Follow, wait, promote
 
+You can only follow a resource of the same app. Another tenant's resource is
+refused as not found.
+
 There is no in-place resize or upgrade. Create a follower, wait until it is
 caught up, then promote:
 

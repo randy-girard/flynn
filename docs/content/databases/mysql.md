@@ -27,7 +27,9 @@ not fail over, and a third Flynn host does not add peers. There is no
 A follower is another resource (`flynn mysql:follow` or
 `flynn addons:create mysql --follow`). It is an async read-only replica of
 that leader, and it copies the leader's users and passwords. It does not
-follow another follower. `--auto-failover` requires `--follow`. After the
+follow another follower. You can only follow a resource of the same app;
+another tenant's resource is refused as not found. `--auto-failover` requires
+`--follow`. After the
 primary job has been down for 30 seconds, that follower is promoted, the old
 primary is fenced, and a replacement replica is started. Replication is
 asynchronous, so the latest writes can be lost. There is no synchronous

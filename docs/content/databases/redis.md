@@ -75,7 +75,8 @@ resolve that leader name only when Redis is attached to that app.
 A follower is a new Redis resource, not a second process on the leader. It
 copies the leader with `REPLICAOF` and stays read-only until you promote or
 unfollow it. With TLS (the default) the replica talks to the primary
-`tls-port` **16379**, not plaintext 6379.
+`tls-port` **16379**, not plaintext 6379. You can only follow a resource that
+belongs to the same app. Another tenant's resource is refused as not found.
 
 ```text
 flynn redis:follow
