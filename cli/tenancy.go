@@ -14,6 +14,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	v1 "github.com/randy-girard/flynn/controller/client/v1"
 	ct "github.com/randy-girard/flynn/controller/types"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
 )
 
 func init() {
@@ -95,7 +96,8 @@ List collaborators on the current context account, or on -a <app>.
 usage: flynn collaborator:add [--role <role>] [--password <password>] <email>
 
 Add a collaborator by email. Roles: view, deploy, manage, admin. If the email
-does not exist, a non-admin user is created (optional --password).
+does not exist, a cluster administrator creates a non-admin user (optional
+--password). Other users must have the invitee sign up first.
 
 Options:
 	--role=<role>          view, deploy, manage, or admin [default: view]
@@ -371,7 +373,7 @@ func runCollabAdd(args *docopt.Args, c controller.Client) error {
 			Password: password,
 		}
 		if err := v.Post("/users", body, &ct.User{}); err != nil {
-			return fmt.Errorf("create user %s: %w", email, err)
+			return collabUserCreateError(email, err)
 		}
 		if generated {
 			fmt.Printf("created user %s password: %s\n", email, password)
@@ -387,6 +389,16 @@ func runCollabAdd(args *docopt.Args, c controller.Client) error {
 	}
 	var row ct.Collaborator
 	return v.Post(base, body, &row)
+}
+
+// collabUserCreateError explains a refused POST /users. Only a cluster
+// administrator may create accounts, so a user session gets a 403 and needs
+// the invitee to sign up (or an admin to create them) first.
+func collabUserCreateError(email string, err error) error {
+	if hh.IsForbidden(err) {
+		return fmt.Errorf("no user %s exists and only a cluster administrator can create users; ask them to sign up or have an admin run `flynn-host user:create %s`", email, email)
+	}
+	return fmt.Errorf("create user %s: %w", email, err)
 }
 
 func runCollabRemove(args *docopt.Args, c controller.Client) error {

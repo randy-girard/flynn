@@ -489,7 +489,14 @@ only; bootstrap, migration, and the database plugins use it. All
 `/providers/:p/resources/:id` routes answer 404 when the resource belongs to
 a different provider than the one in the URL. Provision, attach, and
 detach (`flynn resource:add`, `addons:attach`, `resource:remove`) are
-unchanged for the owner. Do not run untrusted code in Flynn.
+unchanged for the owner.
+
+`POST /users` creates an account that is already email-verified, so it is
+cluster-admin only (the cluster key or a cluster admin). A logged-in tenant
+cannot create accounts, which stops it squatting an address such as
+`alice@corp.com` and receiving the grants made when Alice is later invited.
+Self-signup goes through the dashboard, which calls the controller with the
+cluster key. Do not run untrusted code in Flynn.
 HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not
