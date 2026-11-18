@@ -424,3 +424,55 @@ func TestRedactLogStreamOmitsReleaseEnv(t *testing.T) {
 		t.Fatalf("stream = %s", got)
 	}
 }
+
+func TestPresentEventRedactsAppReleaseAndResourceEnv(t *testing.T) {
+	const secret = "core09-secret"
+	rel := func() *ct.Release {
+		return &ct.Release{ID: "r1", Env: map[string]string{"K": secret}, Processes: map[string]ct.ProcessType{"web": {Env: map[string]string{"P": secret}}}}
+	}
+	mk := func(typ ct.EventType, v interface{}) *ct.Event {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &ct.Event{AppID: "app-1", ObjectType: typ, Data: b}
+	}
+	events := []*ct.Event{
+		mk(ct.EventTypeAppRelease, &ct.AppRelease{PrevRelease: rel(), Release: rel()}),
+		mk(ct.EventTypeResource, &ct.Resource{ID: "res", Env: map[string]string{"DB": secret}, Apps: []string{"app-1"}}),
+		mk(ct.EventTypeResourceDeletion, &ct.Resource{ID: "res", Env: map[string]string{"DB": secret}, Apps: []string{"app-1"}}),
+	}
+	app := &ct.App{ID: "app-1"}
+	ctxWith := func(tok *authorizer.Token) context.Context {
+		return context.WithValue(context.Background(), authz.TokenContextKey, tok)
+	}
+	events_only := ctxWith(&authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{authz.ScopeEventsRead}}}})
+	envReader := ctxWith(&authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{authz.PermAppEnvRead}}}})
+	admin := ctxWith(&authorizer.Token{ClusterKey: true})
+
+	for _, ev := range events {
+		shown := presentEvent(events_only, app, ev)
+		if strings.Contains(string(shown.Data), secret) {
+			t.Fatalf("%s event leaked env to events-only token: %s", ev.ObjectType, shown.Data)
+		}
+		if !strings.Contains(string(ev.Data), secret) {
+			t.Fatalf("presentEvent mutated the stored %s event", ev.ObjectType)
+		}
+		// Appless resource events are redacted too.
+		noApp := *ev
+		noApp.AppID = ""
+		if strings.Contains(string(presentEvent(events_only, nil, &noApp).Data), secret) {
+			t.Fatalf("appless %s event leaked env", ev.ObjectType)
+		}
+		for name, ctx := range map[string]context.Context{"env reader": envReader, "admin": admin} {
+			if !strings.Contains(string(presentEvent(ctx, app, ev).Data), secret) {
+				t.Fatalf("%s lost env for %s", ev.ObjectType, name)
+			}
+		}
+	}
+	// Non-secret fields survive.
+	shown := presentEvent(events_only, app, events[1])
+	if !strings.Contains(string(shown.Data), `"id":"res"`) {
+		t.Fatalf("resource metadata dropped: %s", shown.Data)
+	}
+}

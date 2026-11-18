@@ -275,7 +275,7 @@ func presentEvent(ctx context.Context, app *ct.App, e *ct.Event) *ct.Event {
 	if !mayExportRouteKey(ctx) {
 		e = omitEventRouteKey(e)
 	}
-	if e == nil || e.ObjectType != ct.EventTypeRelease {
+	if e == nil || !eventCarriesEnv(e.ObjectType) {
 		return e
 	}
 	evApp := app
@@ -304,20 +304,60 @@ func presentEvents(ctx context.Context, app *ct.App, list []*ct.Event) []*ct.Eve
 	return out
 }
 
+// eventCarriesEnv reports whether events of this type embed a release or
+// resource whose env needs app:env:read to see.
+func eventCarriesEnv(t ct.EventType) bool {
+	switch t {
+	case ct.EventTypeRelease, ct.EventTypeAppRelease, ct.EventTypeResource, ct.EventTypeResourceDeletion:
+		return true
+	}
+	return false
+}
+
+// redactEventReleaseEnv returns a copy of e with release env (release and
+// app_release events) or resource env (resource and resource_deletion events)
+// removed. The stored event is not modified. If the payload cannot be
+// rewritten the data is dropped rather than leaked.
 func redactEventReleaseEnv(e *ct.Event) *ct.Event {
-	if e == nil || e.ObjectType != ct.EventTypeRelease {
+	if e == nil || !eventCarriesEnv(e.ObjectType) {
 		return e
 	}
-	var rel ct.Release
-	if json.Unmarshal(e.Data, &rel) != nil {
-		return e
+	var out interface{}
+	switch e.ObjectType {
+	case ct.EventTypeRelease:
+		var rel ct.Release
+		if json.Unmarshal(e.Data, &rel) != nil {
+			return e
+		}
+		out = redactReleaseEnv(&rel)
+	case ct.EventTypeAppRelease:
+		var ar ct.AppRelease
+		if json.Unmarshal(e.Data, &ar) != nil {
+			return redactedEventData(e)
+		}
+		ar.PrevRelease = redactReleaseEnv(ar.PrevRelease)
+		ar.Release = redactReleaseEnv(ar.Release)
+		out = &ar
+	default:
+		var res ct.Resource
+		if json.Unmarshal(e.Data, &res) != nil {
+			return redactedEventData(e)
+		}
+		res.Env = nil
+		out = &res
 	}
-	b, err := json.Marshal(redactReleaseEnv(&rel))
+	b, err := json.Marshal(out)
 	if err != nil {
-		return e
+		return redactedEventData(e)
 	}
 	cp := *e
 	cp.Data = b
+	return &cp
+}
+
+func redactedEventData(e *ct.Event) *ct.Event {
+	cp := *e
+	cp.Data = json.RawMessage(`{}`)
 	return &cp
 }
 

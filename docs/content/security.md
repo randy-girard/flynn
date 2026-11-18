@@ -299,8 +299,9 @@ the build before a job is inserted.
 The dashboard reads controller events with scope `events:read`, not the
 cluster key, when it has `ACCESS_TOKEN_PRIVATE_KEY`. The token grants
 `events:read` on one app. It is not `cluster:admin`, it does not set the
-cluster-key flag, and it does not expand to `app:env:read`, so release
-events for that app arrive with env stripped. `GET /events` and
+cluster-key flag, and it does not expand to `app:env:read`, so release,
+`app_release`, `resource`, and `resource_deletion` events for that app arrive
+with release, per-process, and resource env stripped. `GET /events` and
 `GET /events/:id` without a granted `app_id` are denied. A token whose
 user id is an account must match the app owner; a watcher id
 `events:<app id>` is bound only by the grant. The dashboard opens at most
@@ -468,7 +469,8 @@ a release. `GET /apps/:id/release` and release lists stay available to any
 grant on the app, but `env` and per-process `env` are omitted unless the
 caller has `app:env:read` (View, Deploy, Manage, and Admin include it;
 `app:logs:read` and `app:scale:read` alone do not). The same omission
-applies to expanded formations and release events. The cluster key and
+applies to expanded formations and release, `app_release`, `resource`, and
+`resource_deletion` events. The cluster key and
 cluster-admin tokens still receive env. `GET /apps/:id/log` stays
 available with `app:logs:read`, as do `GET /apps/:id/jobs/:id/output` and
 `GET /apps/:id/releases/:id/output`. `PUT /apps/:id/releases/:id/output`

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"time"
 
@@ -92,4 +94,53 @@ func (s *S) TestScopedEventsTokenHitsEventsRoutes(c *C) {
 			c.Fatalf("rejection = %+v", r)
 		}
 	}
+}
+
+// TestScopedEventsRedactAppReleaseAndResourceEnv: events:read does not expand
+// to app:env:read, so app_release and resource events must not carry release
+// or resource env to a scoped events token.
+func (s *S) TestScopedEventsRedactAppReleaseAndResourceEnv(c *C) {
+	const relSecret = "core09-release-env-secret"
+	const resSecret = "core09-resource-env-secret"
+	app := s.createTestApp(c, &ct.App{Name: "core09-events", OwnerAccount: "user:core09-acct"})
+	rel := s.createTestRelease(c, app.ID, &ct.Release{Env: map[string]string{"SECRET": relSecret}})
+	c.Assert(s.c.SetAppRelease(app.ID, rel.ID), IsNil)
+	// Attach a resource whose provider returns env containing resSecret.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte(`{"id":"/things/core09","env":{"DB_PASS":"` + resSecret + `"}}`))
+	}))
+	defer srv.Close()
+	p := &ct.Provider{URL: srv.URL + "/things", Name: "core09-provider"}
+	c.Assert(s.c.CreateProvider(p), IsNil)
+	conf := json.RawMessage(`{}`)
+	res, err := s.c.ProvisionResource(&ct.ResourceReq{ProviderID: p.ID, Config: &conf, Apps: []string{app.ID}})
+	c.Assert(err, IsNil)
+	defer s.c.DeleteResource(p.ID, res.ID)
+
+	now := time.Now()
+	raw, err := s.tokenSigner.Sign(&api.AccessToken{
+		UserId:     "core09-acct",
+		UserEmail:  "core09-acct@flynn.test",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(15 * time.Minute)),
+		Scopes:     []string{authz.ScopeEventsRead},
+		AppGrants: []*api.AppGrant{{
+			AppId:       app.ID,
+			Permissions: []string{authz.ScopeEventsRead},
+		}},
+	})
+	c.Assert(err, IsNil)
+
+	for _, ot := range []string{"app_release", "resource"} {
+		code, body := s.eventsStatus(c, raw, "/events?past=true&app_id="+app.ID+"&object_types="+ot, false)
+		c.Assert(code, Equals, http.StatusOK)
+		c.Assert(strings.Contains(body, ot), Equals, true, Commentf("no %s event listed: %s", ot, body))
+		c.Assert(strings.Contains(body, relSecret), Equals, false, Commentf("%s leaked release env: %s", ot, body))
+		c.Assert(strings.Contains(body, resSecret), Equals, false, Commentf("%s leaked resource env: %s", ot, body))
+	}
+
+	// Cluster key still sees env.
+	code, body := s.eventsStatus(c, authKey, "/events?past=true&app_id="+app.ID+"&object_types=app_release", true)
+	c.Assert(code, Equals, http.StatusOK)
+	c.Assert(strings.Contains(body, relSecret), Equals, true)
 }
