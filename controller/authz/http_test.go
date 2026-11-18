@@ -592,3 +592,39 @@ func TestBuildCredentialIsNotUserSession(t *testing.T) {
 		t.Fatal("a user may mint a PAT")
 	}
 }
+
+func TestServiceScopesDenyUserSessionRoutes(t *testing.T) {
+	for _, scope := range []string{ScopeACMEIssue, ScopeAccountQuota} {
+		tok := &authorizer.Token{UserID: "svc", Scopes: []string{scope}}
+		if UserBound(tok) {
+			t.Fatalf("%s token must not be user-bound", scope)
+		}
+		for _, route := range [][2]string{
+			{"POST", "/users"},
+			{"POST", "/apps"},
+			{"POST", "/tokens"},
+			{"GET", "/tokens"},
+			{"GET", "/whoami"},
+			{"GET", "/handles/x"},
+			{"GET", "/domains"},
+			{"POST", "/apps/app-1/transfer"},
+			{"POST", "/apps/app-1/collaborators"},
+			{"DELETE", "/providers/p1/resources/r1"},
+			{"POST", "/providers/p1/resources"},
+			{"GET", "/providers/p1/resources/r1"},
+		} {
+			if HTTPAllowed(tok, route[0], route[1]) {
+				t.Fatalf("%s token allowed on %s %s", scope, route[0], route[1])
+			}
+		}
+	}
+	// The routes each scope exists for still work.
+	quota := &authorizer.Token{UserID: "billing", Scopes: []string{ScopeAccountQuota}}
+	if !HTTPAllowed(quota, "GET", "/apps") || !HTTPAllowed(quota, "PUT", "/accounts/user:a/quota") {
+		t.Fatal("account:quota must keep its own routes")
+	}
+	acme := &authorizer.Token{UserID: "acme", Scopes: []string{ScopeACMEIssue}}
+	if !HTTPAllowed(acme, "GET", "/routes") || !HTTPAllowed(acme, "GET", "/apps") || !HTTPAllowed(acme, "PUT", "/managed-certificates/c1") {
+		t.Fatal("acme:issue must keep its own routes")
+	}
+}

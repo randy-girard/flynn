@@ -335,7 +335,10 @@ changes. Do not paste `CONTROLLER_KEY` into the app being built.
 Billing quota writes and suspension use scope `account:quota` in
 `QUOTA_TOKEN`. The token lasts up to 180 days. It is not `cluster:admin`.
 It may list tenant apps and read formations so metering still works, and it
-may not read release env or change a formation. Install mints it from the
+may not read release env or change a formation. Its `UserId` is only a
+caller label, so it is never treated as a user session: `POST /users`,
+`POST /apps`, `/tokens`, `/whoami`, collaborators, transfer, and resource
+provision or delete are denied for it (and for `acme:issue`). Install mints it from the
 controller signing key and then deletes `CONTROLLER_KEY`, `AUTH_KEY`, and
 the signing keys from the billing release. The billing API still accepts
 the cluster key from `flynn-host` because the release stores

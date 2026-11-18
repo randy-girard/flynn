@@ -86,7 +86,14 @@ func IsBuildCredential(tok *authorizer.Token) bool {
 // UserBound reports whether tok speaks for a user: it has a user id and is
 // not a compile credential.
 func UserBound(tok *authorizer.Token) bool {
-	return tok != nil && tok.UserID != "" && !IsBuildCredential(tok)
+	return tok != nil && tok.UserID != "" && !IsBuildCredential(tok) && !IsServiceCredential(tok)
+}
+
+// IsServiceCredential reports whether tok is a billing quota or ACME issuance
+// service token. Their UserId is only a caller label, so they never speak for
+// a user and reach only their own routes.
+func IsServiceCredential(tok *authorizer.Token) bool {
+	return hasScope(tok, ScopeAccountQuota) || hasScope(tok, ScopeACMEIssue)
 }
 
 // ScopeGitreceiveBuild lets flynn-receiver act on the one app it is building.
@@ -158,6 +165,13 @@ func HTTPAllowedResolved(tok *authorizer.Token, method, rawPath string, resolve 
 	}
 	if kind == rkGitHubCatalog {
 		return hasAnyGitHubWrite(tok)
+	}
+	// Service tokens reach only their own routes. This runs before the
+	// user-session and provider checks so a caller label in UserID cannot
+	// open them.
+	if IsServiceCredential(tok) && (kind == rkUserSession || kind == rkManageProvider) {
+		return (hasScope(tok, ScopeAccountQuota) && accountQuotaRead(method, rawPath)) ||
+			(hasScope(tok, ScopeACMEIssue) && acmeIssueAllowed(method, rawPath))
 	}
 	if kind == rkUserSession {
 		return UserBound(tok)
