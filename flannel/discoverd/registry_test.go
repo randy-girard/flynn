@@ -235,3 +235,59 @@ func TestWatchSubnets(t *testing.T) {
 		t.Fatalf("unexpected subnets, expected %s, got %s", expected, res.Subnets)
 	}
 }
+
+// GetSubnets hides a lease whose host has no live flannel instance yet (a
+// peer that is still re-registering after a reload). WatchSubnets must still
+// deliver that lease once, because the caller never saw it. Otherwise the
+// event that skipped it marks it "known" and this host never installs the
+// route, so its overlay to that peer stays blackholed until flannel restarts.
+func TestWatchSubnetsDeliversLeaseHiddenFromSnapshot(t *testing.T) {
+	s := newTest(t)
+	defer s.cleanup()
+
+	if _, err := s.registry.CreateSubnet("10.3.1.0-24", `{"PublicIP":"1.2.3.4"}`, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.registry.CreateSubnet("10.3.2.0-24", `{"PublicIP":"5.6.7.8"}`, 0); err != nil {
+		t.Fatal(err)
+	}
+	// A later write bumps the meta index past both creations.
+	if _, err := s.registry.UpdateSubnet("10.3.1.0-24", `{"PublicIP":"1.2.3.4","n":1}`, 0); err != nil {
+		t.Fatal(err)
+	}
+	hb, err := s.client.Register("flannel-test", "1.2.3.4:5001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hb.Close()
+
+	snap, err := s.registry.GetSubnets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.Subnets["10.3.2.0-24"]; ok {
+		t.Fatalf("setup: snapshot should hide the lease of the host with no live instance: %v", snap.Subnets)
+	}
+
+	type result struct {
+		res *subnet.Response
+		err error
+	}
+	got := make(chan result, 1)
+	go func() {
+		res, err := s.registry.WatchSubnets(snap.Index, make(chan bool))
+		got <- result{res, err}
+	}()
+	select {
+	case r := <-got:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if _, ok := r.res.Subnets["10.3.2.0-24"]; !ok {
+			// The snapshot hid it and the watch did not deliver it.
+			t.Fatalf("lease 10.3.2.0-24 was never delivered to the caller: %v", r.res.Subnets)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for WatchSubnets")
+	}
+}

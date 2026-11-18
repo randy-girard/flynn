@@ -60,7 +60,20 @@ func (r *registry) GetSubnets() (*subnet.Response, error) {
 	if err == nil && len(instances) > 0 {
 		net.Subnets, _ = pruneExpiredSubnets(net.Subnets, liveInstanceHosts(instances))
 	}
-	return newResponse(net), nil
+	res := newResponse(net)
+	// What the caller now has. WatchSubnets reports every lease not in this
+	// view, so a lease hidden here (a peer still re-registering) is delivered
+	// later instead of being treated as already seen.
+	knownSubnets = rawSubnets(res.Subnets)
+	return res, nil
+}
+
+func rawSubnets(subnets map[string][]byte) map[string]*json.RawMessage {
+	known := make(map[string]*json.RawMessage, len(subnets))
+	for sn, data := range subnets {
+		known[sn] = rawJSON(string(data))
+	}
+	return known
 }
 
 func rawJSON(s string) *json.RawMessage {
@@ -140,8 +153,11 @@ func (r *registry) WatchSubnets(since uint64, stop chan bool) (*subnet.Response,
 				}
 				subnets[subnet] = []byte(*data)
 			}
-			knownSubnets = net.Subnets
+			// Events older than since are already in the caller's snapshot.
+			// Only an event that is returned advances knownSubnets, so a
+			// lease the snapshot hid is not marked seen by an event skipped here.
 			if event.ServiceMeta.Index >= since {
+				knownSubnets = net.Subnets
 				return &subnet.Response{Subnets: subnets, Index: event.ServiceMeta.Index}, nil
 			}
 		case <-stop:
