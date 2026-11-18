@@ -466,6 +466,17 @@ compiled-in list.
 - `base_url` is a discoverd HTTP URL. The dashboard reverse-proxies it at
   `/api/plugin-ui/:plugin/...` (Resources, Deploy, and Cluster mounts) and does
   not give the browser `CONTROLLER_KEY`.
+- Every proxied request carries a short-lived ES256 SSO token (`iss=flynn-dashboard`,
+  `aud=flynn-plugin-ui`, `exp`, `kid`, and `plugin` set to the plugin the request
+  is for). Plugins verify it with `github.com/randy-girard/flynn/pkg/pluginui`
+  (`NewVerifier(jwksURL, "<plugin>")`): the signature, `kid`, `iss`, `aud`, a
+  required `exp` and `plugin` must all match, so a token handed to one plugin
+  is refused by every other. JWKS keys are cached for five minutes (3 second
+  fetch timeout). Write routes use `pluginui.RequireWrite` / `CanWrite`, which
+  deny a session with no permissions. The dashboard has always minted all of
+  these claims, so a plugin that enforces them works with any dashboard
+  version and a new dashboard works with older plugins; the order of
+  dashboard and plugin updates does not matter.
 - `surfaces` is one or more of `app.resources` (Resources tab card),
   `app.deploy` (Deploy tab mount), `cluster.settings`, or `cluster.nav`.
   GitHub-style integrations use deploy/settings, not a Resources card.
