@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
@@ -73,14 +74,14 @@ func (c *controllerAPI) setGitHubPluginHealth(ok bool) {
 
 func (c *controllerAPI) maybeGitHubPlugin(next httphelper.HandlerFunc) httphelper.HandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-		if c.proxyGitHubPlugin(w, req) {
+		if c.proxyGitHubPlugin(ctx, w, req) {
 			return
 		}
 		next(ctx, w, req)
 	}
 }
 
-func (c *controllerAPI) proxyGitHubPlugin(w http.ResponseWriter, req *http.Request) bool {
+func (c *controllerAPI) proxyGitHubPlugin(ctx context.Context, w http.ResponseWriter, req *http.Request) bool {
 	if !c.githubPluginHealthy() {
 		return false
 	}
@@ -92,6 +93,13 @@ func (c *controllerAPI) proxyGitHubPlugin(w http.ResponseWriter, req *http.Reque
 		return false
 	}
 	out.Header = req.Header.Clone()
+	// The plugin sees only the controller key. Tell it when the caller is not a
+	// cluster admin so it applies per-account checks (PLG-04), and never pass a
+	// client-supplied value through.
+	out.Header.Del("X-Flynn-Origin")
+	if tok := authz.TokenFromContext(ctx); tok != nil && !tok.HasClusterAdmin() {
+		out.Header.Set("X-Flynn-Origin", "user")
+	}
 	if key := firstNonEmpty(os.Getenv("AUTH_KEY"), os.Getenv("CONTROLLER_KEY")); key != "" {
 		out.SetBasicAuth("", strings.Split(key, ",")[0])
 	}

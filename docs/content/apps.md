@@ -253,6 +253,13 @@ wait-for-checks off. When the enforced [cluster policy](#cluster-policy) sets
 `require_github_checks`, every GitHub deploy waits for checks regardless of
 this setting.
 
+One GitHub App serves the whole cluster, so each installation belongs to a
+controller account. You can connect only a repo in an installation a cluster
+admin made available to your account; the dashboard lists only those. A cluster
+admin connecting an app through the dashboard claims an unclaimed installation
+for that app's account, and `PUT /github/installations/<id>/owner` (controller
+key) sets or clears it. Deploys re-check the owner.
+
 The dashboard Cluster → GitHub page has the same setup steps and credential
 form. The app Deploy page connects a repo and starts a deploy.
 
