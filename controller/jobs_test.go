@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -558,6 +562,48 @@ func (s *S) TestRunJobAttached(c *C) {
 			"RELEASE":            "true",
 		})
 		c.Assert(job.Config.Stdin, Equals, true)
+	}
+}
+
+// TestRunJobAttachedStdinBufferedWithRequest sends stdin in the same TCP
+// segment as the upgrade request. net/http buffers those bytes (as it can
+// for any client that writes right after the 101), and the handler must
+// forward the hijack's buffered reader, not just the raw conn.
+func (s *S) TestRunJobAttachedStdinBufferedWithRequest(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "run-attached-buffered"})
+	hc := tu.NewFakeHostClient(fakeHostID(), false)
+	s.cc.AddHost(hc)
+
+	input := make(chan string, 1)
+	hc.SetAttachFunc("*", func(req *host.AttachReq, wait bool) (cluster.AttachClient, error) {
+		return &rawAttachClient{rwc: struct {
+			io.Reader
+			io.WriteCloser
+		}{
+			&prefixThenStall{rem: []byte("test out")},
+			&attachStdinCapture{want: "test in", done: input},
+		}}, nil
+	})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+
+	body, err := json.Marshal(&ct.NewJob{ReleaseID: release.ID, Args: []string{"foo"}, TTY: true, Columns: 10, Lines: 20})
+	c.Assert(err, IsNil)
+	u, err := url.Parse(s.srv.URL)
+	c.Assert(err, IsNil)
+	conn, err := net.Dial("tcp", u.Host)
+	c.Assert(err, IsNil)
+	defer conn.Close()
+	reqHead := fmt.Sprintf("POST /apps/%s/jobs HTTP/1.1\r\nHost: %s\r\nAuthorization: Basic %s\r\nConnection: upgrade\r\nUpgrade: flynn-attach/0\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n",
+		app.ID, u.Host, base64.StdEncoding.EncodeToString([]byte(":"+authKey)), len(body))
+	_, err = conn.Write(append(append([]byte(reqHead), body...), []byte("test in")...))
+	c.Assert(err, IsNil)
+
+	select {
+	case got := <-input:
+		c.Assert(got, Equals, "test in")
+	case <-time.After(10 * time.Second):
+		c.Fatal("stdin sent with the request never reached the attach client")
 	}
 }
 

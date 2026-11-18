@@ -419,7 +419,7 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		w.Header().Set("Connection", "upgrade")
 		w.Header().Set("Upgrade", "flynn-attach/0")
 		w.WriteHeader(http.StatusSwitchingProtocols)
-		conn, _, err := w.(http.Hijacker).Hijack()
+		conn, rw, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			panic(err)
 		}
@@ -431,7 +431,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 			done <- struct{}{}
 		}
 		go cp(conn, attachClient.Conn())
-		go cp(attachClient.Conn(), conn)
+		// Read through the hijack's bufio.Reader: net/http may already have
+		// buffered (or pulled in via its background read) the first stdin bytes
+		// a client sent right after the 101, and the raw conn would drop them.
+		go cp(attachClient.Conn(), rw.Reader)
 
 		// Wait for one of the connections to be closed or interrupted. EOF is
 		// framed inside the attach protocol, so a read/write error indicates
