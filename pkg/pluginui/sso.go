@@ -53,6 +53,16 @@ type Claims struct {
 	Plugin      string   `json:"plugin"`
 	Permissions []string `json:"permissions"`
 	ResourceID  string   `json:"resource_id"`
+	// AppGrants is set on cluster-level tokens: the user's permissions per app.
+	AppGrants []AppGrant `json:"app_grants"`
+	// ControllerToken is the user's controller access token. Never log it.
+	ControllerToken string `json:"controller_token"`
+}
+
+// AppGrant is one app's permissions on a cluster-nav SSO token.
+type AppGrant struct {
+	AppID       string   `json:"app_id"`
+	Permissions []string `json:"permissions"`
 }
 
 // Verifier checks SSO tokens against the dashboard JWKS for one plugin.
