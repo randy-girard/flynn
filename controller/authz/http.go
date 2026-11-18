@@ -454,9 +454,9 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 	case "whoami", "tokens", "domains":
 		return rkUserSession, "", ""
 	case "users":
-		if len(parts) == 1 && m == http.MethodPost {
-			return rkUserSession, "", ""
-		}
+		// POST /users creates a pre-verified account for any email. Only a
+		// cluster admin may do that: a user session could squat an address
+		// and receive the grants made when its owner is later invited.
 		return rkCluster, "", ""
 	case "handles":
 		if m == http.MethodGet || m == http.MethodHead {
