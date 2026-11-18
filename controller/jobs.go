@@ -117,6 +117,10 @@ func (c *controllerAPI) PutJob(ctx context.Context, w http.ResponseWriter, req *
 	if data, err := c.appRepo.Get(appID); err == nil {
 		appID = data.(*ct.App).ID
 	}
+	if job.UUID != params.ByName("jobs_id") {
+		respondWithError(w, ct.ValidationError{Field: "uuid", Message: "must match the job in the URL"})
+		return
+	}
 	if job.AppID == "" {
 		job.AppID = appID
 	} else if job.AppID != appID {

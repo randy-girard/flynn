@@ -594,6 +594,12 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			}
 			return rkCluster, "", ""
 		}
+		// PUT/PATCH /apps/:id/jobs/:job is the scheduler's job-state upsert,
+		// not a tenant operation. A tenant's app:jobs:run grant may start
+		// jobs (POST) but must not forge job rows.
+		if len(parts) >= 3 && parts[2] == "jobs" && (m == http.MethodPut || m == http.MethodPatch) {
+			return rkCluster, "", ""
+		}
 		if len(parts) >= 3 && (parts[2] == "collaborators" || parts[2] == "transfer") {
 			return rkUserSession, appID, ""
 		}

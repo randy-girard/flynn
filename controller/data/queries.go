@@ -759,6 +759,7 @@ FROM job_cache WHERE job_id = $1`
 INSERT INTO job_cache (cluster_id, job_id, host_id, app_id, release_id, process_type, state, meta, exit_status, host_error, run_at, restarts, args)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (job_id) DO UPDATE
 SET cluster_id = $1, host_id = $3, state = $7, exit_status = $9, host_error = $10, run_at = $11, restarts = $12, args = $13, updated_at = now()
+WHERE job_cache.app_id = EXCLUDED.app_id
 RETURNING created_at, updated_at`
 	jobVolumeInsertQuery = `
 INSERT INTO job_volumes (job_id, volume_id, index) VALUES ($1, $2, $3)

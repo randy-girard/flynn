@@ -305,6 +305,58 @@ func (s *S) TestPutJobFillsEmptyAppID(c *C) {
 	c.Assert(got.UUID, Equals, uuid)
 }
 
+func (s *S) TestPutJobCannotOverwriteOtherAppsJob(c *C) {
+	victim := s.createTestApp(c, &ct.App{Name: "putjob-victim"})
+	attacker := s.createTestApp(c, &ct.App{Name: "putjob-attacker"})
+	vRelease := s.createTestRelease(c, victim.ID, &ct.Release{})
+	aRelease := s.createTestRelease(c, attacker.ID, &ct.Release{})
+	uuid := random.UUID()
+	res := s.putJobRaw(c, victim.ID, &ct.Job{
+		UUID:      uuid,
+		ReleaseID: vRelease.ID,
+		Type:      "web",
+		State:     ct.JobStateUp,
+	})
+	res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 200)
+
+	res = s.putJobRaw(c, attacker.ID, &ct.Job{
+		UUID:      uuid,
+		AppID:     attacker.ID,
+		ReleaseID: aRelease.ID,
+		Type:      "web",
+		State:     ct.JobStateDown,
+	})
+	res.Body.Close()
+	c.Assert(res.StatusCode >= 400, Equals, true)
+
+	got, err := s.c.GetJob(victim.ID, uuid)
+	c.Assert(err, IsNil)
+	c.Assert(got.State, Equals, ct.JobStateUp)
+	c.Assert(got.AppID, Equals, victim.ID)
+	_, err = s.c.GetJob(attacker.ID, uuid)
+	c.Assert(err, Equals, ct.ErrNotFound)
+}
+
+func (s *S) TestPutJobRequiresUUIDMatchingURL(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "putjob-uuid-url"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{})
+	uuid := random.UUID()
+	job := &ct.Job{UUID: uuid, ReleaseID: release.ID, Type: "web", State: ct.JobStatePending}
+	body, err := json.Marshal(job)
+	c.Assert(err, IsNil)
+	req, err := http.NewRequest("PUT", s.srv.URL+"/apps/"+app.ID+"/jobs/"+random.UUID(), bytes.NewReader(body))
+	c.Assert(err, IsNil)
+	req.SetBasicAuth("", authKey)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 400)
+	_, err = s.c.GetJob(app.ID, uuid)
+	c.Assert(err, Equals, ct.ErrNotFound)
+}
+
 func fakeHostID() string {
 	return random.Hex(16)
 }

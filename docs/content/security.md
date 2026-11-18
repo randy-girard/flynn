@@ -474,7 +474,10 @@ applies to expanded formations and release, `app_release`, `resource`, and
 cluster-admin tokens still receive env. `GET /apps/:id/log` stays
 available with `app:logs:read`, as do `GET /apps/:id/jobs/:id/output` and
 `GET /apps/:id/releases/:id/output`. `PUT /apps/:id/releases/:id/output`
-requires `app:write`. The controller redacts current
+requires `app:write`. `PUT` and `PATCH /apps/:id/jobs/:id` (the scheduler's job-state upsert) are
+cluster-key only; `app:jobs:run` allows `POST /apps/:id/jobs` but cannot write job
+rows. The job UUID in the body must match the URL, and the upsert never
+rewrites a job that belongs to another app. The controller redacts current
 release env values and per-process env values that appear in those log
 lines, including the stored copies, when the caller does not have `app:env:read`. Values shorter than
 8 characters are left as-is. Callers with `app:env:read` (including

@@ -102,6 +102,12 @@ func (r *JobRepo) Add(job *ct.Job) error {
 		tx.Rollback()
 		return ct.ValidationError{Field: "state", Message: err.Error()}
 	}
+	if err == pgx.ErrNoRows {
+		// The upsert's app_id guard matched nothing: the job id belongs to
+		// another app. Never let one app rewrite another app's job.
+		tx.Rollback()
+		return ct.ValidationError{Field: "app", Message: "job belongs to a different app"}
+	}
 	if err != nil {
 		tx.Rollback()
 		return err
