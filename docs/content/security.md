@@ -152,8 +152,9 @@ and not by client IP. Reminting a dashboard JWT does not reset the
 budget. The install key has a separate, higher budget so router sync,
 the scheduler, and git push keep working when a user is over theirs. A
 `cluster:admin` user JWT stays on the user budget. Build tokens carry
-the app owner (`user:<id>` stored as the id, `org:<id>` stored whole) so
-a build shares that account. Over the budget the response is HTTP 429
+`build:<owner>` (`user:<id>` as `build:<id>`, `org:<id>` as `build:org:<id>`)
+so all builds for one owner share one budget that is separate from the
+owner's own. Over the budget the response is HTTP 429
 with `Retry-After` and JSON `retry: false`. The Go client retries
 `retry: true` for ten seconds, which would multiply the load. gRPC,
 including grpc-web, uses the same buckets and returns `ResourceExhausted`.
@@ -277,8 +278,14 @@ about to start, and the scheduler mounts it at `/run/secrets/controller_token`.
 The token is not stored on the job row and is not minted when the pending
 row is created, so time spent waiting for a host does not consume its
 lifetime. The lifetime is the build timeout, at most 30 minutes. The
-token's user id is the app owner, so the controller rate limit for that
-build is the owner's. An app with no owner uses `created_by`. Gitreceive
+token's user id is `build:<owner>`, a rate-limit identity only, so builds
+for one owner share one controller budget. An app with no owner uses
+`created_by`. Neither compile credential (`build:artifacts`,
+`gitreceive:build`) is the owner: the controller does not expand it into
+the owner's other apps or `cluster:admin`, and it cannot call user-session
+routes such as `POST /tokens` (personal access tokens), `GET /whoami`, or
+collaborator and transfer routes. It keeps the one `app:write` grant it was
+minted with. Gitreceive
 and taffy do not put `CONTROLLER_KEY` in slugbuilder or dockerbuilder
 environment (that key would otherwise remain in the container config and
 `/proc` environ). A controller without `ACCESS_TOKEN_SIGNING_KEY` rejects

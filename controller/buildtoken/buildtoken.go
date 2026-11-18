@@ -21,10 +21,25 @@ const DefaultTTL = 15 * time.Minute
 // is minted at start.
 const MaxTTL = 30 * time.Minute
 
-// UserID is the controller rate-limit account for a build. A user owner is
+// RateLimitPrefix marks a token's UserId as a build rate-limit identity, not a
+// user. A build credential is never the owner: the controller does not expand
+// it into the owner's account and it cannot call user-session routes.
+const RateLimitPrefix = "build:"
+
+// RateLimitID is the identity a build credential carries in UserId, so every
+// build for one owner shares one controller rate-limit bucket that is separate
+// from the owner's own bucket. It is "" when the app has no owner.
+func RateLimitID(app *ct.App) string {
+	if id := ownerID(app); id != "" {
+		return RateLimitPrefix + id
+	}
+	return ""
+}
+
+// ownerID is the app owner as the controller keys accounts. A user owner is
 // stored without the user: prefix, matching dashboard JWTs. An org owner
-// keeps org: so the bucket cannot collide with a user id.
-func UserID(app *ct.App) string {
+// keeps org: so the id cannot collide with a user id.
+func ownerID(app *ct.App) string {
 	if app == nil {
 		return ""
 	}
@@ -63,7 +78,7 @@ func Mint(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (string, e
 	ttl = ClampTTL(ttl)
 	now := time.Now()
 	return signer.Sign(&api.AccessToken{
-		UserId:     UserID(app),
+		UserId:     RateLimitID(app),
 		UserEmail:  "build:" + app.Name,
 		IssueTime:  timestamppb.New(now),
 		ExpireTime: timestamppb.New(now.Add(ttl)),
@@ -91,7 +106,7 @@ func MintReceive(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (st
 		grants = append(grants, &api.AppGrant{AppId: name, Permissions: []string{"app:write"}})
 	}
 	return signer.Sign(&api.AccessToken{
-		UserId:     UserID(app),
+		UserId:     RateLimitID(app),
 		UserEmail:  "receive:" + app.Name,
 		IssueTime:  timestamppb.New(now),
 		ExpireTime: timestamppb.New(now.Add(ttl)),

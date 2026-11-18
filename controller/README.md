@@ -31,8 +31,9 @@ not delete routes, job sync does not mark jobs down, and the host firewall
 does not drop expose rules.
 
 Authenticated requests are limited per controller `web` process. A user
-JWT, a personal access token, and a build token for that account share
-one budget of 600 requests per minute. The cluster install key has its
+JWT and a personal access token for that account share one budget of 600
+requests per minute. Build tokens for that owner share a second budget of
+the same size (`build:<owner>`). The cluster install key has its
 own budget of 100,000 per minute, shared by the router, the scheduler,
 gitreceive, and plugin API jobs. A 429 carries `Retry-After` and
 `retry: false`. `GET /ping` is not limited. `GET /.well-known/status`

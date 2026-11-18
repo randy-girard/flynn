@@ -74,6 +74,21 @@ const ScopeBuildArtifacts = "build:artifacts"
 // It is not cluster:admin and does not expand to app:env:read.
 const ScopeEventsRead = "events:read"
 
+// IsBuildCredential reports whether tok is a compile credential: the
+// build:artifacts token a build job holds or the gitreceive:build token
+// flynn-receiver holds. Both are bound to one app. Their UserId is only a
+// rate-limit identity ("build:<owner>"), so they must never be treated as the
+// owner: no account expansion, no user-session routes (PAT minting).
+func IsBuildCredential(tok *authorizer.Token) bool {
+	return hasScope(tok, ScopeBuildArtifacts) || hasScope(tok, ScopeGitreceiveBuild)
+}
+
+// UserBound reports whether tok speaks for a user: it has a user id and is
+// not a compile credential.
+func UserBound(tok *authorizer.Token) bool {
+	return tok != nil && tok.UserID != "" && !IsBuildCredential(tok)
+}
+
 // ScopeGitreceiveBuild lets flynn-receiver act on the one app it is building.
 // The grant is app:write for that app. The scope itself is not cluster admin.
 const ScopeGitreceiveBuild = "gitreceive:build"
@@ -140,10 +155,10 @@ func HTTPAllowedResolved(tok *authorizer.Token, method, rawPath string, resolve 
 		return hasAnyGitHubWrite(tok)
 	}
 	if kind == rkUserSession {
-		return tok.UserID != ""
+		return UserBound(tok)
 	}
 	if kind == rkManageProvider {
-		return tok.UserID != "" || tokenCanManageSomeApp(tok)
+		return UserBound(tok) || tokenCanManageSomeApp(tok)
 	}
 	if kind == rkEvents {
 		return hasScope(tok, ScopeEventsRead) && hasEventsGrant(tok)

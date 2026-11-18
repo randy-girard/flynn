@@ -65,6 +65,13 @@ func (c *controllerAPI) expandToken(tok *authorizer.Token) error {
 	if c == nil || c.tenancy == nil || tok == nil || tok.ClusterKey || tok.UserID == "" {
 		return nil
 	}
+	// A compile credential carries the owner only as a rate-limit identity.
+	// Expanding it would hand a build the owner's other apps, cluster:admin
+	// for an admin owner, and PAT minting. It keeps the one grant it was minted
+	// with.
+	if authz.IsBuildCredential(tok) {
+		return nil
+	}
 	user, err := c.tenancy.GetUser(tok.UserID)
 	if err == data.ErrNotFound {
 		return nil
@@ -411,7 +418,7 @@ func (c *controllerAPI) BootstrapUserToken(ctx context.Context, w http.ResponseW
 
 func (c *controllerAPI) WhoAmI(ctx context.Context, w http.ResponseWriter, _ *http.Request) {
 	tok := authz.TokenFromContext(ctx)
-	if tok == nil || tok.ClusterKey || tok.UserID == "" {
+	if tok == nil || tok.ClusterKey || !authz.UserBound(tok) {
 		httphelper.JSON(w, 200, ct.WhoAmI{User: ct.User{Handle: "cluster", ClusterAdmin: true}, Account: ""})
 		return
 	}
@@ -426,7 +433,7 @@ func (c *controllerAPI) WhoAmI(ctx context.Context, w http.ResponseWriter, _ *ht
 
 func (c *controllerAPI) CreateToken(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	tok := authz.TokenFromContext(ctx)
-	if tok == nil || tok.UserID == "" {
+	if !authz.UserBound(tok) {
 		httphelper.Forbidden(w, "personal access tokens require a user")
 		return
 	}
@@ -456,7 +463,7 @@ func (c *controllerAPI) issuePAT(ctx context.Context, w http.ResponseWriter, use
 
 func (c *controllerAPI) ListTokens(ctx context.Context, w http.ResponseWriter, _ *http.Request) {
 	tok := authz.TokenFromContext(ctx)
-	if tok == nil || tok.UserID == "" {
+	if !authz.UserBound(tok) {
 		httphelper.JSON(w, 200, []ct.AccessTokenRecord{})
 		return
 	}
@@ -474,7 +481,7 @@ func (c *controllerAPI) ListTokens(ctx context.Context, w http.ResponseWriter, _
 func (c *controllerAPI) DeleteToken(ctx context.Context, w http.ResponseWriter, _ *http.Request) {
 	tok := authz.TokenFromContext(ctx)
 	params, _ := ctxhelper.ParamsFromContext(ctx)
-	if tok == nil || tok.UserID == "" {
+	if !authz.UserBound(tok) {
 		httphelper.Forbidden(w, "personal access tokens require a user")
 		return
 	}

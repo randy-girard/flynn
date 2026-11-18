@@ -185,12 +185,11 @@ func buildSigner() (*tokensigner.Signer, error) {
 	return signer, nil
 }
 
-// buildTokenUserID is the controller rate-limit account for a build. A user
-// owner is stored without the user: prefix, matching dashboard JWTs. An org
-// owner keeps org: so the bucket cannot collide with a user id. Anything else
-// non-empty is kept whole. With no owner, CreatedBy is the fallback.
+// buildTokenUserID is the rate-limit identity a build credential carries in
+// UserId: "build:" plus the owner (see buildtoken.RateLimitID). It is not a
+// user id.
 func buildTokenUserID(app *ct.App) string {
-	return buildtoken.UserID(app)
+	return buildtoken.RateLimitID(app)
 }
 
 // mintBuildToken signs a short-lived AccessToken scoped to a single app and the

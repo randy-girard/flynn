@@ -568,3 +568,24 @@ func TestACMEIssueScopeIsNotClusterAdmin(t *testing.T) {
 		t.Fatal("acme:issue must not change ACME config, formations, or release env")
 	}
 }
+
+func TestBuildCredentialIsNotUserSession(t *testing.T) {
+	grants := []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{PermAppWrite}}}
+	for _, scope := range []string{ScopeBuildArtifacts, ScopeGitreceiveBuild} {
+		tok := &authorizer.Token{UserID: "build:owner", Scopes: []string{scope}, AppGrants: grants}
+		if UserBound(tok) {
+			t.Fatalf("%s token with a user id must not be user-bound", scope)
+		}
+		for _, route := range [][2]string{{"POST", "/tokens"}, {"GET", "/tokens"}, {"GET", "/whoami"}, {"POST", "/apps/app-1/transfer"}} {
+			if HTTPAllowed(tok, route[0], route[1]) {
+				t.Fatalf("%s token allowed on %s %s", scope, route[0], route[1])
+			}
+		}
+	}
+	if !UserBound(&authorizer.Token{UserID: "u1"}) {
+		t.Fatal("a plain user token is user-bound")
+	}
+	if !HTTPAllowed(&authorizer.Token{UserID: "u1"}, "POST", "/tokens") {
+		t.Fatal("a user may mint a PAT")
+	}
+}

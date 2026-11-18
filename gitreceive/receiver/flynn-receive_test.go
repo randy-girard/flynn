@@ -332,7 +332,7 @@ func TestMintBuildToken(t *testing.T) {
 	}
 }
 
-func TestMintBuildTokenSetsUserIDFromOwner(t *testing.T) {
+func TestMintBuildTokenRateLimitIdentityFromOwner(t *testing.T) {
 	signer, pubKey := newBuildKeyPair(t)
 	pk, err := authorizer.ParseTokenKey(pubKey)
 	if err != nil {
@@ -353,9 +353,9 @@ func TestMintBuildTokenSetsUserIDFromOwner(t *testing.T) {
 			t.Fatalf("owner %q created_by %q: user id = %q, want %q", app.OwnerAccount, app.CreatedBy, tok.UserID, want)
 		}
 	}
-	check(&ct.App{ID: "app-1", Name: "myapp", OwnerAccount: "user:abc", CreatedBy: "old"}, "abc")
-	check(&ct.App{ID: "app-1", Name: "myapp", OwnerAccount: "org:xyz", CreatedBy: "old"}, "org:xyz")
-	check(&ct.App{ID: "app-1", Name: "myapp", CreatedBy: "creator"}, "creator")
+	check(&ct.App{ID: "app-1", Name: "myapp", OwnerAccount: "user:abc", CreatedBy: "old"}, "build:abc")
+	check(&ct.App{ID: "app-1", Name: "myapp", OwnerAccount: "org:xyz", CreatedBy: "old"}, "build:org:xyz")
+	check(&ct.App{ID: "app-1", Name: "myapp", CreatedBy: "creator"}, "build:creator")
 	check(&ct.App{ID: "app-1", Name: "myapp"}, "")
 }
 
