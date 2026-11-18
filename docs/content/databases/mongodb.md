@@ -130,6 +130,10 @@ users and roles. It runs as the instance superuser `flynn`, not the app
 user, and uses `--ssl --tlsInsecure`. The password is not a process
 argument. `-f` and `-q` are rejected. There is no dump file to download.
 
+The dashboard's Databases, Users, dump and restore pages act on the signed-in app's own
+instance (`leader.<instance>.discoverd`), never on the shared plugin appliance.
+An app with no MongoDB resource gets a 404 there.
+
 `flynn mongodb:backups` lists timestamps. `flynn mongodb:restore` restores
 the newest onto that same primary with `mongorestore --archive --oplogReplay
 --drop`. `flynn mongodb:restore <timestamp>` restores a listed timestamp. A
