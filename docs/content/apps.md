@@ -13,7 +13,8 @@ configuration of apps on Flynn.
 ## Names
 
 App names are lowercase letters, digits, and hyphen-separated groups
-(`my-app`), at most 100 characters.
+(`my-app`), at most 100 characters. A name that looks like an app id (a
+UUID, with or without dashes) is rejected on create and rename.
 
 User apps cannot use names that collide with dashboard paths (`plugins`,
 `system`, `new`), Flynn system apps (`postgres`, `controller`,

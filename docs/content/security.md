@@ -179,6 +179,12 @@ through the router. Hosted and self-hosted clusters use the same limits.
 * **App-scoped token** (dashboard grant, build token). `GET /apps` is
   `403`. The token may only `GET /apps/:id` for apps it was granted.
 
+Grants are keyed by app id, never by name. A request that names the app in
+the URL is resolved to its id before the grant check, and a lookup that
+matches both an id and a name returns the id match. App names that look like
+an app id are rejected, so an app cannot take another app's grants by
+being named after its UUID.
+
 Hosted and self-hosted clusters use the same list. `tenancy_mode` does
 not change it. Omit `count` and the response is still one JSON array of
 every app that caller can see. Pass `count` (at most 1000), `before`, and
