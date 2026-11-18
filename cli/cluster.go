@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/url"
@@ -793,25 +792,12 @@ func runClusterBackup(args *docopt.Args) error {
 		progress = bar
 	}
 
-	var dest io.Writer = os.Stdout
-	if filename := args.String["--file"]; filename != "" {
-		f, err := os.Create(filename)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		dest = f
-	}
-
-	fmt.Fprintln(os.Stderr, "Creating cluster backup...")
-
-	if err := backup.Run(client, dest, progress); err != nil {
+	if err := backup.WriteFile(client, args.String["--file"], os.Stderr, progress); err != nil {
 		return err
 	}
 	if bar != nil {
 		bar.Finish()
 	}
-	fmt.Fprintln(os.Stderr, "Backup complete.")
 
 	return nil
 }

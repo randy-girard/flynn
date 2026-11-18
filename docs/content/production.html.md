@@ -801,6 +801,11 @@ individual applications (including their databases).
 ### Cluster Backup
 
 To take a full-cluster backup, run `flynn-host backup --file backup.tar`.
+The tarball holds the cluster root secrets (`flynn.json` release env and the
+Postgres dump), so `flynn-host backup --file` and `flynn cluster backup --file`
+write it owner-only (mode 0600, tar entries 0600). The file is written to a
+temp file beside the destination, synced, and renamed into place, so a failed
+backup never replaces an earlier one. Keep it off shared storage.
 A file named `backup.tar` is created with the data needed to stand up a new
 cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus plugin
 apps that were included), `plugins.json` (which plugins were installed), and

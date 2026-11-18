@@ -20,9 +20,15 @@ type backupAppClient interface {
 	FormationList(string) ([]*ct.Formation, error)
 }
 
-func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
+// Run writes the backup tarball to out. The tar trailer is flushed on the way
+// out and its error is returned when nothing else failed.
+func Run(client controller.Client, out io.Writer, progress ProgressBar) (err error) {
 	tw := NewTarWriter("flynn-backup-"+time.Now().UTC().Format("2006-01-02_150405"), out, progress)
-	defer tw.Close()
+	defer func() {
+		if cerr := tw.Close(); err == nil && cerr != nil {
+			err = fmt.Errorf("error closing backup archive: %w", cerr)
+		}
+	}()
 
 	data, err := getApps(client)
 	if err != nil {

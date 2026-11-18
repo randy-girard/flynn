@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-	"io"
 	"os"
 
 	"github.com/cheggaaa/pb"
@@ -11,11 +9,6 @@ import (
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/term"
 )
-
-// tenantDumpNotice is the one extra line on flynn-host backup. Tenant dumps
-// are a blobstore catalog. Cluster restore does not apply them. Large objects
-// inside postgres.sql.gz are already in the appliance dump and are not named here.
-const tenantDumpNotice = "Tenant database dumps are in the blobstore under backups/ and are not applied by cluster restore. Tenant volumes are not in this tarball."
 
 func init() {
 	Register("backup", runBackup, `
@@ -49,24 +42,11 @@ func runBackup(args *docopt.Args, _ *cluster.Client) error {
 		progress = bar
 	}
 
-	var dest io.Writer = os.Stdout
-	if filename := args.String["--file"]; filename != "" {
-		f, err := os.Create(filename)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		dest = f
-	}
-
-	fmt.Fprintln(os.Stderr, "Creating cluster backup...")
-	fmt.Fprintln(os.Stderr, tenantDumpNotice)
-	if err := backup.Run(client, dest, progress); err != nil {
+	if err := backup.WriteFile(client, args.String["--file"], os.Stderr, progress); err != nil {
 		return err
 	}
 	if bar != nil {
 		bar.Finish()
 	}
-	fmt.Fprintln(os.Stderr, "Backup complete.")
 	return nil
 }

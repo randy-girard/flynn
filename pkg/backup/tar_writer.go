@@ -44,7 +44,7 @@ func NewTarWriter(name string, w io.Writer, progress ProgressBar) *TarWriter {
 func (t *TarWriter) WriteHeader(name string, length int) error {
 	return t.Writer.WriteHeader(&tar.Header{
 		Name:     path.Join(t.name, name),
-		Mode:     0644,
+		Mode:     0600,
 		Size:     int64(length),
 		ModTime:  time.Now(),
 		Typeflag: tar.TypeReg,
