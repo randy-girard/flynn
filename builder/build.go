@@ -2260,13 +2260,26 @@ func (g *GoInputs) load(pkg string) ([]string, error) {
 			inputs[i] = path
 		}
 
-		// recursively add imported packages
+		// recursively add imported packages. Each package is listed once,
+		// in first-seen order: without the dedupe a diamond-shaped import
+		// graph multiplies every shared dependency's list (tens of
+		// millions of entries for discoverd/server), which OOMs the builder.
+		seen := make(map[string]struct{}, len(inputs))
+		for _, in := range inputs {
+			seen[in] = struct{}{}
+		}
 		for _, pkg := range p.Imports {
 			imports, err := g.load(pkg)
 			if err != nil {
 				return nil, err
 			}
-			inputs = append(inputs, imports...)
+			for _, f := range imports {
+				if _, ok := seen[f]; ok {
+					continue
+				}
+				seen[f] = struct{}{}
+				inputs = append(inputs, f)
+			}
 		}
 
 		return inputs, nil
