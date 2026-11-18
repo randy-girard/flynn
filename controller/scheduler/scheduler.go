@@ -1219,9 +1219,35 @@ func (s *Scheduler) stopSurplusOmniJobs(formation *Formation) {
 
 		log.Info(fmt.Sprintf("detected %d surplus omni jobs", len(surplusJobs)), "type", typ)
 		for _, job := range surplusJobs {
+			// Name every copy the scheduler counts on that host, so a
+			// scale-down of a fresh omni job (flannel after a host
+			// update) shows which other job it was counted against and
+			// what state the scheduler holds that job in.
+			log.Info("stopping surplus omni job",
+				"type", typ,
+				"job.id", job.ID,
+				"job.state", job.State,
+				"job.reason", job.Reason,
+				"host.id", job.HostID,
+				"expected", expected,
+				"counted", describeJobs(hostJobs[job.HostID]),
+			)
 			s.stopJobReason(job, host.JobReasonScaleDown)
 		}
 	}
+}
+
+// describeJobs renders jobs as id:state:startedAt for diagnostic logs.
+func describeJobs(jobs []*Job) []string {
+	out := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		started := "unstarted"
+		if !j.StartedAt.IsZero() {
+			started = j.StartedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, fmt.Sprintf("%s:%s:%s", j.ID, j.State, started))
+	}
+	return out
 }
 
 // stopJobsWithMismatchedTags stops any running jobs whose tags do not match
