@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/inconshreveable/log15"
@@ -88,5 +89,29 @@ func TestRepairEmptyInitWALSkipsWhenSyncIsMissing(t *testing.T) {
 	}
 	if peer.Info().State.InitWAL != "" {
 		t.Fatalf("init_wal changed to %q", peer.Info().State.InitWAL)
+	}
+}
+
+type failingDiscoverd struct{ fakeDiscoverd }
+
+func (d *failingDiscoverd) SetState(*DiscoverdState) error {
+	return errors.New(`object_exists: Service metadata for "postgres" already exists, use index=n to set`)
+}
+
+// A republish that loses the race to an existing meta must put the peer's
+// last-seen index back. Leaving it at 0 makes every later state write conflict
+// with the existing meta, so the primary retries forever in a hot loop and
+// never records another state change.
+func TestRepublishClusterStateKeepsIndexWhenWriteFails(t *testing.T) {
+	disc := &failingDiscoverd{}
+	self := memInst("10.0.0.1:5432", "p")
+	peer := NewPeer(self, "p", "POSTGRES_ID", true, disc, &reconfigureStartsDB{running: true}, log15.New())
+	peer.setState(&State{Generation: 4, Singleton: true, Primary: self, InitWAL: "11/1"})
+	peer.stateIndex = 99
+	if peer.republishClusterState(log15.New()) {
+		t.Fatal("republish reported success for a failed write")
+	}
+	if peer.stateIndex != 99 {
+		t.Fatalf("stateIndex = %d after a failed republish, want 99", peer.stateIndex)
 	}
 }

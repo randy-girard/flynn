@@ -8,6 +8,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/discoverd/client"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
@@ -43,7 +44,17 @@ func (d *Discoverd) SetState(state *state.DiscoverdState) error {
 	if state.State.Primary != nil {
 		meta.LeaderID = state.State.Primary.ID
 	}
-	if err := d.service.SetMeta(meta); err != nil {
+	err = d.service.SetMeta(meta)
+	if err != nil && state.Index == 0 && hh.IsObjectExistsError(err) {
+		// A republish writes at index 0 because the meta looked absent. A meta
+		// that exists with no data counts as absent too, and index 0 can
+		// never overwrite it, so retry once at the index it already has.
+		if cur, gerr := d.service.GetMeta(); gerr == nil && cur != nil && len(cur.Data) == 0 {
+			meta = &discoverd.ServiceMeta{Index: cur.Index, Data: data, LeaderID: meta.LeaderID}
+			err = d.service.SetMeta(meta)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	state.Index = meta.Index

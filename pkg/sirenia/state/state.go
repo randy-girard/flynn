@@ -1660,9 +1660,13 @@ func (p *Peer) republishClusterState(log log15.Logger) bool {
 	}
 	log.Info("republishing cluster state", "generation", st.Generation)
 	p.updatingState = st.Clone()
+	prevIndex := p.stateIndex
 	p.stateIndex = 0
 	if err := p.putClusterState(); err != nil {
 		log.Error("error republishing cluster state", "err", err)
+		// Keep the last-seen index. Leaving 0 makes every later write
+		// conflict with the meta that is already there.
+		p.stateIndex = prevIndex
 		p.updatingState = nil
 		return false
 	}
