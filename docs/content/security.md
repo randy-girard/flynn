@@ -271,7 +271,10 @@ unauthenticated so bootstrap and health checks work. Per-app
 cluster key and are verified server-side; a token is valid only for that
 app's `-cache.tgz` / `-docker-cache.tgz` objects. A scoped
 `build:artifacts` token (the same one create-artifact uses for the
-controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only.
+controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only. Neither a cache
+token nor a build token may send `Blobstore-Copy-From` (the copy source is not
+authorized separately, so it would read any object); such a PUT is `403`. Only
+the cluster key or a cluster-admin token may copy.
 
 The controller mints a scoped `build:artifacts` token when a compile is
 about to start, and the scheduler mounts it at `/run/secrets/controller_token`.

@@ -14,7 +14,8 @@ import (
 
 // protect requires cluster-key or scoped-token credentials on blobstore
 // object routes. Health/status stays public. Signed BUILD_CACHE_URL tokens
-// are accepted only on that app's cache objects (GET/HEAD/PUT).
+// are accepted only on that app's cache objects (GET/HEAD/PUT). Copy-From is
+// refused for every credential except the cluster key and cluster-admin tokens.
 func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer) http.Handler {
 	if tokens == nil && len(keys) == 0 {
 		log.Println("warning: blobstore authentication disabled (set AUTH_KEY)")
@@ -27,6 +28,12 @@ func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer) h
 			return
 		}
 		if allowCacheToken(req, p, keys) {
+			if hasCopyFrom(req) {
+				// The cache token authorizes one object, not a read of
+				// an arbitrary copy source.
+				http.Error(w, "Forbidden: Blobstore-Copy-From requires the cluster key", http.StatusForbidden)
+				return
+			}
 			inner.ServeHTTP(w, req)
 			return
 		}
@@ -41,6 +48,10 @@ func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer) h
 		if tokens != nil {
 			tok, err := tokens.AuthorizeRequest(req)
 			if err == nil && allowToken(tok, req.Method, p) {
+				if hasCopyFrom(req) && !tok.HasClusterAdmin() {
+					http.Error(w, "Forbidden: Blobstore-Copy-From requires the cluster key", http.StatusForbidden)
+					return
+				}
 				inner.ServeHTTP(w, req)
 				return
 			}
@@ -48,6 +59,14 @@ func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer) h
 		w.Header().Set("WWW-Authenticate", `Basic realm="blobstore"`)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	})
+}
+
+// hasCopyFrom reports a Blobstore-Copy-From header (any value, any repeat).
+// The blobstore reads the copy source without a second authorization check,
+// so only the cluster key or a cluster-admin token may use it; scoped build
+// and cache credentials would otherwise read any object.
+func hasCopyFrom(req *http.Request) bool {
+	return len(req.Header.Values("Blobstore-Copy-From")) > 0
 }
 
 func allowCacheToken(req *http.Request, p string, keys []string) bool {

@@ -277,3 +277,98 @@ func TestProtectDisabledWithoutKeys(t *testing.T) {
 		t.Fatalf("no keys configured should fail-open, got %d", res.StatusCode)
 	}
 }
+
+func copyFromStatus(t *testing.T, srv *httptest.Server, path string, setup func(*http.Request), values ...string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, srv.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range values {
+		req.Header.Add("Blobstore-Copy-From", v)
+	}
+	setup(req)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	return res.StatusCode
+}
+
+// A signed BUILD_CACHE_URL token is scoped to one app's cache object. It must
+// not be able to name any other object as a copy source and read it back.
+func TestProtectCacheTokenRejectsCopyFrom(t *testing.T) {
+	key := "cluster-key"
+	srv := authServer(t, []string{key}, authorizer.New([]string{key}, nil, nil, 0))
+	defer srv.Close()
+
+	tok := blobstoreauth.CacheToken("app-1", key)
+	for _, src := range []string{"/repos/victim.tar", "/app-2-cache.tgz", "/slugs/layers/x.squashfs"} {
+		got := copyFromStatus(t, srv, "/app-1-cache.tgz?token="+tok, func(*http.Request) {}, src)
+		if got < 400 {
+			t.Fatalf("cache token Copy-From %s = %d, want >= 400", src, got)
+		}
+	}
+	// Plain PUT with the same token still works.
+	if got := copyFromStatus(t, srv, "/app-1-cache.tgz?token="+tok, func(*http.Request) {}); got != http.StatusOK {
+		t.Fatalf("cache token plain PUT = %d", got)
+	}
+}
+
+func TestProtectBuildTokenRejectsCopyFrom(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	token, err := tokensigner.New(priv).Sign(&api.AccessToken{
+		UserEmail:  "build:myapp",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(15 * time.Minute)),
+		Scopes:     []string{authz.ScopeBuildArtifacts},
+		AppGrants:  []*api.AppGrant{{AppId: "app-1", Permissions: []string{"app:write"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, err := authorizer.ParseTokenKey(base64.URLEncoding.EncodeToString(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := authServer(t, []string{"secret"}, authorizer.New([]string{"secret"}, nil, pk, time.Hour))
+	defer srv.Close()
+
+	bearer := func(req *http.Request) { req.Header.Set("Authorization", "Bearer "+token) }
+	for _, src := range []string{"/repos/victim.tar", "/slugs/layers/other.squashfs", "/tarreceive/images/x.json"} {
+		if got := copyFromStatus(t, srv, "/slugs/layers/x.squashfs", bearer, src); got < 400 {
+			t.Fatalf("build token Copy-From %s = %d, want >= 400", src, got)
+		}
+	}
+	// A second Copy-From value must not slip past a check on the first.
+	if got := copyFromStatus(t, srv, "/slugs/layers/x.squashfs", bearer, "", "/repos/victim.tar"); got < 400 {
+		t.Fatalf("build token multi-value Copy-From = %d, want >= 400", got)
+	}
+	if got := copyFromStatus(t, srv, "/slugs/layers/x.squashfs", bearer); got != http.StatusOK {
+		t.Fatalf("build token plain PUT = %d", got)
+	}
+}
+
+// The cluster key (operators, backups) keeps Copy-From.
+func TestProtectClusterKeyMayCopyFrom(t *testing.T) {
+	keys := []string{"secret"}
+	srv := authServer(t, keys, authorizer.New(keys, nil, nil, 0))
+	defer srv.Close()
+	for _, setup := range []func(*http.Request){
+		func(req *http.Request) { req.SetBasicAuth("", "secret") },
+		func(req *http.Request) { req.Header.Set("Authorization", "Bearer secret") },
+	} {
+		if got := copyFromStatus(t, srv, "/dst.txt", setup, "/src.txt"); got != http.StatusOK {
+			t.Fatalf("cluster key Copy-From = %d", got)
+		}
+	}
+}
