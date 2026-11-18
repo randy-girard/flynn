@@ -120,6 +120,14 @@ flynn redis:dump -f db.dump
 flynn redis:restore -f db.dump
 ```
 
+Restore validates the upload before it touches live data: the file must start
+with the `REDIS` header, be at least 18 bytes and pass `redis-check-rdb` when
+the image ships it. A rejected upload leaves the running instance and its data
+unchanged. The previous `dump.rdb` and AOF are moved to `restore-backup/` and
+put back if the restored instance fails to start. `redis:dump` exits non-zero
+(and writes nothing to stdout) when `redis-cli` fails or returns an empty or
+non-RDB file.
+
 ### External access
 
 Export Redis on a TCP route with a stable hostname. The host firewall opens
