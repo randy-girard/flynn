@@ -96,7 +96,7 @@ promotes only that replica, after fencing the old primary, and keeps
 read-only and are repointed at that same name. A one-host cluster stays
 standby pending. Replication is asynchronous GTID. A failover can drop
 commits the primary already acknowledged. Semi-sync stays off. A stopped
-replica thread is recreated, not promoted.
+replica thread is recreated, not promoted. When an image refresh replaces a follower, the replacement takes the old follower's name and is scaled back up to its original process count; a failed switch restores both apps to their previous names and scale.
 
 ### Connecting to the database
 

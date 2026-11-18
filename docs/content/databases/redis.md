@@ -108,7 +108,10 @@ Synchronous replication stays off, and `min-replicas-to-write` stays unset.
 **Remove** stops replication and deletes the replica, including while it is
 still copying. Unfollow still leaves a standalone copy. Auto-failover
 places the replica on another host, promotes it if the primary job is gone, then
-recreates a replica. A primary cannot be deleted while it still has followers.
+recreates a replica. When an upgrade replaces a follower, the replacement takes
+the old follower's name and is scaled back up to its original process count; a
+failed switch restores both apps. A primary cannot be deleted while it still has
+followers.
 
 ### Dumping and restoring
 

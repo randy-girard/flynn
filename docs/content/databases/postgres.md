@@ -139,6 +139,8 @@ The add-follower form does not offer automatic failover while `system` is on.
 
 Followers always stream on the same engine version. `flynn pg:upgrade` uses
 logical replication, promotes a new primary, then recreates followers. A
+replacement follower takes the old follower's name and is scaled back up to its
+original process count; a failed switch restores both apps. A
 follower may use a different `--runtime` name.
 
 `flynn pg:info` shows the role, who follows whom, auto-failover, replica
