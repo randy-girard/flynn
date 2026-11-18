@@ -179,6 +179,78 @@ func TestUninstallRefusesProviderWithResources(t *testing.T) {
 	}
 }
 
+func uninstallProviderApp(t *testing.T) *ct.App {
+	t.Helper()
+	app := uninstallPluginApp("redis")
+	app.Meta[MetaPluginKind] = KindResourceProvider
+	raw, err := json.Marshal(Installed{Name: "redis", Kind: KindResourceProvider, Provider: "redis"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Meta[MetaPluginRecord] = string(raw)
+	return app
+}
+
+func TestUninstallRefusesProviderWithUnattachedResource(t *testing.T) {
+	app := uninstallProviderApp(t)
+	stub := &uninstallStub{
+		apps: []*ct.App{app},
+		resources: map[string][]*ct.Resource{
+			"redis": {{ID: "orphan", ProviderID: "redis"}},
+		},
+	}
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub}
+	err := in.Uninstall(UninstallOptions{Name: "redis"})
+	if err == nil || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("got %v", err)
+	}
+	if len(stub.deleted) != 0 {
+		t.Fatal("must not delete while an unattached resource remains")
+	}
+	if err := in.Uninstall(UninstallOptions{Name: "redis", Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.deleted) != 1 {
+		t.Fatalf("force deleted=%v", stub.deleted)
+	}
+}
+
+func TestUninstallRefusesProviderResourceSharedWithPluginApp(t *testing.T) {
+	app := uninstallProviderApp(t)
+	stub := &uninstallStub{
+		apps: []*ct.App{app},
+		resources: map[string][]*ct.Resource{
+			"redis": {{ID: "shared", ProviderID: "redis", Apps: []string{app.ID, "demo"}}},
+		},
+	}
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub}
+	if err := in.Uninstall(UninstallOptions{Name: "redis"}); err == nil {
+		t.Fatal("expected refusal")
+	}
+	if len(stub.deleted) != 0 {
+		t.Fatal("must not delete")
+	}
+}
+
+func TestUninstallRefusesWhenResourceListFails(t *testing.T) {
+	app := uninstallProviderApp(t)
+	stub := &uninstallStub{apps: []*ct.App{app}, resErr: fmt.Errorf("controller down")}
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub}
+	err := in.Uninstall(UninstallOptions{Name: "redis"})
+	if err == nil || !strings.Contains(err.Error(), "controller down") {
+		t.Fatalf("got %v", err)
+	}
+	if len(stub.deleted) != 0 {
+		t.Fatal("must not delete when resources cannot be listed")
+	}
+	if err := in.Uninstall(UninstallOptions{Name: "redis", Force: true}); err != nil {
+		t.Fatalf("force should proceed: %v", err)
+	}
+	if len(stub.deleted) != 1 {
+		t.Fatalf("force deleted=%v", stub.deleted)
+	}
+}
+
 func TestUninstallAllowsProviderResourcesOnPluginApp(t *testing.T) {
 	app := uninstallPluginApp("redis")
 	app.Meta[MetaPluginKind] = KindResourceProvider

@@ -154,19 +154,31 @@ func (in *Installer) ensureProviderUnused(rec Installed, pluginAppID string, for
 	}
 	resources, err := api.ResourceList(provider)
 	if err != nil {
-		in.logf("warning: could not list %s resources: %s", provider, err)
+		if !force {
+			return fmt.Errorf("list %s resources: %w (pass --force to uninstall anyway)", provider, err)
+		}
+		in.logf("warning: could not list %s resources: %s (--force)", provider, err)
 		return nil
 	}
+	// Count every resource except those attached only to the plugin app.
+	// A resource with no attached app still holds provider state.
 	n := 0
 	for _, r := range resources {
 		if r == nil {
 			continue
 		}
-		for _, appID := range r.Apps {
-			if appID != "" && appID != pluginAppID {
-				n++
-				break
+		inUse := true
+		if len(r.Apps) > 0 {
+			inUse = false
+			for _, appID := range r.Apps {
+				if appID != pluginAppID {
+					inUse = true
+					break
+				}
 			}
+		}
+		if inUse {
+			n++
 		}
 	}
 	if n == 0 {

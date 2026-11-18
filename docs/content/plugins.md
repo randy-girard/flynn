@@ -314,8 +314,10 @@ drops HTTP/TCP routes and exclusive resources. An exclusive
 **platform-postgres** database (dashboard metrics and sessions) is only
 dropped after you confirm on a TTY or pass `--yes`. Plugin **update**
 never provisions a replacement database over an existing `DATABASE_URL`.
-Resource-provider plugins with provisioned resources still attached to
-other apps refuse unless `--force`. The controller has no delete-provider
+Resource-provider plugins refuse unless `--force` when any provider
+resource is attached to another app or attached to no app at all (only
+resources attached solely to the plugin app are ignored), and when the
+resource list cannot be read. The controller has no delete-provider
 API, so the provider row may remain. A declared uninstall hook that is
 missing fails; if the original source cannot be resolved, uninstall logs a
 warning and continues.
