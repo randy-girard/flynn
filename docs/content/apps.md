@@ -260,6 +260,10 @@ admin connecting an app through the dashboard claims an unclaimed installation
 for that app's account, and `PUT /github/installations/<id>/owner` (controller
 key) sets or clears it. Deploys re-check the owner.
 
+The plugin's cluster routes (`/github/app`, installations, export, import)
+accept only the controller key. The per-app `gitreceive:build` token a push
+carries reaches only `GET` and `PUT /apps/<id>/github` for its own app.
+
 The dashboard Cluster → GitHub page has the same setup steps and credential
 form. The app Deploy page connects a repo and starts a deploy.
 
