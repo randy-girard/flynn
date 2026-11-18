@@ -599,6 +599,12 @@ those keys are missing on core apps, runs **`hooks.upgrade`** when declared
 (not **`hooks.install`**), and does not re-ask setup prompts. Dashboard Cluster
 settings shows those git and blobstore/images URLs, or **Not configured**.
 Re-running **`plugin:install`** on an existing app does the same in-place update.
+Trust note: `plugin:install` treats a plugin as official only when it is a
+catalog name installed from `github.com/<official org>/<catalog repo>`. A
+local directory install, another git host, or a different owner/repo is
+third-party and needs `--yes` (or a TTY confirmation) before cluster secrets
+are injected.
+
 The default org is `randy-girard` from `official-plugins.json`; override with `--github-org`,
 `FLYNN_PLUGIN_GITHUB_ORG`, or `/etc/flynn/plugins.json`:
 

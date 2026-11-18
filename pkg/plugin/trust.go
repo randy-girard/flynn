@@ -10,9 +10,9 @@ import (
 const clusterSecretsFlag = "--yes"
 
 // IsOfficialPlugin reports whether m comes from Flynn's embedded catalog
-// (name/alias) and, when a GitHub identity is known, that repo is the
-// catalog repo under the official org. A matching name with a different
-// owner/repo is third-party.
+// (name/alias) AND its source is exactly the catalog repo on github.com under
+// the official org. A known name with a different host, owner/repo, or no
+// repo identity at all (for example a bare local directory) is third-party.
 func IsOfficialPlugin(m *Manifest, resolved *Resolved) bool {
 	if m == nil {
 		return false
@@ -28,16 +28,11 @@ func IsOfficialPlugin(m *Manifest, resolved *Resolved) bool {
 	if cat == nil {
 		return false
 	}
-	owner, repo := githubIdentity(m, resolved)
-	if owner == "" && repo == "" {
-		return true
+	host, owner, repo := githubIdentity(m, resolved)
+	if !strings.EqualFold(host, "github.com") || owner == "" || repo == "" {
+		return false
 	}
-	want := cat.RepoSlug(officialGitHubOrg())
-	got := repo
-	if owner != "" {
-		got = owner + "/" + repo
-	}
-	return samePluginRepo(got, want)
+	return samePluginRepo(owner+"/"+repo, cat.RepoSlug(officialGitHubOrg()))
 }
 
 func catalogPlugin(name string) *KnownPlugin {
@@ -56,40 +51,36 @@ func catalogPlugin(name string) *KnownPlugin {
 	return nil
 }
 
-func githubIdentity(m *Manifest, resolved *Resolved) (owner, repo string) {
+// githubIdentity returns the git host and owner/repo the plugin was sourced
+// from. A resolved source wins; otherwise the manifest's github_repo (always
+// github.com). Empty values mean no identity is known.
+func githubIdentity(m *Manifest, resolved *Resolved) (host, owner, repo string) {
 	if resolved != nil && resolved.GitHub != nil {
-		return strings.TrimSpace(resolved.GitHub.Owner), strings.TrimSpace(resolved.GitHub.Repo)
+		g := resolved.GitHub
+		return strings.TrimSpace(g.Host), strings.TrimSpace(g.Owner), strings.TrimSpace(g.Repo)
 	}
 	if m == nil {
-		return "", ""
+		return "", "", ""
 	}
-	slug := strings.TrimSuffix(strings.TrimSpace(m.GitHubRepo), ".git")
+	slug := strings.Trim(strings.TrimSuffix(strings.TrimSpace(m.GitHubRepo), ".git"), "/")
 	if slug == "" {
-		return "", ""
+		return "", "", ""
 	}
-	if strings.Contains(slug, "/") {
-		if gh, err := ParseGitHubURL("https://github.com/" + slug); err == nil {
-			return gh.Owner, gh.Repo
-		}
-		owner, repo, _ = strings.Cut(slug, "/")
-		return owner, repo
+	if !strings.Contains(slug, "/") {
+		return "github.com", officialGitHubOrg(), slug
 	}
-	return officialGitHubOrg(), slug
+	owner, repo, _ = strings.Cut(slug, "/")
+	return "github.com", owner, repo
 }
 
+// samePluginRepo compares owner/repo exactly (case-insensitive, .git ignored).
 func samePluginRepo(got, want string) bool {
 	norm := func(s string) string {
 		s = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".git")
 		return strings.Trim(s, "/")
 	}
 	got, want = norm(got), norm(want)
-	if got == "" || want == "" {
-		return false
-	}
-	if got == want {
-		return true
-	}
-	return strings.HasSuffix(want, "/"+got) || strings.HasSuffix(got, "/"+want)
+	return got != "" && got == want
 }
 
 func clusterSecretsNotice(official bool, name string) string {

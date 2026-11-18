@@ -365,9 +365,13 @@ releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, taffy
 `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY` on jobs that talk to discoverd,
 and the same controller key onto router and acme).
 `flynn-host plugin:update` / `plugin:install` do the same for plugin
-apps. Catalog plugins print that they receive cluster secrets and
-continue. Third-party plugins prompt on a TTY (cluster-admin equivalent);
-pass `--yes` for non-interactive installs. You do not need to `env:set`
+apps. A plugin counts as official only when its source is the catalog
+repo (`owner/repo` exactly) on `github.com`; official plugins print that they
+receive cluster secrets and continue. Everything else is third-party: the
+same name served from another git host (for example GitHub Enterprise), a
+different owner or repo, or a source with no repo identity such as a bare
+local directory. Third-party plugins prompt on a TTY (cluster-admin
+equivalent); pass `--yes` for non-interactive installs. You do not need to `env:set`
 those keys by hand after an upgrade.
 Rotating a key is still a separate operator step; see
 [Production — Controller Keys](production.html.md#controller-keys).
