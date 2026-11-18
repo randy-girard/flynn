@@ -459,7 +459,21 @@ key receive the log text unchanged. A release minted for one app cannot be attac
 another. One-off jobs (`POST /apps/:id/jobs`) may still *run* another
 app's release when the caller is cluster-admin, or when that release is
 the image of a resource attached to this app (`flynn redis:cli` and the
-other plugin consoles). Do not run untrusted code in Flynn.
+other plugin consoles).
+
+Resource routes check the owner and the provider. `GET
+/providers/:p/resources/:id` returns the resource env (database URLs and
+passwords), so it needs admin on the resource's `owner_account`, or the
+cluster key or a cluster admin. A resource with no owner (a platform
+database such as the controller's own) is cluster-admin only for read,
+delete, and attach; attaching an unowned resource to a tenant app no longer
+makes it that tenant's. `PUT /providers/:p/resources/:id` (create or rewrite
+a resource row, including `external_id`, env and owner) is the cluster key
+only; bootstrap, migration, and the database plugins use it. All
+`/providers/:p/resources/:id` routes answer 404 when the resource belongs to
+a different provider than the one in the URL. Provision, attach, and
+detach (`flynn resource:add`, `addons:attach`, `resource:remove`) are
+unchanged for the owner. Do not run untrusted code in Flynn.
 HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not

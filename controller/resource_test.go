@@ -6,9 +6,10 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	. "github.com/flynn/go-check"
-	"github.com/randy-girard/flynn/controller/client"
+	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/random"
 )
@@ -267,4 +268,140 @@ func (s *S) TestDeleteResourceRejectsNonOwnerApp(c *C) {
 	got, err := s.c.GetResource(provider.ID, resource.ID)
 	c.Assert(err, IsNil)
 	c.Assert(got.ID, Equals, resource.ID)
+}
+
+// resourceAuthz sends a request to the controller as the given bearer token.
+func (s *S) resourceAuthz(c *C, method, auth, path, body string) (int, string) {
+	if auth != authKey {
+		return s.scopedStatus(c, method, auth, path, body)
+	}
+	req, err := http.NewRequest(method, s.srv.URL+path, strings.NewReader(body))
+	c.Assert(err, IsNil)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("", authKey)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	got, err := ioutil.ReadAll(res.Body)
+	c.Assert(err, IsNil)
+	return res.StatusCode, string(got)
+}
+
+func (s *S) TestGetResourceDeniesOtherAccount(c *C) {
+	ada, bev := random.UUID(), random.UUID()
+	app := s.createTestApp(c, &ct.App{Name: "get-res-deny", OwnerAccount: "user:" + ada})
+	resource, provider := s.provisionTestResource(c, "get-res-deny", []string{app.ID})
+	c.Assert(resource.OwnerAccount, Equals, "user:"+ada)
+	path := "/providers/" + provider.ID + "/resources/" + resource.ID
+
+	// Another tenant gets no credentials.
+	code, body := s.resourceAuthz(c, "GET", s.signUser(c, bev, nil), path, "")
+	c.Assert(code, Equals, 403)
+	c.Assert(strings.Contains(body, "baz"), Equals, false)
+
+	// The owner and the cluster key still can.
+	code, body = s.resourceAuthz(c, "GET", s.signUser(c, ada, nil), path, "")
+	c.Assert(code, Equals, 200)
+	c.Assert(strings.Contains(body, "baz"), Equals, true)
+	_, err := s.c.GetResource(provider.ID, resource.ID)
+	c.Assert(err, IsNil)
+}
+
+func (s *S) TestGetUnownedResourceIsAdminOnly(c *C) {
+	bev := random.UUID()
+	provider := s.createTestProvider(c, &ct.Provider{URL: "https://example.ca/get-unowned", Name: "get-unowned"})
+	res := &ct.Resource{ID: random.UUID(), ProviderID: provider.ID, ExternalID: "/x", Env: map[string]string{"SECRET": "platform"}}
+	c.Assert(s.c.PutResource(res), IsNil)
+	path := "/providers/" + provider.ID + "/resources/" + res.ID
+
+	code, body := s.resourceAuthz(c, "GET", s.signUser(c, bev, nil), path, "")
+	c.Assert(code, Equals, 403)
+	c.Assert(strings.Contains(body, "platform"), Equals, false)
+	_, err := s.c.GetResource(provider.ID, res.ID)
+	c.Assert(err, IsNil)
+}
+
+func (s *S) TestResourceHandlersRejectProviderMismatch(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "mismatch-res"})
+	resource, provider := s.provisionTestResource(c, "mismatch-res", []string{app.ID})
+	other := s.createTestProvider(c, &ct.Provider{URL: "https://example.ca/mismatch-other", Name: "mismatch-other"})
+	base := "/providers/" + other.ID + "/resources/" + resource.ID
+	for _, tc := range []struct{ method, path string }{
+		{"GET", base},
+		{"DELETE", base},
+		{"PUT", base + "/apps/" + app.ID},
+		{"DELETE", base + "/apps/" + app.ID},
+	} {
+		code, _ := s.resourceAuthz(c, tc.method, authKey, tc.path, "")
+		c.Assert(code, Equals, 404, Commentf("%s %s", tc.method, tc.path))
+	}
+	got, err := s.c.GetResource(provider.ID, resource.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Apps, DeepEquals, []string{app.ID})
+}
+
+func (s *S) TestAttachResourceProviderMismatch(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "attach-mismatch"})
+	provider := s.createTestProvider(c, &ct.Provider{URL: "https://example.ca/attach-mismatch-a", Name: "attach-mismatch-a"})
+	other := s.createTestProvider(c, &ct.Provider{URL: "https://example.ca/attach-mismatch-b", Name: "attach-mismatch-b"})
+	res := &ct.Resource{ID: random.UUID(), ProviderID: provider.ID, ExternalID: "/x", Env: map[string]string{"A": "b"}}
+	c.Assert(s.c.PutResource(res), IsNil)
+	_, err := s.c.AddResourceApp(other.ID, res.ID, app.ID)
+	c.Assert(err, Equals, controller.ErrNotFound)
+}
+
+func (s *S) TestPutResourceRequiresClusterKey(c *C) {
+	ada, bev := random.UUID(), random.UUID()
+	app := s.createTestApp(c, &ct.App{Name: "put-res-deny", OwnerAccount: "user:" + ada})
+	resource, provider := s.provisionTestResource(c, "put-res-deny", []string{app.ID})
+	path := "/providers/" + provider.ID + "/resources/" + resource.ID
+	body := `{"external_id":"/victim","env":{"foo":"evil"}}`
+
+	for _, user := range []string{bev, ada} {
+		code, _ := s.resourceAuthz(c, "PUT", s.signUser(c, user, nil), path, body)
+		c.Assert(code, Equals, 403, Commentf(user))
+	}
+	got, err := s.c.GetResource(provider.ID, resource.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Env["foo"], Equals, "baz")
+	c.Assert(got.ExternalID, Equals, resource.ExternalID)
+
+	// A new row with an arbitrary owner is also refused.
+	code, _ := s.resourceAuthz(c, "PUT", s.signUser(c, bev, nil),
+		"/providers/"+provider.ID+"/resources/"+random.UUID(),
+		`{"external_id":"/x","env":{"a":"b"},"owner_account":"user:`+ada+`"}`)
+	c.Assert(code, Equals, 403)
+
+	// The cluster key (bootstrap, plugins) still can.
+	code, _ = s.resourceAuthz(c, "PUT", authKey, path, body)
+	c.Assert(code, Equals, 200)
+}
+
+func (s *S) TestUnownedResourceDeleteNeedsClusterKey(c *C) {
+	bev := random.UUID()
+	provider := s.createTestProvider(c, &ct.Provider{URL: "https://example.ca/del-unowned", Name: "del-unowned"})
+	res := &ct.Resource{ID: random.UUID(), ProviderID: provider.ID, ExternalID: "/x", Env: map[string]string{"A": "b"}}
+	c.Assert(s.c.PutResource(res), IsNil)
+	path := "/providers/" + provider.ID + "/resources/" + res.ID
+
+	code, _ := s.resourceAuthz(c, "DELETE", s.signUser(c, bev, nil), path, "")
+	c.Assert(code, Equals, 403)
+	_, err := s.c.GetResource(provider.ID, res.ID)
+	c.Assert(err, IsNil)
+}
+
+func (s *S) TestAttachUnownedResourceNeedsClusterKey(c *C) {
+	bev := random.UUID()
+	app := s.createTestApp(c, &ct.App{Name: "attach-unowned", OwnerAccount: "user:" + bev})
+	provider := s.createTestProvider(c, &ct.Provider{URL: "https://example.ca/attach-unowned", Name: "attach-unowned"})
+	res := &ct.Resource{ID: random.UUID(), ProviderID: provider.ID, ExternalID: "/x", Env: map[string]string{"A": "b"}}
+	c.Assert(s.c.PutResource(res), IsNil)
+
+	code, body := s.resourceAuthz(c, "PUT", s.signUser(c, bev, nil),
+		"/providers/"+provider.ID+"/resources/"+res.ID+"/apps/"+app.ID, "")
+	c.Assert(code, Equals, 403, Commentf(body))
+	got, err := s.c.GetResource(provider.ID, res.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.OwnerAccount, Equals, "")
+	c.Assert(got.Apps, HasLen, 0)
 }

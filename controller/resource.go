@@ -300,18 +300,50 @@ func (c *controllerAPI) GetResources(ctx context.Context, w http.ResponseWriter,
 	httphelper.JSON(w, 200, c.filterResources(ctx, res))
 }
 
+// providerResource loads the resource for a provider route. A resource that
+// belongs to another provider is reported as not found, so the provider in the
+// URL cannot be used to reach or act on a different provider's resource.
+func (c *controllerAPI) providerResource(p *ct.Provider, id string) (*ct.Resource, error) {
+	res, err := c.resourceRepo.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if res.ProviderID != p.ID {
+		return nil, ErrNotFound
+	}
+	return res, nil
+}
+
+// requireResourceAdmin lets the cluster key and cluster admins act on any
+// resource. Everyone else must administer the owner account, and a resource
+// with no owner (a platform resource) is never theirs.
+func (c *controllerAPI) requireResourceAdmin(ctx context.Context, w http.ResponseWriter, res *ct.Resource) bool {
+	tok := authz.TokenFromContext(ctx)
+	if tok != nil && (tok.ClusterKey || tok.HasClusterAdmin()) {
+		return true
+	}
+	if res.OwnerAccount == "" {
+		httphelper.Forbidden(w, "this resource has no owner account; only a cluster admin can act on it")
+		return false
+	}
+	return c.canAdminAccount(ctx, w, res.OwnerAccount)
+}
+
 func (c *controllerAPI) GetResource(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
 
-	_, err := c.getProvider(ctx)
+	p, err := c.getProvider(ctx)
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
 
-	res, err := c.resourceRepo.Get(params.ByName("resources_id"))
+	res, err := c.providerResource(p, params.ByName("resources_id"))
 	if err != nil {
 		respondWithError(w, err)
+		return
+	}
+	if !c.requireResourceAdmin(ctx, w, res) {
 		return
 	}
 	httphelper.JSON(w, 200, res)
@@ -340,7 +372,11 @@ func (c *controllerAPI) PutResource(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	if _, err := c.resourceRepo.Get(resource.ID); err == nil {
+	if existing, err := c.resourceRepo.Get(resource.ID); err == nil {
+		if existing.ProviderID != p.ID {
+			respondWithError(w, ErrNotFound)
+			return
+		}
 		if err := c.resourceRepo.Update(&resource); err != nil {
 			respondWithError(w, err)
 			return
@@ -371,17 +407,15 @@ func (c *controllerAPI) DeleteResource(ctx context.Context, w http.ResponseWrite
 	}
 
 	logger.Info("getting resource", "id", id)
-	res, err := c.resourceRepo.Get(id)
+	res, err := c.providerResource(p, id)
 	if err != nil {
 		logger.Error("getting resource error", "err", err)
 		respondWithError(w, err)
 		return
 	}
 
-	if res.OwnerAccount != "" {
-		if !c.canAdminAccount(ctx, w, res.OwnerAccount) {
-			return
-		}
+	if !c.requireResourceAdmin(ctx, w, res) {
+		return
 	}
 	if appID := strings.TrimSpace(req.URL.Query().Get("app_id")); appID != "" {
 		appRaw, err := c.appRepo.Get(appID)
@@ -423,7 +457,7 @@ func (c *controllerAPI) AddResourceApp(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
-	resource, err := c.resourceRepo.Get(params.ByName("resources_id"))
+	resource, err := c.providerResource(p, params.ByName("resources_id"))
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -443,6 +477,11 @@ func (c *controllerAPI) AddResourceApp(ctx context.Context, w http.ResponseWrite
 		return
 	}
 	if !c.requireAppManage(ctx, w, app) {
+		return
+	}
+	// Attaching re-owns an unowned resource, so a platform resource can only
+	// be attached by a cluster admin.
+	if resource.OwnerAccount == "" && !c.requireResourceAdmin(ctx, w, resource) {
 		return
 	}
 	if resource.OwnerAccount == "" && app.OwnerAccount != "" && c.tenancy != nil {
@@ -469,13 +508,13 @@ func (c *controllerAPI) AddResourceApp(ctx context.Context, w http.ResponseWrite
 func (c *controllerAPI) DeleteResourceApp(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
 
-	_, err := c.getProvider(ctx)
+	p, err := c.getProvider(ctx)
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
 
-	existing, err := c.resourceRepo.Get(params.ByName("resources_id"))
+	existing, err := c.providerResource(p, params.ByName("resources_id"))
 	if err != nil {
 		respondWithError(w, err)
 		return

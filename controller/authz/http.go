@@ -452,6 +452,17 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		}
 		return rkCluster, "", ""
 	case "providers":
+		if len(parts) == 4 && parts[2] == "resources" {
+			// One resource carries its credentials. Reading it is for a user
+			// or an app grant (the handler checks the owner). Writing it is
+			// bootstrap, migration and plugin controller keys only.
+			switch m {
+			case http.MethodGet, http.MethodHead:
+				return rkManageProvider, "", ""
+			case http.MethodPut:
+				return rkCluster, "", ""
+			}
+		}
 		if m == http.MethodGet || m == http.MethodHead {
 			return rkAnyAuth, "", ""
 		}
