@@ -142,6 +142,11 @@ func HTTPAllowedResolved(tok *authorizer.Token, method, rawPath string, resolve 
 	if tok.HasClusterAdmin() {
 		return true
 	}
+	// flynn-receiver reads the buildpack allowlist before it starts a
+	// compile. Read-only, and only for the receive credential.
+	if hasScope(tok, ScopeGitreceiveBuild) && (method == http.MethodGet || method == http.MethodHead) && strings.Trim(rawPath, "/") == "cluster/policy" {
+		return true
+	}
 	if kind == rkBuildArtifact {
 		return hasScopedBuildArtifact(tok)
 	}

@@ -101,7 +101,9 @@ func MintReceive(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (st
 	}
 	ttl = ClampTTL(ttl)
 	now := time.Now()
-	grants := []*api.AppGrant{{AppId: app.ID, Permissions: []string{"app:write"}}}
+	// events:read on the app's own id: DeployAppRelease and ScaleAppRelease
+	// wait on that app's deployment and job events.
+	grants := []*api.AppGrant{{AppId: app.ID, Permissions: []string{"app:write", authz.ScopeEventsRead}}}
 	if name := strings.TrimSpace(app.Name); name != "" && name != app.ID {
 		grants = append(grants, &api.AppGrant{AppId: name, Permissions: []string{"app:write"}})
 	}
@@ -110,7 +112,7 @@ func MintReceive(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (st
 		UserEmail:  "receive:" + app.Name,
 		IssueTime:  timestamppb.New(now),
 		ExpireTime: timestamppb.New(now.Add(ttl)),
-		Scopes:     []string{authz.ScopeGitreceiveBuild},
+		Scopes:     []string{authz.ScopeGitreceiveBuild, authz.ScopeEventsRead},
 		AppGrants:  grants,
 	})
 }

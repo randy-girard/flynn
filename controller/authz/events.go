@@ -65,8 +65,9 @@ func hasEventsGrant(tok *authorizer.Token) bool {
 }
 
 // EventsGrantAllows reports whether tok may read events for this app.
-// A user id prefixed with events: is the dashboard's per-app watcher and is
-// not an account binding. Any other user id must match the app owner when
+// A user id prefixed with events: is the dashboard's per-app watcher and one
+// prefixed with build: is a compile credential's rate-limit identity; neither
+// is an account binding (the grant names the one app). Any other user id must match the app owner when
 // the app has one, so a grant copied onto another account's app is still denied.
 func EventsGrantAllows(tok *authorizer.Token, appID, appName, ownerAccount string) bool {
 	if !hasScope(tok, ScopeEventsRead) || !eventsGrantMatches(tok, appID, appName) {
@@ -97,7 +98,7 @@ func eventsGrantMatches(tok *authorizer.Token, appID, appName string) bool {
 
 func accountBound(userID string) bool {
 	id := strings.TrimSpace(userID)
-	if id == "" || strings.HasPrefix(id, "events:") {
+	if id == "" || strings.HasPrefix(id, "events:") || strings.HasPrefix(id, "build:") {
 		return false
 	}
 	return true

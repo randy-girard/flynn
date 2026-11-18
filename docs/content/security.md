@@ -313,7 +313,10 @@ UI. That key is not the events credential.
 `gitreceive` still starts with `CONTROLLER_KEY` and looks up the app with
 that client before it checks the push. The hook then receives
 `FLYNN_RECEIVE_TOKEN`, a `gitreceive:build` token whose grant is
-`app:write` on that app only. `flynn-receiver` uses it for controller,
+`app:write` plus `events:read` on that app only (the receiver waits on that
+app's deployment and job events) and which may also read `GET /cluster/policy`
+for the buildpack allowlist. The controller does not widen it to the owner's
+other apps. `flynn-receiver` uses it for controller,
 pipeline, and GitHub calls. If the token is absent (no signing key, or a
 hook from the previous release), those calls still use `CONTROLLER_KEY`.
 The token is removed from the new release env and from the build job env.

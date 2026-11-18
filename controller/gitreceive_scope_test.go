@@ -141,3 +141,57 @@ func (s *S) TestBuildTokenCannotMintPAT(c *C) {
 	code, _ = s.scopedStatus(c, http.MethodPost, receive, "/apps/"+appA.ID+"/builds", `{}`)
 	c.Assert(code, Not(Equals), http.StatusForbidden)
 }
+
+// TestReceiveTokenCoversReceiverCalls traces every controller call
+// flynn-receiver makes with its gitreceive token. The token used to pass
+// these only because the controller expanded it into the owner's account (for
+// an admin owner, cluster:admin). With that gone each call must be covered
+// by the token's own scope and grant. A call is allowed when it is not 403:
+// the ids below do not exist, so the handler answers 400/404.
+func (s *S) TestReceiveTokenCoversReceiverCalls(c *C) {
+	owner := s.createLoginUser(c, "core06-trace@flynn.test", "core06-trace", "pw-core06-trace", true)
+	app := s.createTestApp(c, &ct.App{Name: "core06-trace", OwnerAccount: "user:" + owner.ID})
+	other := s.createTestApp(c, &ct.App{Name: "core06-trace-other", OwnerAccount: "user:" + owner.ID})
+	receive, err := buildtoken.MintReceive(s.tokenSigner, app, time.Minute)
+	c.Assert(err, IsNil)
+
+	const missing = "00000000-0000-4000-8000-000000000000"
+	a := "/apps/" + app.ID
+	calls := []struct{ method, path, body string }{
+		{"GET", "/apps/" + app.Name, ""},
+		{"GET", "/artifacts/" + missing, ""},
+		{"GET", "/cluster/policy", ""},
+		{"POST", a + "/builds", `{}`},
+		{"GET", a + "/jobs/" + missing, ""},
+		{"DELETE", a + "/jobs/" + missing, ""},
+		{"POST", "/releases", `{"app_id":"` + app.ID + `"}`},
+		{"POST", a + "/deploy", `{"id":"` + missing + `"}`},
+		{"PUT", a + "/scale/" + missing, `{}`},
+		{"GET", a + "/formations/" + missing, ""},
+		{"DELETE", a + "/formations/" + missing, ""},
+		{"PUT", a + "/releases/" + missing + "/output", `x`},
+		{"POST", a + "/jobs", `{}`},
+		{"GET", a + "/routes", ""},
+		{"GET", a + "/release", ""},
+		{"GET", "/events?app_id=" + app.ID + "&object_type=deployment", ""},
+		{"GET", "/events?app_id=" + app.ID + "&object_type=job", ""},
+		{"DELETE", a + "/releases/" + missing, ""},
+	}
+	for _, call := range calls {
+		code, _ := s.scopedStatus(c, call.method, receive, call.path, call.body)
+		c.Check(code, Not(Equals), http.StatusForbidden, Commentf("%s %s", call.method, call.path))
+	}
+
+	// Still app-bound: the same token gets nothing on the owner's other app
+	// or on cluster-wide routes.
+	for _, call := range []struct{ method, path string }{
+		{"GET", "/apps/" + other.ID},
+		{"GET", "/events?app_id=" + other.ID},
+		{"POST", "/apps/" + other.ID + "/builds"},
+		{"PUT", "/cluster/policy"},
+		{"GET", "/cluster/settings"},
+	} {
+		code, _ := s.scopedStatus(c, call.method, receive, call.path, `{}`)
+		c.Check(code, Equals, http.StatusForbidden, Commentf("%s %s", call.method, call.path))
+	}
+}
