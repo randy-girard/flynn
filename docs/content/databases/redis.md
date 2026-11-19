@@ -59,7 +59,9 @@ resource record. TLS for `addons:expose` is on 16379 by default, so
 external clients use `rediss://` and `FLYNN_REDIS_TRUSTED_CERT`. In-cluster
 `REDIS_URL` is `redis://` on 6379 so Sidekiq and redis-rb do not need to
 trust Flynn's private CA. After a plugin update, leftover in-cluster
-`rediss://` URLs on attached apps are rewritten to `redis://`.
+`rediss://` URLs on attached apps are rewritten to `redis://`. When the plugin
+itself dials an instance over TLS (follower replication checks on 16379), it
+verifies the server against that instance's own CA and host name.
 
 ### Connecting to a console
 

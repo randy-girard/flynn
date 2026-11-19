@@ -164,6 +164,12 @@ URLs use `sslmode=require`. The platform appliance enables
 `postgres.<cluster-domain>`). `pg_hba` still uses `host` (not `hostssl`), so
 in-cluster clients that pass `sslmode=disable` keep working.
 
+Each isolated instance has its own CA and a server certificate for
+`leader.<instance>.discoverd`. The plugin's own connections (dashboard, dump
+and restore, metrics, backups, failover checks) use `sslmode=verify-full`
+against that CA. Instances created before the CA existed keep
+`sslmode=require` until `pg:maintenance` replaces them.
+
 App `DATABASE_URL` connections use TCP 5432. The platform appliance admin HTTP
 API on :5433 (`/status`, `/stop`) requires the cluster controller key; `GET
 /.well-known/status` stays open for health checks. User jobs cannot open :5433.

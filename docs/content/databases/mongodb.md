@@ -132,7 +132,8 @@ the Flynn cluster.
 `leader.<instance>.discoverd` to the platform blobstore and prints a
 timestamp. The dump includes every database except `local`, plus `admin`
 users and roles. It runs as the instance superuser `flynn`, not the app
-user, and uses `--ssl --tlsInsecure`. The password is not a process
+user, and uses `--ssl --sslCAFile`, verifying the server against that
+instance's own CA (`MONGO_TLS_CA_CERT`). The password is not a process
 argument. `-f` and `-q` are rejected. There is no dump file to download.
 
 The dashboard's Databases, Users, dump and restore pages act on the signed-in app's own

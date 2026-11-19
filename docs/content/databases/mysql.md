@@ -120,6 +120,10 @@ default (`MYSQL_TLS_ENABLED=true`); the appliance CA is in
 clients work with the private CA (pin `FLYNN_MYSQL_TRUSTED_CERT` to verify).
 Plaintext is still accepted inside the cluster for replication and older
 clients.
+The plugin's own connections to an instance (dashboard, dump and restore,
+metrics, failover checks) verify the server against that instance's
+`MYSQL_TLS_CA_CERT` and host name. An instance whose release has no CA is
+reached with encryption only until `MYSQL_TLS_*` is set on its release.
 
 The server private key is never published in discoverd metadata (only the
 public CA is). Instances created by older plugin releases published it under
