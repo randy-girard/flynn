@@ -136,28 +136,12 @@ export APP_DIR="${app_dir}"
 export HOME="${app_dir}"
 export REQUEST_ID="flynn-build"
 
-# SEC-010: Save SSH credentials to files and unset from environment.
-# The key is accessible during build for git operations, then removed
-# after compilation to limit the exposure window.
-ssh_cleanup_needed=false
-if [[ -n "${SSH_CLIENT_KEY}" ]]; then
-  mkdir -p ${HOME}/.ssh
-  file="${HOME}/.ssh/id_rsa"
-  echo "${SSH_CLIENT_KEY}" > ${file}
-  chown -R "${USER}:${USER}" ${HOME}/.ssh
-  chmod 600 ${file}
-  unset SSH_CLIENT_KEY
-  ssh_cleanup_needed=true
-fi
-
-if [[ -n "${SSH_CLIENT_HOSTS}" ]]; then
-  mkdir -p ${HOME}/.ssh
-  file="${HOME}/.ssh/known_hosts"
-  echo "${SSH_CLIENT_HOSTS}" > ${file}
-  chown -R "${USER}:${USER}" ${HOME}/.ssh
-  chmod 600 ${file}
-  unset SSH_CLIENT_HOSTS
-fi
+# BUILD-08: SSH_CLIENT_KEY is only present for apps the operator opted in. Root
+# stages it in a root-only file and loads it into an ssh-agent; buildpack code
+# gets the agent socket (SSH_AUTH_SOCK) but never the key bytes.
+source /builder/ssh-key.sh
+ssh_client_key_stage
+ssh_client_key_load
 
 # Fix for https://github.com/flynn/flynn/issues/85
 export CURL_CONNECT_TIMEOUT=30
@@ -315,13 +299,8 @@ run_unprivileged ${selected_buildpack}/bin/release \
   "${cache_root}" \
   > ${build_dir}/.release
 
-# SEC-010: Remove SSH key material after buildpack compilation is complete.
-# This limits the window during which the key is accessible on disk.
-if [[ "${ssh_cleanup_needed}" == "true" ]]; then
-  rm -f ${HOME}/.ssh/id_rsa
-  rm -f ${HOME}/.ssh/known_hosts
-  ssh_cleanup_needed=false
-fi
+# BUILD-08: stop the agent and remove the key material once compilation ends.
+ssh_client_key_cleanup
 
 ## Display process types
 

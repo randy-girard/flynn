@@ -507,6 +507,34 @@ func scrubReleaseEnv(env map[string]string) {
 	}
 }
 
+// addSSHClientEnv forwards the cluster SSH client key to the build job only for
+// apps the operator opted in (BUILD-08). SSH_CLIENT_KEY_APPS is "*" (every app,
+// i.e. single-tenant mode) or a comma-separated list of app names or IDs. With
+// it unset no app, whatever its buildpack, sees the cluster key.
+func addSSHClientEnv(jobEnv map[string]string, app *ct.App, getenv func(string) string) {
+	if !sshClientKeyAllowed(getenv("SSH_CLIENT_KEY_APPS"), app) {
+		return
+	}
+	for _, k := range []string{"SSH_CLIENT_KEY", "SSH_CLIENT_HOSTS"} {
+		if v := getenv(k); v != "" {
+			jobEnv[k] = v
+		}
+	}
+}
+
+func sshClientKeyAllowed(apps string, app *ct.App) bool {
+	for _, a := range strings.Split(apps, ",") {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if a == "*" || a == app.ID || a == app.Name {
+			return true
+		}
+	}
+	return false
+}
+
 func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string, stackName string) error {
 	scrubReleaseEnv(releaseEnv)
 	slugbuilderImageID := os.Getenv("SLUGBUILDER_24_IMAGE_ID")
@@ -544,11 +572,7 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	if allowed != "" {
 		jobEnv["FLYNN_ALLOWED_BUILDPACKS"] = allowed
 	}
-	for _, k := range []string{"SSH_CLIENT_KEY", "SSH_CLIENT_HOSTS"} {
-		if v := os.Getenv(k); v != "" {
-			jobEnv[k] = v
-		}
-	}
+	addSSHClientEnv(jobEnv, app, os.Getenv)
 
 	resources := resource.Defaults()
 	if sb, ok := prevRelease.Processes["slugbuilder"]; ok && sb.Resources != nil {

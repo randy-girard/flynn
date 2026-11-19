@@ -908,6 +908,23 @@ flynn -a gitreceive env:set SSH_CLIENT_HOSTS="$(ssh-keyscan -H github.com)"\
    SSH_CLIENT_KEY="$(cat ~/.ssh/id_rsa)"
 ```
 
+The key is opt-in per app, because buildpack code from every tenant runs in the
+build. Set `SSH_CLIENT_KEY_APPS` on `gitreceive` to `*` (single-tenant cluster:
+every app) or to a comma-separated list of app names or IDs:
+
+```text
+flynn -a gitreceive env:set SSH_CLIENT_KEY_APPS="billing-web,billing-worker"
+```
+
+With `SSH_CLIENT_KEY_APPS` unset, no app receives the key. For an opted-in app
+the slugbuilder stages the key in a root-only file (mode 0600), loads it into
+an `ssh-agent` and deletes the file before any buildpack runs. Buildpack code
+gets `SSH_AUTH_SOCK` and can authenticate with the key while the build runs, but
+cannot read the key bytes (they are not in the environment or on disk), and the
+agent is stopped when compilation ends. `SSH_CLIENT_HOSTS` is forwarded on the
+same terms. A buildpack that opted-in apps run can still use the key to
+authenticate to any host while the build runs, so opt in only apps you trust.
+
 ## Monitoring
 
 Flynn provides a status endpoint over HTTP that exposes the health of system

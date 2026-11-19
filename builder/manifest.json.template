@@ -429,6 +429,7 @@
             "slugbuilder/builder/build.sh": "/builder/build.sh",
             "slugbuilder/builder/buildpack-policy.sh": "/builder/buildpack-policy.sh",
             "slugbuilder/builder/build-cache.sh": "/builder/build-cache.sh",
+            "slugbuilder/builder/ssh-key.sh": "/builder/ssh-key.sh",
             "slugbuilder/builder/create-user.sh": "/builder/create-user.sh"
           }
         }

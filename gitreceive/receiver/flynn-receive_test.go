@@ -936,3 +936,52 @@ func TestAllowedBuildpacks(t *testing.T) {
 		t.Fatal("controller error must fail the build")
 	}
 }
+
+// BUILD-08: the cluster SSH client key is readable by whatever buildpack runs,
+// so it is forwarded only to apps the operator opted in.
+func TestAddSSHClientEnvOnlyForOptedInApps(t *testing.T) {
+	base := map[string]string{
+		"SSH_CLIENT_KEY":   "-----BEGIN KEY-----",
+		"SSH_CLIENT_HOSTS": "github.com ssh-ed25519 AAAA",
+	}
+	cases := []struct {
+		name string
+		apps string
+		app  *ct.App
+		want bool
+	}{
+		{"unset forwards nothing", "", &ct.App{ID: "id1", Name: "web"}, false},
+		{"wildcard is single-tenant mode", "*", &ct.App{ID: "id1", Name: "web"}, true},
+		{"listed by name", "api, web", &ct.App{ID: "id1", Name: "web"}, true},
+		{"listed by id", "id1", &ct.App{ID: "id1", Name: "web"}, true},
+		{"unlisted app", "api", &ct.App{ID: "id1", Name: "web"}, false},
+		{"partial name does not match", "webapp", &ct.App{ID: "id1", Name: "web"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := map[string]string{}
+			getenv := func(k string) string {
+				if k == "SSH_CLIENT_KEY_APPS" {
+					return c.apps
+				}
+				return base[k]
+			}
+			addSSHClientEnv(env, c.app, getenv)
+			_, key := env["SSH_CLIENT_KEY"]
+			_, hosts := env["SSH_CLIENT_HOSTS"]
+			if key != c.want || hosts != c.want {
+				t.Fatalf("key=%v hosts=%v, want %v (env %v)", key, hosts, c.want, env)
+			}
+		})
+	}
+	env := map[string]string{}
+	addSSHClientEnv(env, &ct.App{Name: "web"}, func(k string) string {
+		if k == "SSH_CLIENT_KEY_APPS" {
+			return "*"
+		}
+		return ""
+	})
+	if len(env) != 0 {
+		t.Fatalf("nothing configured must forward nothing: %v", env)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -147,3 +148,114 @@ func TestBuildScriptUsesCacheHelpers(t *testing.T) {
 		t.Fatal("cache restore (which unsets the tokens) must run before the buildpack compile")
 	}
 }
+
+// BUILD-08: the cluster SSH_CLIENT_KEY must not be a file or variable that the
+// unprivileged buildpack user can read. Root stages it in a root-only file,
+// loads it into an ssh-agent whose socket the build user can use, and deletes
+// the file. Buildpack code can sign with the key but cannot read it.
+func TestSSHKeyNotReadableByBuildUser(t *testing.T) {
+	if _, err := exec.LookPath("ssh-agent"); err != nil {
+		t.Skip("ssh-agent not installed")
+	}
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen not installed")
+	}
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	secrets := filepath.Join(dir, "secrets")
+	for _, d := range []string{home, secrets} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keyPath := filepath.Join(dir, "key")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", keyPath).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v\n%s", err, out)
+	}
+	keyText, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// unix socket paths are limited to ~104 bytes, t.TempDir() can exceed that
+	agentDir, err := os.MkdirTemp("/tmp", "sshag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(agentDir)
+	childEnv := filepath.Join(dir, "child.env")
+	staged := filepath.Join(dir, "staged.txt")
+	script := `set -eo pipefail
+source ./ssh-key.sh
+ssh_client_key_stage
+# root-only file exists while staged
+ls -ln "${SSH_CLIENT_KEY_FILE}" | awk '{print $1, $3}' > "${STAGED}"
+ssh_client_key_load
+[[ ! -e "${SSH_CLIENT_KEY_FILE}" ]] || { echo "key file still on disk"; exit 1; }
+# stands in for run_unprivileged ${buildpack}/bin/compile
+bash -c 'env' > "${CHILD_ENV}"
+ssh-add -l >> "${CHILD_ENV}"
+ssh_client_key_cleanup
+`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"SSH_CLIENT_KEY="+string(keyText),
+		"SSH_CLIENT_HOSTS=github.com ssh-ed25519 AAAA",
+		"SSH_SECRETS_DIR="+secrets,
+		"SSH_AGENT_DIR="+agentDir,
+		"STAGED="+staged,
+		"CHILD_ENV="+childEnv,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	st, err := os.ReadFile(staged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "-rw------- " + itoa(os.Getuid())
+	if strings.TrimSpace(string(st)) != want {
+		t.Fatalf("staged key mode/owner = %q, want %q (root-owned, 0600)", st, want)
+	}
+	env, err := os.ReadFile(childEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(env), "PRIVATE KEY") || strings.Contains(string(env), "SSH_CLIENT_KEY=") {
+		t.Fatalf("buildpack environment still contains the key:\n%s", env)
+	}
+	if !strings.Contains(string(env), "SSH_AUTH_SOCK=") {
+		t.Fatalf("buildpack must see an ssh-agent socket:\n%s", env)
+	}
+	if !strings.Contains(string(env), "ED25519") {
+		t.Fatalf("ssh-agent did not hold the key:\n%s", env)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".ssh", "id_rsa")); err == nil {
+		t.Fatal("key must not be written to the build user's ~/.ssh/id_rsa")
+	}
+	if b, err := os.ReadFile(filepath.Join(home, ".ssh", "known_hosts")); err == nil && len(b) != 0 {
+		t.Fatal("known_hosts should be removed by cleanup")
+	}
+}
+
+func TestBuildScriptUsesSSHKeyHelpers(t *testing.T) {
+	src, err := os.ReadFile("build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	for _, want := range []string{"source /builder/ssh-key.sh", "ssh_client_key_stage", "ssh_client_key_load", "ssh_client_key_cleanup"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("build.sh must use %q", want)
+		}
+	}
+	if strings.Contains(text, "${HOME}/.ssh/id_rsa") {
+		t.Fatal("build.sh must not write the SSH key into the build user's home")
+	}
+	if strings.Index(text, "ssh_client_key_load") > strings.Index(text, "/bin/compile") {
+		t.Fatal("agent must be loaded before the buildpack compile")
+	}
+}
+
+func itoa(i int) string { return strconv.Itoa(i) }
