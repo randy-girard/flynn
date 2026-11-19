@@ -139,6 +139,13 @@ the SQL text and not a process argument. The result is not cut off at 512MiB.
 restores the newest. `flynn clickhouse:restore <timestamp>` restores a listed
 timestamp. A path or object id is rejected.
 
+A restore replaces each database in the backup: the dump is checked first,
+then every table in the database is dropped and recreated from it, so rows
+and tables written after the backup are gone. In `default` only the tables in
+the dump are replaced. Database names may contain `-` (each resource's own
+`d_<app>` database does). Dumps written before this format could not be
+restored and are refused before anything is dropped.
+
 Each database is its own object:
 `backups/<owner>/<resource UUID>/<timestamp>/<database>`.
 Empty owner uses `cluster`. The schedule runs on the `clickhouse-backup`

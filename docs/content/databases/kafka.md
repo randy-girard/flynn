@@ -137,6 +137,16 @@ newest onto that cluster. `flynn kafka:restore <timestamp>` restores a listed
 timestamp. Replication is `min(saved, brokers up)`, and at least 1. A path or
 object id is rejected.
 
+Records are copied with the Kafka protocol, not the console tools: each keeps
+its partition, timestamp, headers, and its key and value as bytes, with a
+null key or a tombstone kept apart from an empty one. A restore writes
+records with new offsets, so it refuses any topic that already has records
+(checked for every topic before anything is written). Delete those topics
+with `flynn kafka:topics:destroy` first. The plugin API and dashboard can
+force the restore to append instead. Brokers on an image from before this
+change must be upgraded with `flynn kafka:maintenance` before a dump or
+restore.
+
 The object key is `backups/<owner>/<resource UUID>/<timestamp>/records`.
 Empty owner uses `cluster`. The schedule runs on the `kafka-backup`
 discoverd leader, once a day per resource, with the first dump due
