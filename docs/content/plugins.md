@@ -368,7 +368,9 @@ A nil limit is unlimited. `flynn-host runtime:max-processes unlimited` clears
 the per-type cap. An empty owner is not a refusal. A refused scale-up leaves
 the count, records a decision, and waits for cooldown. A scale-down that
 shrinks the account totals still succeeds when the account is already over
-its quota. The plugin runs one web process. `flynn-host plugin:uninstall autoscale`
+its quota. One app's controller error does not stop the loop for the other
+apps, and a policy whose app was deleted (controller 404 for the app) is turned
+off. The plugin runs one web process. `flynn-host plugin:uninstall autoscale`
 stops the loop and leaves formations where they are.
 
 ```text
