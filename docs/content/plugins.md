@@ -359,6 +359,9 @@ Only `web` and `*-web` process types move. The trigger is a web-instance metric
 (CPU, memory, host load, or response p50/p95/p99; response p95 is the default).
 The formation scales up by one when that metric stays above the threshold for
 the window, and down by one when it stays at or below. Minimum is 1.
+The window counts only fresh readings: after a metrics gap, a sample from
+before the gap does not stand in for the window, and the window must hold at
+least half the 15-second polls that fit in it before it can trigger a step.
 A manual scale is applied
 immediately; the next autoscaler decision still enforces min and max and does
 not undo a manual change during cooldown. Scale-up stops inside the controller
