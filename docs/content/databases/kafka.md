@@ -51,7 +51,8 @@ flynn addons:create kafka
 ```
 
 This provisions a Kafka cluster as a Flynn app and configures your application
-to connect to it.
+to connect to it. If provisioning fails partway, the plugin deletes the new
+cluster app, so a failed `addons:create` does not leave a broker running.
 
 ### Scaling the cluster
 
