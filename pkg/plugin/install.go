@@ -29,8 +29,10 @@ import (
 const (
 	blobstorePrefix = "http://blobstore.discoverd/plugins"
 	deployTimeout   = 5 * time.Minute
-	pingTimeout     = 2 * time.Minute
 )
+
+// pingTimeout is the minimum wait for a plugin's ping URL after deploy.
+var pingTimeout = 2 * time.Minute
 
 // clusterUpgradesTimeout bounds the POST after ping. The plugin starts the
 // work in the background and returns; this must not stall install.
@@ -289,6 +291,13 @@ func (in *Installer) apply(opts InstallOptions) error {
 		return fmt.Errorf("cluster credentials: %w", err)
 	}
 
+	return in.deploy(root, m, resolved, opts, artifact, cluster)
+}
+
+// deploy creates or updates the plugin app, rolls the release, and runs the
+// hooks. The updated version meta (plugin ref/source) is committed only after
+// readiness and the hooks pass; any earlier failure restores the old meta.
+func (in *Installer) deploy(root string, m *Manifest, resolved *Resolved, opts InstallOptions, artifact *ct.Artifact, cluster map[string]string) (err error) {
 	app, err := in.getInstalledPluginApp(m)
 	updating := opts.Update
 	switch {
@@ -301,10 +310,25 @@ func (in *Installer) apply(opts InstallOptions) error {
 		if app.Meta == nil {
 			app.Meta = map[string]string{}
 		}
+		prevMeta := make(map[string]string, len(app.Meta))
+		for k, v := range app.Meta {
+			prevMeta[k] = v
+		}
 		m.AnnotateInstall(app.Meta, resolved.StampSource(), resolved.Ref)
 		if err := in.Client.UpdateAppMeta(app); err != nil {
 			return fmt.Errorf("update plugin meta on %s: %w", app.Name, err)
 		}
+		// The new ref/source describe what is running, so a failed update
+		// (deploy, readiness, hooks) must not leave them behind.
+		defer func() {
+			if err == nil {
+				return
+			}
+			app.Meta = prevMeta
+			if rerr := in.Client.UpdateAppMeta(app); rerr != nil {
+				in.logf("restore plugin meta on %s failed: %v", app.Name, rerr)
+			}
+		}()
 		if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
 			PreservePreviousEnv(cluster, prev.Env)
 		}

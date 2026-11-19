@@ -590,6 +590,7 @@ plugin release that does not match the running Flynn version.
 `vYYYYMMDD.N.B` for this Flynn, never a newer Flynn date.N.
 **`plugin:update-all`** does that for every installed plugin,
 continues past individual failures, and prints a per-plugin result.
+If an update fails (the wait URL never answers, or `hooks.upgrade` / `hooks.ready` exits non-zero), the plugin's recorded ref and source are put back to the previous values, so `plugin:list` keeps showing the version whose release is still serving. A failure to restore that record is logged.
 Omit `--ref` on a single update to use that same compatible calver
 (drafts and prereleases are skipped). **`plugin:update`** is the
 operator command once the plugin app exists: it deploys a new release,
