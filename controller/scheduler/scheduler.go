@@ -142,6 +142,11 @@ type Scheduler struct {
 	// so that we can determine if the job should actually be running
 	formationlessJobs map[utils.FormationKey]map[string]*Job
 
+	// formationSeq counts handleFormation calls. A formation sync records it
+	// before its controller request so it can tell which formations it
+	// could not have seen.
+	formationSeq uint64
+
 	// pause and resume are used by tests to control the main loop
 	pause  chan struct{}
 	resume chan struct{}
@@ -2971,7 +2976,12 @@ func (s *Scheduler) persistControllerJob(job *ct.Job) {
 func (s *Scheduler) handleFormation(ef *ct.ExpandedFormation) (formation *Formation) {
 	log := s.logger.New("fn", "handleFormation", "app.id", ef.App.ID, "release.id", ef.Release.ID, "updated", ef.UpdatedAt)
 
+	s.formationSeq++
+	seq := s.formationSeq
 	defer func() {
+		if formation != nil {
+			formation.seq = seq
+		}
 		// subscribe to any release services so we know when to mark
 		// service jobs as running
 		processes := Processes(ef.Processes)

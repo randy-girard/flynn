@@ -72,6 +72,10 @@ type Formation struct {
 	// without any changes for omni jobs so we can recalculate omni counts
 	// when host counts change
 	OriginalProcesses Processes `json:"original_processes"`
+
+	// seq is the scheduler's formation sequence at the last
+	// handleFormation call for this formation.
+	seq uint64
 }
 
 func NewFormation(ef *ct.ExpandedFormation) *Formation {

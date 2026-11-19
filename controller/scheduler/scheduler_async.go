@@ -79,6 +79,9 @@ type hostCheckResult struct {
 }
 
 type formationFetch struct {
+	// seq is the scheduler's formation sequence when the request began.
+	// A formation handled after that is newer than this snapshot.
+	seq          uint64
 	formations   []*ct.ExpandedFormation
 	formErr      error
 	profiles     []*ct.RuntimeProfile
@@ -611,14 +614,22 @@ func (s *Scheduler) beginAsyncSyncFormations() {
 	s.formationsInFlight = true
 	s.formationsAgain = false
 	leader := s.captureLeader("formations")
+	seq := s.formationSeq
 	go func() {
-		fetch := s.loadFormationFetch()
+		fetch := s.loadFormationFetchAt(seq)
 		s.deliver(func() { s.applyFormationFetch(fetch, leader) })
 	}()
 }
 
 func (s *Scheduler) loadFormationFetch() formationFetch {
-	var fetch formationFetch
+	return s.loadFormationFetchAt(s.formationSeq)
+}
+
+// loadFormationFetchAt reads the controller state. seq is the formation
+// sequence from before the first request went out; it is taken on the
+// scheduler loop because the requests themselves run off it.
+func (s *Scheduler) loadFormationFetchAt(seq uint64) formationFetch {
+	fetch := formationFetch{seq: seq}
 	fetch.formations, fetch.formErr = s.FormationListActive()
 	if fetch.formErr != nil {
 		return fetch
@@ -651,8 +662,21 @@ func (s *Scheduler) applyFormationFetch(fetch formationFetch, leader uint64) {
 	s.applyRuntimeSettings(log, fetch.settings, fetch.settingsOK, fetch.settingsErr)
 	for _, f := range s.formations {
 		if _, ok := active[f.key()]; !ok && !f.GetProcesses().IsEmpty() {
+			// A formation handled after this snapshot was requested
+			// (the stream delivered it while the request was in
+			// flight) is missing from the snapshot only because the
+			// snapshot is older. Zeroing it stops fresh jobs, e.g.
+			// the flannel job an update has just started, as
+			// scale-down. The next sync sees it.
+			if f.seq > fetch.seq {
+				log.Info("keeping formation newer than the sync snapshot", "app.id", f.App.ID, "release.id", f.Release.ID)
+				continue
+			}
 			log.Warn("formation should not be active, scaling down", "app.id", f.App.ID, "release.id", f.Release.ID)
-			f.Processes = nil
+			// SetProcesses, not a bare assignment: it resets the
+			// original counts too, so a later sync that lists the
+			// formation again sees a change and restores it.
+			f.SetProcesses(nil)
 			s.triggerRectify(f.key())
 		}
 	}
