@@ -768,15 +768,16 @@ func grantCovers(tok *authorizer.Token, appID, need string) bool {
 
 // GrantFor returns the permissions tok holds on the app with this id. It
 // matches the grant's app id exactly and never by name; callers holding only a
-// name resolve it to an id first.
+// name resolve it to an id first. Duplicate grants for one app are unioned.
 func GrantFor(tok *authorizer.Token, appID string) []string {
 	if tok == nil || appID == "" {
 		return nil
 	}
+	var out []string
 	for _, g := range tok.AppGrants {
 		if g.AppID == appID {
-			return g.Permissions
+			out = append(out, g.Permissions...)
 		}
 	}
-	return nil
+	return out
 }

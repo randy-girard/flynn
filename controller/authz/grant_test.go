@@ -74,3 +74,18 @@ func TestHTTPAllowedResolvesPathRefToID(t *testing.T) {
 		t.Error("a grant keyed by another app's id must not cover the victim app")
 	}
 }
+
+func TestGrantForUnionsDuplicateGrants(t *testing.T) {
+	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{
+		{AppID: "id-1", Permissions: []string{"app:read"}},
+		{AppID: "id-2", Permissions: []string{"app:admin"}},
+		{AppID: "id-1", Permissions: []string{ScopeEventsRead}},
+	}}
+	got := GrantFor(tok, "id-1")
+	if len(got) != 2 || got[0] != "app:read" || got[1] != ScopeEventsRead {
+		t.Fatalf("GrantFor = %v, want both id-1 grants", got)
+	}
+	if !eventsGrantMatches(tok, "id-1", "") {
+		t.Fatal("events grant on a later duplicate entry must match")
+	}
+}

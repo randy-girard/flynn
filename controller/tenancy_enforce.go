@@ -178,14 +178,7 @@ func appVisible(tok *authorizer.Token, app *ct.App) bool {
 	if tok.UserID != "" && app.OwnerAccount == "user:"+tok.UserID {
 		return true
 	}
-	for _, g := range tok.AppGrants {
-		if g.AppID == app.ID {
-			if authz.HasAppPermission(g.Permissions, "") {
-				return true
-			}
-		}
-	}
-	return false
+	return authz.HasAppPermission(authz.GrantFor(tok, app.ID), "")
 }
 
 func (c *controllerAPI) rejectIfSuspended(account string) error {
@@ -331,13 +324,7 @@ func grantPerms(tok *authorizer.Token, app *ct.App) []string {
 	if tok == nil || app == nil {
 		return nil
 	}
-	var out []string
-	for _, g := range tok.AppGrants {
-		if g.AppID == app.ID {
-			out = append(out, g.Permissions...)
-		}
-	}
-	return out
+	return authz.GrantFor(tok, app.ID)
 }
 
 func (c *controllerAPI) checkHostname(ctx context.Context, app *ct.App, hostname string) error {

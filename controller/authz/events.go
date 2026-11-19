@@ -80,17 +80,9 @@ func EventsGrantAllows(tok *authorizer.Token, appID, appName, ownerAccount strin
 }
 
 func eventsGrantMatches(tok *authorizer.Token, appID, appName string) bool {
-	if tok == nil {
-		return false
-	}
-	for _, g := range tok.AppGrants {
-		if g.AppID == "" || g.AppID != appID {
-			continue
-		}
-		for _, p := range g.Permissions {
-			if p == ScopeEventsRead {
-				return true
-			}
+	for _, p := range GrantFor(tok, appID) {
+		if p == ScopeEventsRead {
+			return true
 		}
 	}
 	return false
