@@ -106,8 +106,12 @@ default and the same path on hosted and self-hosted clusters as
 back to `manual`. On one or two hosts failover is unavailable. A down node
 keeps its volume and is not given a new id. Reconcile does not drop a Keeper
 voter while live members are below the formation or without a Keeper majority.
-Scaling down drains the highest node ids and drops their replicas with
-`SYSTEM DROP REPLICA` before they stop. A node whose job is lost comes back
+Scaling down drains the highest node ids, then runs `SYSTEM SYNC DATABASE
+REPLICA` and `SYSTEM SYNC REPLICA` on the remaining nodes so they fetch every
+part the drained node holds. If they do not catch up within 10 minutes the
+scale-down stops with an error and the drained node keeps running. Only then
+is the node removed from the Keeper voters and stopped, and its replicas
+dropped with `SYSTEM DROP REPLICA`. A node whose job is lost comes back
 with the same id and volume. Resources created before embedded Keeper cannot
 scale; `clickhouse:scale` returns an error for them. Manual scale may place
 more than one node on a host.
