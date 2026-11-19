@@ -176,16 +176,8 @@ func run(dir string, uid, gid int) error {
 	}
 
 	// create artifact
-	if err := client.CreateArtifact(artifact); err != nil && usedToken {
-		// A mismatched ACCESS_TOKEN_SIGNING_KEY / ACCESS_TOKEN_KEY pair (for
-		// example after a partial cluster update) mints bearer tokens the
-		// controller rejects with 401. Fall back to the cluster key written
-		// to /run/secrets/controller_key by build.sh.
-		if fallback, fbErr := legacyControllerClient(); fbErr == nil {
-			err = fallback.CreateArtifact(artifact)
-		}
-	}
-	if err != nil {
+	fallback := func() (artifactCreator, error) { return legacyControllerClient() }
+	if err := createArtifact(client, usedToken, fallback, artifact); err != nil {
 		return err
 	}
 
