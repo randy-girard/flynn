@@ -121,6 +121,11 @@ clients work with the private CA (pin `FLYNN_MYSQL_TRUSTED_CERT` to verify).
 Plaintext is still accepted inside the cluster for replication and older
 clients.
 
+The server private key is never published in discoverd metadata (only the
+public CA is). Instances created by older plugin releases published it under
+`flynn-tls-key`; treat that key as exposed and rotate the instance certificate
+(see the plugin README) after upgrading.
+
 ### Connecting to a console
 
 To connect to a `mysql` console for the database, run `flynn mysql:cli` (alias

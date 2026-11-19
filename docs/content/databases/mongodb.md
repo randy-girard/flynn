@@ -69,6 +69,11 @@ the appliance CA, and clients must use it to verify the server certificate.
 `leader.<app>.discoverd` is on that certificate. `mongod` runs in `preferTLS`
 mode, so replication and older in-cluster clients can still connect without TLS.
 
+The server private key is never published in discoverd metadata (only the
+public CA is). Instances created by older plugin releases published it under
+`flynn-tls-key`; treat that key as exposed and rotate the instance certificate
+(see the plugin README) after upgrading.
+
 ### Scaling the cluster
 
 MongoDB has no followers or joined resources. Each resource is one cluster, and
