@@ -371,7 +371,10 @@ func accountQuotaRead(method, rawPath string) bool {
 	if len(parts) == 1 && parts[0] == "apps" {
 		return true
 	}
-	return len(parts) == 3 && parts[0] == "apps" && parts[2] == "formation"
+	// GET /apps/:id/formations lists process counts per release. It carries
+	// no release env; single formations are not opened because
+	// ?expand=true embeds the release.
+	return len(parts) == 3 && parts[0] == "apps" && parts[1] != "" && parts[2] == "formations"
 }
 
 // HasAccountQuota reports whether tok is the billing quota credential.

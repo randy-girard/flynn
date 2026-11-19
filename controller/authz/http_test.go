@@ -552,11 +552,35 @@ func TestAccountQuotaScopeIsNotClusterAdmin(t *testing.T) {
 	if !HTTPAllowed(tok, http.MethodPut, "/accounts/user:a/quota") || !HTTPAllowed(tok, http.MethodPost, "/accounts/user:a/suspend") {
 		t.Fatal("account:quota must reach quota and suspend")
 	}
-	if !HTTPAllowed(tok, http.MethodGet, "/apps") || !HTTPAllowed(tok, http.MethodGet, "/apps/app-a/formation") {
+	if !HTTPAllowed(tok, http.MethodGet, "/apps") || !HTTPAllowed(tok, http.MethodGet, "/apps/app-a/formations") {
 		t.Fatal("account:quota must list apps and read formations for metering")
 	}
-	if HTTPAllowed(tok, http.MethodGet, "/apps/app-a/release") || HTTPAllowed(tok, http.MethodPut, "/apps/app-a/formation") || HTTPAllowed(tok, http.MethodPut, "/cluster/settings") {
+	if HTTPAllowed(tok, http.MethodGet, "/apps/app-a/release") || HTTPAllowed(tok, http.MethodPut, "/apps/app-a/formations/rel-1") || HTTPAllowed(tok, http.MethodPut, "/cluster/settings") {
 		t.Fatal("account:quota must not read release env, change a formation, or change cluster settings")
+	}
+}
+
+// TestQuotaTokenReadsFormations checks the billing meter's route. The
+// controller serves GET /apps/:id/formations; there is no /formation route.
+func TestQuotaTokenReadsFormations(t *testing.T) {
+	tok := &authorizer.Token{UserID: "billing", Scopes: []string{ScopeAccountQuota}}
+	for _, m := range []string{http.MethodGet, http.MethodHead} {
+		if !HTTPAllowed(tok, m, "/apps/app-a/formations") {
+			t.Fatalf("account:quota must %s /apps/:id/formations", m)
+		}
+	}
+	for _, route := range [][2]string{
+		{http.MethodGet, "/apps/app-a/formation"},
+		{http.MethodPut, "/apps/app-a/formations/rel-1"},
+		{http.MethodDelete, "/apps/app-a/formations/rel-1"},
+		{http.MethodGet, "/apps/app-a/formations/rel-1"},
+		{http.MethodGet, "/apps/app-a/release"},
+		{http.MethodGet, "/apps/app-a/releases"},
+		{http.MethodGet, "/apps/app-a/jobs"},
+	} {
+		if HTTPAllowed(tok, route[0], route[1]) {
+			t.Fatalf("account:quota allowed on %s %s", route[0], route[1])
+		}
 	}
 }
 
