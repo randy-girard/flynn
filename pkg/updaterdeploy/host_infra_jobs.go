@@ -28,7 +28,18 @@ type hostInfraHost interface {
 	AddJob(job *host.Job) error
 }
 
-const hostInfraReplaceTimeout = 90 * time.Second
+// hostInfraReplaceTimeout is a var so tests can shorten it.
+var hostInfraReplaceTimeout = 90 * time.Second
+
+// hostInfraMaxExternalStops is how many started jobs may be stopped by
+// someone else before the host is given up on. A scheduler with a stale
+// formation stops each fresh job as scale-down; starting another every
+// 100ms only produced hundreds of jobs and never converged.
+const hostInfraMaxExternalStops = 3
+
+// hostInfraRestartBackoff is the wait after the first externally stopped
+// job; it doubles for each further stop.
+var hostInfraRestartBackoff = 2 * time.Second
 
 const hostInfraReleaseKey = "flynn-controller.release"
 
@@ -175,6 +186,7 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 	// behind AddJob. Starting another job in that gap replaces flannel in a
 	// loop and none of them stay running.
 	var pendingID string
+	externalStops := 0
 	deadline := time.Now().Add(hostInfraReplaceTimeout)
 	for time.Now().Before(deadline) {
 		jobs, err := h.ListJobs()
@@ -195,6 +207,16 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 			}
 			if j.Status == host.StatusRunning && j.Job != nil && hostInfraJobMatches(j.Job, want, release) {
 				return nil
+			}
+			if j.Status == host.StatusDone || j.Status == host.StatusCrashed || j.Status == host.StatusFailed {
+				externalStops++
+				if log != nil {
+					log.Warn("started host-infra job was stopped before it ran", "host", h.ID(), "app", name, "job", pendingID, "status", j.Status, "count", externalStops)
+				}
+				if externalStops >= hostInfraMaxExternalStops {
+					return fmt.Errorf("%s on %s: %d started jobs were stopped right away (the scheduler may hold a stale formation for release %s)", name, h.ID(), externalStops, release)
+				}
+				time.Sleep(hostInfraRestartBackoff << uint(externalStops-1))
 			}
 			pendingID = ""
 		}

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -858,4 +860,43 @@ func TestReplaceHostInfraJobsResumesInterruptedRollout(t *testing.T) {
 	}
 	assertHostRunsRelease(t, h1, "rel-next")
 	assertHostRunsRelease(t, h2, "rel-next")
+}
+
+// stoppingInfraHost marks every added job done at once, the way a scheduler
+// holding a stale empty formation stops a fresh job as scale-down.
+type stoppingInfraHost struct{ fakeInfraHost }
+
+func (f *stoppingInfraHost) AddJob(job *host.Job) error {
+	f.added = append(f.added, job)
+	f.jobs[job.ID] = host.ActiveJob{Job: job, Status: host.StatusDone}
+	return nil
+}
+
+func TestReplaceHostInfraBacksOffWhenStartedJobsAreStoppedAtOnce(t *testing.T) {
+	oldTimeout, oldBackoff := hostInfraReplaceTimeout, hostInfraRestartBackoff
+	hostInfraReplaceTimeout, hostInfraRestartBackoff = 2*time.Second, 20*time.Millisecond
+	defer func() { hostInfraReplaceTimeout, hostInfraRestartBackoff = oldTimeout, oldBackoff }()
+
+	art := squashArtifact(t, "layer-new")
+	h := &stoppingInfraHost{fakeInfraHost{
+		id: "devnode2",
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID:         "old",
+					Metadata:   map[string]string{"flynn-controller.app_name": "flannel"},
+					Config:     host.ContainerConfig{Env: map[string]string{"FLYNN_JOB_ID": "old"}},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+	}}
+	err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"flannel": art}, nil, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("want an error naming the repeated stops, got %v", err)
+	}
+	if len(h.added) > hostInfraMaxExternalStops {
+		t.Fatalf("started %d flannel jobs that were each stopped at once; want at most %d", len(h.added), hostInfraMaxExternalStops)
+	}
 }
