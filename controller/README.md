@@ -22,6 +22,14 @@ type that has already run is a scale. Stopping jobs stay in memory so a
 volume and a CPU or memory reservation are not released while the job is
 still on the host.
 
+At start the scheduler registers in service discovery, then streams the
+formation list from the controller before it leads. The controller keeps that
+stream open with keepalives even when its database query is stuck, so the
+scheduler drops a connection that has not delivered the current list within
+90 seconds and reconnects with backoff. If no list arrives within 5 minutes
+the scheduler exits, which deregisters it so another scheduler can lead, and
+the host restarts the job.
+
 `GET /routes` and `GET /active-jobs` page the same way on a hosted cluster
 and a self-hosted one. Omit `count` and each response is still one JSON
 array. Pass `count` to walk pages of at most 1000. Active-job pages use
