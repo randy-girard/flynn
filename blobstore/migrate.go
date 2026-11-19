@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	docopt "github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/blobstore/backend"
 	"github.com/randy-girard/flynn/blobstore/data"
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
@@ -25,6 +26,25 @@ Options:
 `)
 }
 
+// migrateRepo is the part of data.FileRepo that migrate uses.
+type migrateRepo interface {
+	DefaultBackend() backend.Backend
+	ListFilesExcludingDefaultBackend(prefix string) ([]data.BackendFile, error)
+	SetBackend(tx *postgres.DBTx, id, name string) error
+}
+
+// migrateOpen connects to the database and builds the file repo. It is a
+// variable so tests can inject failures.
+var migrateOpen = func() (*postgres.DB, migrateRepo, error) {
+	db := postgres.Wait(nil, nil)
+	repo, err := data.NewFileRepoFromEnv(db)
+	if err != nil {
+		db.Close()
+		return nil, nil, err
+	}
+	return db, repo, nil
+}
+
 func runMigrate(args *docopt.Args) error {
 	deleteFiles := args.Bool["--delete"]
 	concurrency, err := strconv.Atoi(args.String["--concurrency"])
@@ -36,15 +56,17 @@ func runMigrate(args *docopt.Args) error {
 	}
 	prefix := args.String["--prefix"]
 
-	db := postgres.Wait(nil, nil)
-	repo, err := data.NewFileRepoFromEnv(db)
+	db, repo, err := migrateOpen()
 	if err != nil {
-		return nil
+		return err
+	}
+	if db != nil {
+		defer db.Close()
 	}
 
 	files, err := repo.ListFilesExcludingDefaultBackend(prefix)
 	if err != nil {
-		return nil
+		return fmt.Errorf("listing files to migrate: %s", err)
 	}
 
 	var wg sync.WaitGroup
@@ -67,7 +89,6 @@ func runMigrate(args *docopt.Args) error {
 	}
 
 	wg.Wait()
-	db.Close()
 	if errorCount > 0 {
 		return fmt.Errorf("Finished with %d errors", errorCount)
 	}
@@ -76,7 +97,7 @@ func runMigrate(args *docopt.Args) error {
 	return nil
 }
 
-func moveFile(db *postgres.DB, repo *data.FileRepo, f data.BackendFile, delete bool) error {
+func moveFile(db *postgres.DB, repo migrateRepo, f data.BackendFile, delete bool) error {
 	b := repo.DefaultBackend()
 	tx, err := db.Begin()
 	if err != nil {
@@ -95,11 +116,31 @@ func moveFile(db *postgres.DB, repo *data.FileRepo, f data.BackendFile, delete b
 		tx.Rollback()
 		return err
 	}
+	if err := commitMove(tx); err != nil {
+		return err
+	}
 	if delete {
-		if err := f.Backend.Delete(tx, f.FileInfo); err != nil {
+		// Delete from the source only after the new location is committed, so
+		// a failed commit never leaves the row pointing at a deleted blob.
+		if err := deleteSource(db, f); err != nil {
 			// print but don't return error if deletion of old file fails, we don't want to lose files
 			log.Printf("Error deleting %s (%s) from %s: %s", f.FileInfo.Name, f.ID, f.Backend.Name(), err)
 		}
+	}
+	return nil
+}
+
+// commitMove is a variable so tests can inject a commit failure.
+var commitMove = func(tx *postgres.DBTx) error { return tx.Commit() }
+
+func deleteSource(db *postgres.DB, f data.BackendFile) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := f.Backend.Delete(tx, f.FileInfo); err != nil {
+		tx.Rollback()
+		return err
 	}
 	return tx.Commit()
 }

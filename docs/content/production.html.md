@@ -625,6 +625,11 @@ from Postgres. You can also run that step separately:
 sudo flynn-host blobstore:migrate --delete
 ```
 
+The migrate job exits non-zero when it cannot open the backends or list the files,
+and when any file fails to move. With `--delete`, a file is removed from the old
+backend only after its move is committed, so a failed run never loses data and can
+be re-run.
+
 The equivalent `flynn -a blobstore env:set` / `flynn -a blobstore run /bin/flynn-blobstore migrate --delete` path still works.
 
 On Flynn older than v20160924.0 the migrate binary was `/bin/flynn-blobstore-migrate`.
