@@ -46,3 +46,66 @@ load "helper"
     fi
   done
 }
+
+# workflow_top_permissions prints the entries of the workflow-level
+# permissions block (two-space indented lines after a column-0 "permissions:").
+workflow_top_permissions() {
+  awk '
+    /^permissions:/ { inblock = 1; sub(/^permissions:[[:space:]]*/, ""); if ($0 != "") print; next }
+    inblock && /^[^[:space:]#]/ { inblock = 0 }
+    inblock && /^  [^[:space:]#]/ { sub(/^[[:space:]]+/, ""); print }
+  ' "$1"
+}
+
+# workflow_job prints the body of one job under "jobs:" (four-space and deeper lines).
+workflow_job() {
+  awk -v job="$2" '
+    /^jobs:/ { injobs = 1; next }
+    injobs && /^[^[:space:]#]/ { injobs = 0 }
+    injobs && /^  [^[:space:]#]/ { cur = $1; sub(/:$/, "", cur); next }
+    injobs && cur == job { print }
+  ' "$1"
+}
+
+@test "unit workflow grants only contents: read at the top level" {
+  wf="${ROOT}/.github/workflows/unit-tests.yml"
+  perms="$(workflow_top_permissions "${wf}")"
+  if [[ "${perms}" != "contents: read" ]]; then
+    echo "top-level permissions must be exactly 'contents: read', got:" >&2
+    echo "${perms}" >&2
+    return 1
+  fi
+}
+
+@test "unit workflow checkout does not persist the token for test code" {
+  wf="${ROOT}/.github/workflows/unit-tests.yml"
+  job="$(workflow_job "${wf}" unit)"
+  [[ -n "${job}" ]]
+  echo "${job}" | grep -q 'uses: actions/checkout@'
+  if ! echo "${job}" | grep -Eq '^[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*$'; then
+    echo "unit job checkout must set persist-credentials: false" >&2
+    return 1
+  fi
+  if echo "${job}" | grep -Eq '^    permissions:'; then
+    echo "unit job must not widen permissions" >&2
+    return 1
+  fi
+}
+
+@test "unit workflow gives contents: write only to coverage-badge" {
+  wf="${ROOT}/.github/workflows/unit-tests.yml"
+  badge="$(workflow_job "${wf}" coverage-badge)"
+  echo "${badge}" | grep -Eq '^      contents:[[:space:]]*write'
+  jobs="$(awk '/^jobs:/{j=1;next} j && /^[^[:space:]#]/{j=0} j && /^  [^[:space:]#]/{n=$1; sub(/:$/,"",n); print n}' "${wf}")"
+  for j in ${jobs}; do
+    [[ "${j}" == "coverage-badge" ]] && continue
+    if workflow_job "${wf}" "${j}" | grep -Eq ':[[:space:]]*write'; then
+      echo "job ${j} must not get a write permission" >&2
+      return 1
+    fi
+  done
+  if workflow_top_permissions "${wf}" | grep -q 'write'; then
+    echo "top-level permissions must not grant write" >&2
+    return 1
+  fi
+}

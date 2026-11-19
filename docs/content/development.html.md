@@ -476,7 +476,10 @@ The smoke header in `script/vagrant/suite.sh` lists the rest.
 * **[Unit tests](https://github.com/randy-girard/flynn/actions/workflows/unit-tests.yml)**
   — `push` and `pull_request` to `develop` and `main`, on `ubuntu-24.04`.
   Builds host binaries, `validate-gofmt`, `bats script/test`,
-  `make test-unit-root-native`.
+  `make test-unit-root-native`. The workflow token is `contents: read` and the
+  unit job checks out with `persist-credentials: false`, so test code cannot
+  push to the repo. Only the `coverage-badge` job, which runs after a green
+  push to `develop` or `main`, gets `contents: write` to commit the badge.
 * **[Build and Release](https://github.com/randy-girard/flynn/actions/workflows/release.yml)**
   — manual `workflow_dispatch` only. Builds base + production cluster images in
   phases and publishes GitHub Release assets. Version tags look like
