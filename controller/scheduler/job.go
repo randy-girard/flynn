@@ -81,6 +81,11 @@ type Job struct {
 	// loop
 	HostID string `json:"host_id"`
 
+	// placedAt is when the scheduler loop assigned HostID/JobID. A job that
+	// is still pending a long time after placement never got a host event
+	// (see resolveInactiveJobs).
+	placedAt time.Time
+
 	// JobID is the ID of the cluster job that this in-memory job
 	// represents, and is set either by a StartJob goroutine when it makes
 	// a placement request to the scheduler loop, or when an event is

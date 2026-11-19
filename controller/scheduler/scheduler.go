@@ -1746,10 +1746,12 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	if ct.IsBuilderProcessType(req.Job.Type) {
 		req.Job.JobID = cluster.GenerateJobID(req.Host.ID, req.Job.ID)
 		req.Job.HostID = req.Host.ID
+		req.Job.placedAt = time.Now()
 	} else {
 		req.Config = jobConfig(req.Job, req.Host.ID)
 		req.Job.JobID = req.Config.ID
 		req.Job.HostID = req.Host.ID
+		req.Job.placedAt = time.Now()
 	}
 	for _, vol := range req.Job.Volumes {
 		if vol.HostID == "" {

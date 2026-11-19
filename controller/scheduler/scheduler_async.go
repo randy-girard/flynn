@@ -259,8 +259,9 @@ func (s *Scheduler) applyJobLists(snaps []hostJobSnap, leader uint64) {
 func (s *Scheduler) fetchInactiveProbes(listed map[string]map[string]struct{}, leader uint64) {
 	log := s.logger.New("fn", "SyncJobs")
 	var probes []jobProbe
+	now := time.Now()
 	for _, job := range s.jobs {
-		if job.State != JobStateStarting && job.State != JobStateRunning && job.State != JobStateStopping {
+		if !needsHostCheck(job, now) {
 			continue
 		}
 		if ids, ok := listed[job.HostID]; ok {
@@ -409,10 +410,32 @@ func (s *Scheduler) finishJobSync(failed bool, leader uint64) {
 	}
 }
 
+// pendingPlacementGrace is how long a placed job may stay pending before
+// SyncJobs asks its host what happened to it.
+const pendingPlacementGrace = 2 * time.Minute
+
+// needsHostCheck reports whether SyncJobs must confirm that the host still
+// lists job. Starting, running and stopping jobs always do. A job placed on a
+// host stays pending until a host event moves it on. If that event was lost
+// (the leader's stream to a rebooting host dropped) and the job has since left
+// the host, nothing else would ever resolve it and it would keep counting
+// toward the formation. Jobs placed moments ago are skipped because their
+// AddJob may still be in flight.
+func needsHostCheck(job *Job, now time.Time) bool {
+	switch job.State {
+	case JobStateStarting, JobStateRunning, JobStateStopping:
+		return true
+	case JobStatePending:
+		return job.HostID != "" && job.JobID != "" && !job.placedAt.IsZero() && now.Sub(job.placedAt) >= pendingPlacementGrace
+	}
+	return false
+}
+
 func (s *Scheduler) resolveInactiveJobs(active map[string]struct{}) {
 	log := s.logger.New("fn", "SyncJobs")
+	now := time.Now()
 	for _, job := range s.jobs {
-		if job.State != JobStateStarting && job.State != JobStateRunning && job.State != JobStateStopping {
+		if !needsHostCheck(job, now) {
 			continue
 		}
 		if _, ok := active[job.JobID]; ok {

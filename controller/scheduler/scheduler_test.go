@@ -1985,3 +1985,61 @@ func TestRegisterDoesNotWaitForFormationSnapshot(t *testing.T) {
 		t.Fatal("scheduler did not register while the formation snapshot was open")
 	}
 }
+
+// TestSyncJobsResolvesPlacedPendingJobWithLostEvents covers a leader that
+// placed a job on a host but never received its events (the host was
+// rebooting and the event stream dropped). The job crashed and left the host,
+// but the scheduler kept it pending, counted it toward the formation and never
+// replaced it. The controller row stayed pending too.
+func (TestSuite) TestSyncJobsResolvesPlacedPendingJobWithLostEvents(c *C) {
+	h := NewFakeHostClient("host1", false)
+	testCluster := newTestCluster(map[string]utils.HostClient{h.ID(): h})
+	s := newTestScheduler(c, testCluster, true, nil)
+	s.hosts[h.ID()] = NewHost(h, s.logger)
+
+	place := func(id string, placed time.Time) {
+		s.jobs[id] = &Job{
+			ID:        id,
+			Type:      "web",
+			AppID:     testAppID,
+			ReleaseID: testReleaseID,
+			HostID:    h.ID(),
+			JobID:     cluster.GenerateJobID(h.ID(), id),
+			State:     JobStatePending,
+			placedAt:  placed,
+		}
+	}
+	place("lost", time.Now().Add(-10*time.Minute))
+	place("inflight", time.Now())
+
+	c.Assert(s.SyncJobs(), IsNil)
+
+	if j, ok := s.jobs["lost"]; ok && j.State == JobStatePending {
+		c.Fatal("placed job whose host no longer lists it stays pending forever")
+	}
+	if j, ok := s.jobs["inflight"]; !ok || j.State != JobStatePending {
+		c.Fatal("a job placed moments ago (AddJob in flight) must stay pending")
+	}
+}
+
+func (TestSuite) TestNeedsHostCheck(c *C) {
+	now := time.Now()
+	old := now.Add(-pendingPlacementGrace - time.Second)
+	for _, t := range []struct {
+		name string
+		job  *Job
+		want bool
+	}{
+		{"running", &Job{State: JobStateRunning}, true},
+		{"starting", &Job{State: JobStateStarting}, true},
+		{"stopping", &Job{State: JobStateStopping}, true},
+		{"pending placed long ago", &Job{State: JobStatePending, HostID: "h", JobID: "h-j", placedAt: old}, true},
+		{"pending placed just now", &Job{State: JobStatePending, HostID: "h", JobID: "h-j", placedAt: now}, false},
+		{"pending never placed", &Job{State: JobStatePending, placedAt: old}, false},
+		{"pending restart timer (no placement time)", &Job{State: JobStatePending, HostID: "h", JobID: "h-j"}, false},
+		{"stopped", &Job{State: JobStateStopped, HostID: "h", JobID: "h-j", placedAt: old}, false},
+		{"blocked", &Job{State: JobStateBlocked, HostID: "h", JobID: "h-j", placedAt: old}, false},
+	} {
+		c.Assert(needsHostCheck(t.job, now), Equals, t.want, Commentf("%s", t.name))
+	}
+}
