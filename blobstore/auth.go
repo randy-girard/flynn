@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/authz"
@@ -14,7 +15,8 @@ import (
 
 // protect requires cluster-key or scoped-token credentials on blobstore
 // object routes. Health/status stays public. Signed BUILD_CACHE_URL tokens
-// are accepted only on that app's cache objects (GET/HEAD/PUT). Copy-From is
+// are accepted only on that app's cache objects, expire, and are split into a
+// read token (GET/HEAD) and a write token (PUT). Copy-From is
 // refused for every credential except the cluster key and cluster-admin tokens.
 func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer) http.Handler {
 	if tokens == nil && len(keys) == 0 {
@@ -70,12 +72,8 @@ func hasCopyFrom(req *http.Request) bool {
 }
 
 func allowCacheToken(req *http.Request, p string, keys []string) bool {
-	switch req.Method {
-	case http.MethodGet, http.MethodHead, http.MethodPut:
-	default:
-		return false
-	}
-	return blobstoreauth.ValidCacheToken(p, req.URL.Query().Get("token"), keys)
+	q := req.URL.Query()
+	return blobstoreauth.ValidCacheRequest(req.Method, p, q.Get("token"), q.Get("exp"), keys, time.Now())
 }
 
 func allowToken(tok *authorizer.Token, method, p string) bool {

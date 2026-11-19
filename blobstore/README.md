@@ -16,7 +16,7 @@ HTTP verbs:
 
 Files can be copied by setting the `Blobstore-Copy-From` header in a PUT
 request. The source is not authorized separately, so only the cluster key (or a
-cluster-admin token) may use this header. Signed `BUILD_CACHE_URL` tokens and
+cluster-admin token) may use this header. Signed build cache URLs (`BUILD_CACHE_URL`, `BUILD_CACHE_PUT_URL`) and
 scoped `build:artifacts` tokens get `403` on any PUT that carries it.
 
 ```shell

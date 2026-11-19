@@ -227,20 +227,15 @@ func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App
 	return nil
 }
 
-// SEC-013: signedBuildCacheURL generates a build cache URL with an HMAC
-// token scoped to the app ID, preventing one app's build from accessing
-// another app's cache.
-func signedBuildCacheURL(appID, key string) string {
-	return signedNamedCacheURL(appID, key, "cache")
-}
-
-func signedDockerBuildCacheURL(appID, key string) string {
-	return signedNamedCacheURL(appID, key, "docker-cache")
-}
-
-func signedNamedCacheURL(appID, key, name string) string {
-	token := blobstoreauth.CacheToken(appID, key)
-	return fmt.Sprintf("%s/%s-%s.tgz?token=%s", blobstoreURL, appID, name, token)
+// addBuildCacheEnv sets BUILD_CACHE_URL (read-only) and BUILD_CACHE_PUT_URL
+// (write-only) for the app's cache object (name is "cache" or "docker-cache").
+// Both are signed with a key derived from the cluster key, scoped to the app,
+// object and operation, and expire after blobstoreauth.CacheTokenTTL. The
+// builders keep them away from buildpack code.
+func addBuildCacheEnv(env map[string]string, appID, key, name string, now time.Time) {
+	exp := now.Add(blobstoreauth.CacheTokenTTL)
+	env["BUILD_CACHE_URL"] = blobstoreauth.SignedCacheURL(blobstoreURL, appID, name, blobstoreauth.CacheRead, exp, key)
+	env["BUILD_CACHE_PUT_URL"] = blobstoreauth.SignedCacheURL(blobstoreURL, appID, name, blobstoreauth.CacheWrite, exp, key)
 }
 
 func parsePairs(args *docopt.Args, str string) (map[string]string, error) {
@@ -533,12 +528,12 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 
 	slugImageID := random.UUID()
 	jobEnv := map[string]string{
-		"BUILD_CACHE_URL": signedBuildCacheURL(app.ID, os.Getenv("CONTROLLER_KEY")),
-		"SLUG_IMAGE_ID":   slugImageID,
-		"SOURCE_VERSION":  args.String["<rev>"],
-		"STACK":           stackName,
-		"CF_STACK":        cfStackName,
+		"SLUG_IMAGE_ID":  slugImageID,
+		"SOURCE_VERSION": args.String["<rev>"],
+		"STACK":          stackName,
+		"CF_STACK":       cfStackName,
 	}
+	addBuildCacheEnv(jobEnv, app.ID, os.Getenv("CONTROLLER_KEY"), "cache", time.Now())
 	if buildpackURL, ok := releaseEnv["BUILDPACK_URL"]; ok {
 		jobEnv["BUILDPACK_URL"] = buildpackURL
 	}
@@ -700,7 +695,7 @@ func dockerBuildJobEnv(controllerKey, imageArtifactID, sourceVersion string, rel
 		"BUILDKIT_PROGRESS": "plain",
 	}
 	if appID != "" {
-		jobEnv["BUILD_CACHE_URL"] = signedDockerBuildCacheURL(appID, controllerKey)
+		addBuildCacheEnv(jobEnv, appID, controllerKey, "docker-cache", time.Now())
 	}
 	if dockerfile, ok := releaseEnv["DOCKERFILE"]; ok {
 		jobEnv["DOCKERFILE"] = dockerfile

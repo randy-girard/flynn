@@ -104,9 +104,10 @@ fi
 # (`ENV_DIR="${3}"` → "3: unbound variable"), such as heroku-buildpack-python v281.
 mkdir -p "${env_dir}"
 
-if [[ -n "${BUILD_CACHE_URL}" ]]; then
-  curl --location "${BUILD_CACHE_URL}" | tar --extract --gunzip --directory "${cache_root}" &>/dev/null || true
-fi
+# BUILD-07: root restores the cache and strips the cache URLs (expiring bearer
+# tokens) from the environment before any buildpack code runs.
+source /builder/build-cache.sh
+build_cache_restore "${cache_root}"
 
 # In heroku, there are two separate directories, and some
 # buildpacks expect that.
@@ -352,15 +353,4 @@ cp "/etc/group" "${build_root}/etc/group"
   --gid "${USER_GID}" \
   | ensure_indent
 
-if [[ -n "${BUILD_CACHE_URL}" ]]; then
-  tar \
-    --create \
-    --directory "${cache_root}" \
-    --use-compress-program=pigz \
-    . \
-  | curl \
-    --output "$(mktemp)" \
-    --request PUT \
-    --upload-file - \
-    "${BUILD_CACHE_URL}"
-fi
+build_cache_save "${cache_root}"

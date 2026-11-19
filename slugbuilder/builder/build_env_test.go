@@ -60,3 +60,90 @@ test -d "${ENV_DIR}"
 		t.Fatalf("compile with ENV_DIR and STACK: %v\n%s", err, out)
 	}
 }
+
+// BUILD-07: buildpack code runs as an unprivileged user in the same
+// environment as build.sh. The cache URLs carry bearer tokens, so root must
+// do the cache GET and PUT and remove the URLs from the environment before any
+// buildpack runs.
+func TestBuildCacheTokensHiddenFromBuildpacks(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	cache := filepath.Join(dir, "cache")
+	for _, d := range []string{src, cache} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(src, "restored"), []byte("hit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "curl.log")
+	childEnv := filepath.Join(dir, "child.env")
+	script := `set -eo pipefail
+source ./build-cache.sh
+curl() {
+  echo "curl $*" >> "${LOG}"
+  case " $* " in
+    *" PUT "*) cat > /dev/null ;;
+    *) tar --create --gzip --directory "${SRC}" . ;;
+  esac
+}
+export BUILD_CACHE_URL="http://blobstore/app-cache.tgz?token=readtok&exp=1"
+export BUILD_CACHE_PUT_URL="http://blobstore/app-cache.tgz?token=writetok&exp=1"
+build_cache_restore "${CACHE}"
+# stands in for run_unprivileged ${buildpack}/bin/compile
+bash -c 'env' > "${CHILD_ENV}"
+build_cache_save "${CACHE}"
+`
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(), "LOG="+log, "SRC="+src, "CACHE="+cache, "CHILD_ENV="+childEnv, "FLYNN_CACHE_COMPRESS=gzip")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script: %v\n%s", err, out)
+	}
+	if b, err := os.ReadFile(filepath.Join(cache, "restored")); err != nil || string(b) != "hit" {
+		t.Fatalf("cache was not restored: %v %q", err, b)
+	}
+	env, err := os.ReadFile(childEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"BUILD_CACHE", "readtok", "writetok"} {
+		if strings.Contains(string(env), leak) {
+			t.Fatalf("buildpack environment still contains %q:\n%s", leak, env)
+		}
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want one GET and one PUT, got:\n%s", calls)
+	}
+	if !strings.Contains(lines[0], "readtok") || strings.Contains(lines[0], "writetok") || strings.Contains(lines[0], " PUT ") {
+		t.Fatalf("restore must GET with the read URL only: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], "writetok") || strings.Contains(lines[1], "readtok") || !strings.Contains(lines[1], " PUT ") {
+		t.Fatalf("save must PUT with the write URL only: %s", lines[1])
+	}
+}
+
+func TestBuildScriptUsesCacheHelpers(t *testing.T) {
+	src, err := os.ReadFile("build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	for _, want := range []string{"source /builder/build-cache.sh", "build_cache_restore", "build_cache_save"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("build.sh must use %q", want)
+		}
+	}
+	if strings.Contains(text, `"${BUILD_CACHE_URL}"`) {
+		t.Fatal("build.sh must not use BUILD_CACHE_URL directly; build-cache.sh strips it from the environment")
+	}
+	if strings.Index(text, "build_cache_restore") > strings.Index(text, "/bin/compile") {
+		t.Fatal("cache restore (which unsets the tokens) must run before the buildpack compile")
+	}
+}

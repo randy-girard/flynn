@@ -157,7 +157,7 @@ build_one() {
 }
 
 save_build_cache() {
-  if [[ -z "${BUILD_CACHE_URL}" ]]; then
+  if [[ -z "${BUILD_CACHE_PUT_URL}" ]]; then
     return 0
   fi
   local save_dir="${cache_in}"
@@ -174,7 +174,7 @@ save_build_cache() {
   (
     echo $'\e[1G----->' Saving Docker build cache...
     tar --create --directory "${save_dir}" --use-compress-program="${compress}" . \
-      | curl --fail --silent --retry 3 --output "$(mktemp)" --request PUT --upload-file - "${BUILD_CACHE_URL}" \
+      | curl --fail --silent --retry 3 --output "$(mktemp)" --request PUT --upload-file - "${BUILD_CACHE_PUT_URL}" \
       || echo $'\e[1G----->' "WARN: failed to save Docker build cache"
   ) &
   wait "$!" || true

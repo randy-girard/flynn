@@ -7,14 +7,17 @@
 package blobstoreauth
 
 import (
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -152,53 +155,114 @@ func readSecret(path string) string {
 	return strings.TrimSpace(string(data))
 }
 
-// CacheToken is the HMAC-SHA256 hex token used on BUILD_CACHE_URL.
-func CacheToken(appID, key string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(appID))
-	return hex.EncodeToString(mac.Sum(nil))
+// CacheOp is the operation a cache token authorizes.
+type CacheOp string
+
+const (
+	// CacheRead authorizes GET and HEAD of one cache object.
+	CacheRead CacheOp = "read"
+	// CacheWrite authorizes PUT of one cache object.
+	CacheWrite CacheOp = "write"
+)
+
+// CacheTokenTTL is how long a signed cache URL stays valid. It covers the
+// build timeout (at most 30 minutes) plus time spent waiting for a host.
+const CacheTokenTTL = 2 * time.Hour
+
+// cacheKeyInfo is the HKDF context for cache token signing keys, so a cache
+// token is never an HMAC under the raw cluster key.
+const cacheKeyInfo = "flynn blobstore build cache token v1"
+
+func cacheSigningKey(key string) []byte {
+	k, err := hkdf.Key(sha256.New, []byte(key), nil, cacheKeyInfo, sha256.Size)
+	if err != nil {
+		// Only possible for an over-long output length.
+		panic(err)
+	}
+	return k
 }
 
-// CacheAppID returns the app ID encoded in a signed cache path
-// (/{appID}-cache.tgz or /{appID}-docker-cache.tgz).
-func CacheAppID(path string) (string, bool) {
+func cacheMAC(signingKey []byte, appID, name string, op CacheOp, exp int64) []byte {
+	mac := hmac.New(sha256.New, signingKey)
+	fmt.Fprintf(mac, "%s|%s|%s|%d", appID, name, op, exp)
+	return mac.Sum(nil)
+}
+
+// CacheToken is the hex HMAC-SHA256 over appID|name|op|exp, keyed by a key
+// derived from the cluster key with HKDF. name is "cache" or "docker-cache".
+func CacheToken(appID, name string, op CacheOp, exp time.Time, key string) string {
+	return hex.EncodeToString(cacheMAC(cacheSigningKey(key), appID, name, op, exp.Unix()))
+}
+
+// SignedCacheURL returns base/{appID}-{name}.tgz with the token and exp query
+// parameters ValidCacheRequest checks.
+func SignedCacheURL(base, appID, name string, op CacheOp, exp time.Time, key string) string {
+	return fmt.Sprintf("%s/%s-%s.tgz?token=%s&exp=%d", base, appID, name, CacheToken(appID, name, op, exp, key), exp.Unix())
+}
+
+// CacheObject returns the app ID and object name ("cache" or "docker-cache")
+// encoded in a signed cache path (/{appID}-cache.tgz or
+// /{appID}-docker-cache.tgz).
+func CacheObject(path string) (appID, name string, ok bool) {
 	base := strings.TrimPrefix(path, "/")
 	if base == "" || strings.Contains(base, "/") {
-		return "", false
+		return "", "", false
 	}
-	for _, suffix := range []string{"-docker-cache.tgz", "-cache.tgz"} {
-		if strings.HasSuffix(base, suffix) {
-			id := strings.TrimSuffix(base, suffix)
+	for _, o := range []struct{ suffix, name string }{
+		{"-docker-cache.tgz", "docker-cache"},
+		{"-cache.tgz", "cache"},
+	} {
+		if strings.HasSuffix(base, o.suffix) {
+			id := strings.TrimSuffix(base, o.suffix)
 			if id != "" {
-				return id, true
+				return id, o.name, true
 			}
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
-// ValidCacheToken reports whether token is the HMAC of the app ID in path
-// under any of keys.
-func ValidCacheToken(path, token string, keys []string) bool {
-	if token == "" || len(keys) == 0 {
+// CacheAppID returns the app ID encoded in a signed cache path.
+func CacheAppID(path string) (string, bool) {
+	id, _, ok := CacheObject(path)
+	return id, ok
+}
+
+// ValidCacheRequest reports whether token and exp authorize method on the
+// cache object at path under any of keys at time now. GET and HEAD need a read
+// token, PUT needs a write token, and nothing else is allowed.
+func ValidCacheRequest(method, path, token, exp string, keys []string, now time.Time) bool {
+	if token == "" || exp == "" || len(keys) == 0 {
 		return false
 	}
-	appID, ok := CacheAppID(path)
+	var op CacheOp
+	switch method {
+	case http.MethodGet, http.MethodHead:
+		op = CacheRead
+	case http.MethodPut:
+		op = CacheWrite
+	default:
+		return false
+	}
+	appID, name, ok := CacheObject(path)
 	if !ok {
+		return false
+	}
+	expUnix, err := strconv.ParseInt(exp, 10, 64)
+	if err != nil || !now.Before(time.Unix(expUnix, 0)) {
 		return false
 	}
 	got, err := hex.DecodeString(token)
 	if err != nil {
 		return false
 	}
+	valid := false
 	for _, key := range keys {
-		mac := hmac.New(sha256.New, []byte(key))
-		mac.Write([]byte(appID))
-		if hmac.Equal(got, mac.Sum(nil)) {
-			return true
+		if hmac.Equal(got, cacheMAC(cacheSigningKey(key), appID, name, op, expUnix)) {
+			valid = true
 		}
 	}
-	return false
+	return valid
 }
 
 // IsPublicPath is reachable without credentials (health/status).

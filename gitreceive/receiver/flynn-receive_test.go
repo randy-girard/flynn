@@ -4,15 +4,13 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -25,6 +23,7 @@ import (
 	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -87,6 +86,9 @@ func TestDockerBuildJobEnv(t *testing.T) {
 	}
 	if !strings.Contains(env["BUILD_CACHE_URL"], "app-1-docker-cache.tgz") {
 		t.Fatalf("BUILD_CACHE_URL = %q", env["BUILD_CACHE_URL"])
+	}
+	if !strings.Contains(env["BUILD_CACHE_PUT_URL"], "app-1-docker-cache.tgz") || env["BUILD_CACHE_PUT_URL"] == env["BUILD_CACHE_URL"] {
+		t.Fatalf("BUILD_CACHE_PUT_URL = %q", env["BUILD_CACHE_PUT_URL"])
 	}
 
 	env = dockerBuildJobEnv("k", "a", "v", map[string]string{"DOCKERFILE": "Dockerfile.prod"}, "app-1")
@@ -568,24 +570,48 @@ func TestGitPushFilterSplitsChunks(t *testing.T) {
 	}
 }
 
-func TestSignedBuildCacheURLHMAC(t *testing.T) {
-	mac := hmac.New(sha256.New, []byte("cluster-key"))
-	mac.Write([]byte("app-1"))
-	wantTok := hex.EncodeToString(mac.Sum(nil))
-	got := signedBuildCacheURL("app-1", "cluster-key")
-	if !strings.HasPrefix(got, blobstoreURL+"/app-1-cache.tgz?token=") {
-		t.Fatalf("%s", got)
+func TestBuildCacheEnvSignsExpiringSeparateURLs(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	env := map[string]string{}
+	addBuildCacheEnv(env, "app-1", "cluster-key", "cache", now)
+
+	get, put := env["BUILD_CACHE_URL"], env["BUILD_CACHE_PUT_URL"]
+	if get == "" || put == "" || get == put {
+		t.Fatalf("want distinct read and write URLs, got %q and %q", get, put)
 	}
-	if !strings.HasSuffix(got, wantTok) {
-		t.Fatalf("token %s", got)
+	for _, tc := range []struct{ raw, method string }{{get, "GET"}, {put, "PUT"}} {
+		if !strings.HasPrefix(tc.raw, blobstoreURL+"/app-1-cache.tgz?") {
+			t.Fatalf("%s", tc.raw)
+		}
+		u, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := u.Query()
+		if !blobstoreauth.ValidCacheRequest(tc.method, u.Path, q.Get("token"), q.Get("exp"), []string{"cluster-key"}, now) {
+			t.Fatalf("%s URL does not verify for %s: %s", tc.method, tc.method, tc.raw)
+		}
+		other := "PUT"
+		if tc.method == "PUT" {
+			other = "GET"
+		}
+		if blobstoreauth.ValidCacheRequest(other, u.Path, q.Get("token"), q.Get("exp"), []string{"cluster-key"}, now) {
+			t.Fatalf("%s URL must not authorize %s", tc.method, other)
+		}
+		if blobstoreauth.ValidCacheRequest(tc.method, u.Path, q.Get("token"), q.Get("exp"), []string{"cluster-key"}, now.Add(blobstoreauth.CacheTokenTTL+time.Minute)) {
+			t.Fatalf("%s URL must expire", tc.method)
+		}
 	}
-	other := signedBuildCacheURL("app-1", "other-key")
-	if other == got {
+
+	dockerEnv := map[string]string{}
+	addBuildCacheEnv(dockerEnv, "app-1", "cluster-key", "docker-cache", now)
+	if !strings.Contains(dockerEnv["BUILD_CACHE_URL"], "app-1-docker-cache.tgz") || !strings.Contains(dockerEnv["BUILD_CACHE_PUT_URL"], "app-1-docker-cache.tgz") {
+		t.Fatalf("docker cache env %v", dockerEnv)
+	}
+	other := map[string]string{}
+	addBuildCacheEnv(other, "app-1", "other-key", "cache", now)
+	if other["BUILD_CACHE_URL"] == get {
 		t.Fatal("different keys must produce different tokens")
-	}
-	docker := signedDockerBuildCacheURL("app-1", "cluster-key")
-	if !strings.Contains(docker, "app-1-docker-cache.tgz") {
-		t.Fatalf("docker cache url %s", docker)
 	}
 }
 

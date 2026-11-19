@@ -267,9 +267,14 @@ cluster services the build needs, including blobstore. Blobstore HTTP
 requires the cluster `AUTH_KEY` / `CONTROLLER_KEY` (Basic or Bearer) for
 object GET/PUT/DELETE. `/.well-known/status` and `HEAD /` stay
 unauthenticated so bootstrap and health checks work. Per-app
-`BUILD_CACHE_URL` query tokens are HMAC-SHA256 of the app ID under the
-cluster key and are verified server-side; a token is valid only for that
-app's `-cache.tgz` / `-docker-cache.tgz` objects. A scoped
+build cache URLs carry query tokens that the blobstore verifies server-side.
+Each token is an HMAC-SHA256 over `appID|object|operation|exp`, keyed by a
+subkey derived from the cluster key with HKDF, and it stops working at `exp`
+(two hours after the build starts). `BUILD_CACHE_URL` can only read
+(`GET`/`HEAD`) and `BUILD_CACHE_PUT_URL` can only write (`PUT`); each is valid
+only for that app's `-cache.tgz` or `-docker-cache.tgz` object, as named in the
+token. The slugbuilder script does the cache download and upload as root and
+unsets both URLs before any buildpack runs, so buildpack code never sees them. A scoped
 `build:artifacts` token (the same one create-artifact uses for the
 controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only. Neither a cache
 token nor a build token may send `Blobstore-Copy-From` (the copy source is not

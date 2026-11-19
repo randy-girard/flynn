@@ -3,9 +3,12 @@ package main
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -93,15 +96,23 @@ func TestProtectAcceptsClusterKeyBasicAndBearer(t *testing.T) {
 	}
 }
 
+// cacheQuery is the query string of a signed cache URL for app-1's tarball.
+func cacheQuery(key string, op blobstoreauth.CacheOp, exp time.Time) string {
+	u := blobstoreauth.SignedCacheURL("", "app-1", "cache", op, exp, key)
+	return u[strings.Index(u, "?"):]
+}
+
 func TestProtectSignedCacheURL(t *testing.T) {
 	key := "cluster-key"
 	srv := authServer(t, []string{key}, authorizer.New([]string{key}, nil, nil, 0))
 	defer srv.Close()
 
-	tok := blobstoreauth.CacheToken("app-1", key)
-	okURL := srv.URL + "/app-1-cache.tgz?token=" + tok
-	for _, method := range []string{http.MethodGet, http.MethodPut} {
-		req, err := http.NewRequest(method, okURL, strings.NewReader("x"))
+	exp := time.Now().Add(time.Hour)
+	readQ := cacheQuery(key, blobstoreauth.CacheRead, exp)
+	writeQ := cacheQuery(key, blobstoreauth.CacheWrite, exp)
+	do := func(method, path string) int {
+		t.Helper()
+		req, err := http.NewRequest(method, srv.URL+path, strings.NewReader("x"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,64 +121,66 @@ func TestProtectSignedCacheURL(t *testing.T) {
 			t.Fatal(err)
 		}
 		res.Body.Close()
-		if res.StatusCode != http.StatusOK {
-			t.Fatalf("signed cache %s = %d", method, res.StatusCode)
+		return res.StatusCode
+	}
+
+	for _, c := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodGet, "/app-1-cache.tgz" + readQ, http.StatusOK},
+		{http.MethodHead, "/app-1-cache.tgz" + readQ, http.StatusOK},
+		{http.MethodPut, "/app-1-cache.tgz" + writeQ, http.StatusOK},
+		// BUILD-07: read and write are separate capabilities.
+		{http.MethodPut, "/app-1-cache.tgz" + readQ, http.StatusUnauthorized},
+		{http.MethodGet, "/app-1-cache.tgz" + writeQ, http.StatusUnauthorized},
+		// Tampered token.
+		{http.MethodGet, "/app-1-cache.tgz" + readQ + "ff", http.StatusUnauthorized},
+		// Valid token on another app's cache.
+		{http.MethodGet, "/app-2-cache.tgz" + readQ, http.StatusUnauthorized},
+		// Cache token cannot DELETE or read non-cache paths.
+		{http.MethodDelete, "/app-1-cache.tgz" + writeQ, http.StatusUnauthorized},
+		{http.MethodGet, "/slugs/layers/x.squashfs" + readQ, http.StatusUnauthorized},
+		// The old unsigned-expiry token no longer works.
+		{http.MethodGet, "/app-1-cache.tgz?token=" + legacyCacheToken("app-1", key), http.StatusUnauthorized},
+	} {
+		if got := do(c.method, c.path); got != c.want {
+			t.Errorf("%s %s = %d, want %d", c.method, c.path, got, c.want)
 		}
 	}
+}
 
-	// Tampered token.
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/app-1-cache.tgz?token="+tok+"ff", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("tampered token = %d", res.StatusCode)
-	}
+// BUILD-07: a cache URL stops working at its expiry.
+func TestProtectExpiredCacheURL(t *testing.T) {
+	key := "cluster-key"
+	srv := authServer(t, []string{key}, authorizer.New([]string{key}, nil, nil, 0))
+	defer srv.Close()
 
-	// Valid token on another app's cache.
-	req, err = http.NewRequest(http.MethodGet, srv.URL+"/app-2-cache.tgz?token="+tok, nil)
-	if err != nil {
-		t.Fatal(err)
+	for _, op := range []blobstoreauth.CacheOp{blobstoreauth.CacheRead, blobstoreauth.CacheWrite} {
+		method := http.MethodGet
+		if op == blobstoreauth.CacheWrite {
+			method = http.MethodPut
+		}
+		q := cacheQuery(key, op, time.Now().Add(-time.Minute))
+		req, err := http.NewRequest(method, srv.URL+"/app-1-cache.tgz"+q, strings.NewReader("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expired %s cache URL = %d, want 401", op, res.StatusCode)
+		}
 	}
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("cross-app cache token = %d", res.StatusCode)
-	}
+}
 
-	// Cache token cannot DELETE or read non-cache paths.
-	req, err = http.NewRequest(http.MethodDelete, okURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("cache token DELETE = %d", res.StatusCode)
-	}
-	req, err = http.NewRequest(http.MethodGet, srv.URL+"/slugs/layers/x.squashfs?token="+tok, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("cache token on slug path = %d", res.StatusCode)
-	}
+func legacyCacheToken(appID, key string) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write([]byte(appID))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func TestProtectPublicEndpoints(t *testing.T) {
@@ -303,15 +316,15 @@ func TestProtectCacheTokenRejectsCopyFrom(t *testing.T) {
 	srv := authServer(t, []string{key}, authorizer.New([]string{key}, nil, nil, 0))
 	defer srv.Close()
 
-	tok := blobstoreauth.CacheToken("app-1", key)
+	q := cacheQuery(key, blobstoreauth.CacheWrite, time.Now().Add(time.Hour))
 	for _, src := range []string{"/repos/victim.tar", "/app-2-cache.tgz", "/slugs/layers/x.squashfs"} {
-		got := copyFromStatus(t, srv, "/app-1-cache.tgz?token="+tok, func(*http.Request) {}, src)
+		got := copyFromStatus(t, srv, "/app-1-cache.tgz"+q, func(*http.Request) {}, src)
 		if got < 400 {
 			t.Fatalf("cache token Copy-From %s = %d, want >= 400", src, got)
 		}
 	}
 	// Plain PUT with the same token still works.
-	if got := copyFromStatus(t, srv, "/app-1-cache.tgz?token="+tok, func(*http.Request) {}); got != http.StatusOK {
+	if got := copyFromStatus(t, srv, "/app-1-cache.tgz"+q, func(*http.Request) {}); got != http.StatusOK {
 		t.Fatalf("cache token plain PUT = %d", got)
 	}
 }
