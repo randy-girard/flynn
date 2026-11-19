@@ -110,7 +110,10 @@ Synchronous replication stays off, and `min-replicas-to-write` stays unset.
 **Remove** stops replication and deletes the replica, including while it is
 still copying. Unfollow still leaves a standalone copy. Auto-failover
 places the replica on another host, promotes it if the primary job is gone, then
-recreates a replica. When an upgrade replaces a follower, the replacement takes
+recreates a replica. The plugin worker holding the failover lease promotes only
+after it has itself seen the primary job gone on every 5-second check for 30
+seconds; a lease change, or a gap of more than 10 seconds between checks,
+starts the 30 seconds over. When an upgrade replaces a follower, the replacement takes
 the old follower's name and is scaled back up to its original process count; a
 failed switch restores both apps. A primary cannot be deleted while it still has
 followers.
