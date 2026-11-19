@@ -93,6 +93,14 @@ begin_tag_fetch_test() {
       printf '%s\n' "${FLYNN_ORIGIN_URL}"
       return 0
     fi
+    if [[ "$1" == "fetch" ]]; then
+      printf 'GIT_SSH_COMMAND=%s\n' "${GIT_SSH_COMMAND-}" >>"${FLYNN_FETCH_LOG}"
+      local known_hosts
+      known_hosts="$(printf '%s\n' "${GIT_SSH_COMMAND-}" | grep -o 'UserKnownHostsFile=[^ ]*' | head -n1 | cut -d= -f2-)"
+      if [[ -n "${known_hosts}" && -f "${known_hosts}" ]]; then
+        sed 's/^/known_hosts: /' "${known_hosts}" >>"${FLYNN_FETCH_LOG}"
+      fi
+    fi
     if [[ "$1" == "fetch" && "$2" == "--tags" && "$3" == "--force" && "$4" == "origin" ]]; then
       if [[ "${FLYNN_ORIGIN_FETCH_OK}" == "1" ]]; then
         return 0
@@ -145,7 +153,7 @@ assert_log_order() {
   fi
 }
 
-@test "flynn_fetch_release_tags keyscans and falls back to https when github ssh fetch fails" {
+@test "flynn_fetch_release_tags falls back to https when github ssh fetch fails" {
   begin_tag_fetch_test
   FLYNN_HTTPS_FETCH_OK="1"
   run flynn_fetch_release_tags
@@ -155,14 +163,6 @@ assert_log_order() {
     printf '%s\n' "${output}" >&2
     return 1
   fi
-  if ! grep -F -q "ssh-keygen -F github.com" "${FLYNN_FETCH_LOG}"; then
-    echo "expected ssh-keygen -F github.com" >&2
-    cat "${FLYNN_FETCH_LOG}" >&2
-    return 1
-  fi
-  assert_log_order "${FLYNN_FETCH_LOG}" \
-    "ssh-keyscan -t ed25519 github.com" \
-    "git fetch --tags --force origin"
   assert_log_order "${FLYNN_FETCH_LOG}" \
     "git fetch --tags --force origin" \
     "git fetch --tags --force https://github.com/randy-girard/flynn.git +refs/tags/*:refs/tags/*"
@@ -174,11 +174,6 @@ assert_log_order() {
   FLYNN_GITHUB_HOST_KNOWN="1"
   run flynn_fetch_release_tags
   assert_success
-  if ! grep -F -q "ssh-keygen -F github.com" "${FLYNN_FETCH_LOG}"; then
-    echo "expected ssh-keygen -F github.com before deciding not to keyscan" >&2
-    cat "${FLYNN_FETCH_LOG}" >&2
-    return 1
-  fi
   if ! grep -F -q "git fetch --tags --force origin" "${FLYNN_FETCH_LOG}"; then
     echo "origin was not fetched" >&2
     cat "${FLYNN_FETCH_LOG}" >&2
@@ -186,10 +181,6 @@ assert_log_order() {
   fi
   if grep -F "https://" "${FLYNN_FETCH_LOG}"; then
     echo "https was fetched after a successful origin fetch" >&2
-    return 1
-  fi
-  if grep -F "ssh-keyscan" "${FLYNN_FETCH_LOG}"; then
-    echo "ssh-keyscan ran even though github.com was already known" >&2
     return 1
   fi
 }
@@ -218,8 +209,86 @@ assert_log_order() {
   run flynn_fetch_release_tags
   assert_success
   assert_log_order "${FLYNN_FETCH_LOG}" \
-    "ssh-keyscan -t ed25519 github.com" \
+    "git fetch --tags --force origin" \
     "git fetch --tags --force https://github.com/randy-girard/flynn.git +refs/tags/*:refs/tags/*"
+}
+
+# GitHub's published ed25519 host key
+# (https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints,
+# also `ssh_keys` in https://api.github.com/meta).
+GITHUB_ED25519_HOST_KEY="github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
+@test "flynn_fetch_release_tags never calls ssh-keyscan for github ssh remotes" {
+  local url
+  for url in "git@github.com:randy-girard/flynn.git" "ssh://git@github.com/randy-girard/flynn.git"; do
+    begin_tag_fetch_test
+    FLYNN_ORIGIN_URL="${url}"
+    FLYNN_GITHUB_HOST_KNOWN="0"
+    FLYNN_HTTPS_FETCH_OK="1"
+    run flynn_fetch_release_tags
+    assert_success
+    if grep -F "ssh-keyscan" "${FLYNN_FETCH_LOG}"; then
+      echo "${url}: ssh-keyscan trusted GitHub's host key on first use" >&2
+      return 1
+    fi
+    if [[ -e "${HOME}/.ssh/known_hosts" ]]; then
+      echo "${url}: wrote ${HOME}/.ssh/known_hosts" >&2
+      cat "${HOME}/.ssh/known_hosts" >&2
+      return 1
+    fi
+  done
+}
+
+@test "flynn_fetch_release_tags pins GitHub's published ed25519 key for ssh fetches" {
+  begin_tag_fetch_test
+  FLYNN_ORIGIN_FETCH_OK="1"
+  run flynn_fetch_release_tags
+  assert_success
+  local ssh_cmd
+  ssh_cmd="$(grep -m1 '^GIT_SSH_COMMAND=' "${FLYNN_FETCH_LOG}")"
+  for opt in "StrictHostKeyChecking=yes" "UserKnownHostsFile=" "GlobalKnownHostsFile=/dev/null" "BatchMode=yes"; do
+    if [[ "${ssh_cmd}" != *"${opt}"* ]]; then
+      echo "ssh command lacks ${opt}: ${ssh_cmd}" >&2
+      return 1
+    fi
+  done
+  if ! grep -F -x -q "known_hosts: ${GITHUB_ED25519_HOST_KEY}" "${FLYNN_FETCH_LOG}"; then
+    echo "pinned known_hosts file does not hold GitHub's published ed25519 key" >&2
+    cat "${FLYNN_FETCH_LOG}" >&2
+    return 1
+  fi
+  if [[ "$(grep -c '^known_hosts: ' "${FLYNN_FETCH_LOG}")" != "1" ]]; then
+    echo "pinned known_hosts file holds extra keys" >&2
+    cat "${FLYNN_FETCH_LOG}" >&2
+    return 1
+  fi
+}
+
+@test "flynn_fetch_release_tags removes the pinned known_hosts file" {
+  begin_tag_fetch_test
+  FLYNN_ORIGIN_FETCH_OK="1"
+  run flynn_fetch_release_tags
+  assert_success
+  local known_hosts
+  known_hosts="$(grep -m1 '^GIT_SSH_COMMAND=' "${FLYNN_FETCH_LOG}" | grep -o 'UserKnownHostsFile=[^ ]*' | cut -d= -f2-)"
+  [[ -n "${known_hosts}" ]]
+  if [[ -e "${known_hosts}" ]]; then
+    echo "left ${known_hosts} behind" >&2
+    return 1
+  fi
+}
+
+@test "flynn_fetch_release_tags leaves non-github ssh remotes on the user's known_hosts" {
+  begin_tag_fetch_test
+  FLYNN_ORIGIN_URL="git@gitlab.com:acme/widgets.git"
+  FLYNN_ORIGIN_FETCH_OK="1"
+  run flynn_fetch_release_tags
+  assert_success
+  if grep '^GIT_SSH_COMMAND=' "${FLYNN_FETCH_LOG}" | grep -E -q 'UserKnownHostsFile|GlobalKnownHostsFile'; then
+    echo "non-github remote got the GitHub pin" >&2
+    cat "${FLYNN_FETCH_LOG}" >&2
+    return 1
+  fi
 }
 
 @test "build.sh fetches tags with flynn_fetch_release_tags" {

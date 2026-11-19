@@ -122,6 +122,13 @@ $ ./build.sh cluster
 $ ./build.sh --version vYYYYMMDD.N cluster
 ```
 
+Without `--version`, `build.sh` fetches tags from `origin` and picks the next
+unused `vYYYYMMDD.N`. For a github.com SSH remote it checks GitHub's published
+ed25519 host key (pinned in `script/lib/release.sh`) in a throwaway
+known_hosts file. It never runs `ssh-keyscan` or edits `~/.ssh/known_hosts`.
+If the SSH fetch fails (no GitHub key on the builder, or a host key mismatch)
+it retries over https. If both fail it warns and uses local tags.
+
 Phases, in order: `prep` → `binaries` → `start` → `toolchain` → `apps` → `stop`.
 CI splits those across jobs; locally they must stay on the same machine so
 `/var/lib/flynn/layer-cache` and `build/images.json` carry forward.

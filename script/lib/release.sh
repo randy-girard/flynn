@@ -55,12 +55,19 @@ flynn_github_https_url() {
   printf 'https://github.com/%s.git\n' "${repo}"
 }
 
+# GitHub's published ed25519 host key. Source:
+# https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+# (also `ssh_keys` in https://api.github.com/meta). If GitHub rotates it, the
+# SSH fetch fails host key checking and the https fallback still works.
+FLYNN_GITHUB_SSH_HOST_KEY="github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
 # flynn_fetch_release_tags updates local tags from origin.
-# A github.com SSH remote gets a host key without prompting, because the
-# builder usually has no GitHub key. If that fetch fails, GitHub remotes
-# retry over https. Total failure prints a warning and the underlying error.
+# A github.com SSH remote is checked against FLYNN_GITHUB_SSH_HOST_KEY only,
+# in a throwaway known_hosts file. It never runs ssh-keyscan or writes
+# ~/.ssh/known_hosts. If that fetch fails, GitHub remotes retry over https.
+# Total failure prints a warning and the underlying error.
 flynn_fetch_release_tags() {
-  local origin_url https_url err_file origin_err https_err
+  local origin_url https_url err_file origin_err https_err known_hosts=""
   local git_ssh="ssh -o BatchMode=yes"
   err_file="$(mktemp)"
   if ! origin_url="$(git remote get-url origin 2>"${err_file}")"; then
@@ -72,28 +79,25 @@ flynn_fetch_release_tags() {
 
   case "${origin_url}" in
     git@github.com:*|ssh://git@github.com/*)
-      if ! ssh-keygen -F github.com >/dev/null 2>&1; then
-        if mkdir -p "${HOME}/.ssh"; then
-          chmod 700 "${HOME}/.ssh" || true
-          ssh-keyscan -t ed25519 github.com >>"${HOME}/.ssh/known_hosts" || true
-        fi
-      fi
+      known_hosts="$(mktemp)"
+      printf '%s\n' "${FLYNN_GITHUB_SSH_HOST_KEY}" >"${known_hosts}"
+      git_ssh="${git_ssh} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$(printf '%q' "${known_hosts}") -o GlobalKnownHostsFile=/dev/null"
       ;;
   esac
 
   if GIT_SSH_COMMAND="${git_ssh}" git fetch --tags --force origin 2>"${err_file}"; then
-    rm -f "${err_file}"
+    rm -f "${err_file}" ${known_hosts:+"${known_hosts}"}
     return 0
   fi
   origin_err="$(cat "${err_file}")"
 
   if https_url="$(flynn_github_https_url "${origin_url}")"; then
     if GIT_SSH_COMMAND="${git_ssh}" git fetch --tags --force "${https_url}" '+refs/tags/*:refs/tags/*' 2>"${err_file}"; then
-      rm -f "${err_file}"
+      rm -f "${err_file}" ${known_hosts:+"${known_hosts}"}
       return 0
     fi
     https_err="$(cat "${err_file}")"
-    rm -f "${err_file}"
+    rm -f "${err_file}" ${known_hosts:+"${known_hosts}"}
     echo "Warning: Could not fetch tags from remote" >&2
     if [[ -n "${origin_err}" ]]; then
       printf '%s\n' "${origin_err}" >&2
@@ -104,7 +108,7 @@ flynn_fetch_release_tags() {
     return 1
   fi
 
-  rm -f "${err_file}"
+  rm -f "${err_file}" ${known_hosts:+"${known_hosts}"}
   echo "Warning: Could not fetch tags from remote" >&2
   if [[ -n "${origin_err}" ]]; then
     printf '%s\n' "${origin_err}" >&2

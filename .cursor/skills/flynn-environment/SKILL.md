@@ -50,7 +50,7 @@ Default builder RAM is 30000 MB and each node is 6144 MB. The subnets can both b
 
 Dev update rebuilds on `dev-builder`, halts it, then `flynn-host update` on the running nodes. It does not redeploy plugins. Use `script/vagrant.sh plugin <name>` for a sibling `../flynn-plugin-<name>` checkout.
 
-If a dev build sits on `Fetching latest tags from remote` with no further output, `build.sh` is blocked on the GitHub host key inside the guest (`git fetch --tags`, stderr discarded). On the builder, as root, append `ssh-keyscan -t ed25519 github.com` to `/root/.ssh/known_hosts`. Do not try to answer that prompt from the laptop tty.
+`build.sh` fetches tags with `flynn_fetch_release_tags` (`script/lib/release.sh`). A github.com SSH remote is checked against GitHub's pinned ed25519 host key in batch mode, then falls back to https, so it cannot sit on a host key prompt. Do not add `ssh-keyscan github.com` output to `known_hosts` on the builder: that trusts whatever key answers first.
 
 ## macOS unit tests
 
