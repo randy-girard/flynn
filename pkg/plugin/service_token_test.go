@@ -1,11 +1,17 @@
 package plugin
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
+	api "github.com/randy-girard/flynn/controller/api"
 	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/servicetoken"
 	"github.com/randy-girard/flynn/controller/tokensigner"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestApplyServiceTokenStripsClusterKey(t *testing.T) {
@@ -70,5 +76,108 @@ func TestApplyServiceTokenFailsWithoutSigner(t *testing.T) {
 	}
 	if _, ok := env["CONTROLLER_KEY"]; !ok {
 		t.Fatal("a failed mint must not be the path that strips the key before the error is returned")
+	}
+}
+
+// signedServiceToken signs a service token with explicit issue and expiry
+// times so a test can build an expired or nearly expired one.
+func signedServiceToken(t *testing.T, priv, scope string, issued, expires time.Time) string {
+	t.Helper()
+	signer, err := tokensigner.ParseSigningKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := signer.Sign(&api.AccessToken{
+		UserId:     "billing",
+		UserEmail:  "billing@flynn.local",
+		IssueTime:  timestamppb.New(issued),
+		ExpireTime: timestamppb.New(expires),
+		Scopes:     []string{scope},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+func tokenExpiry(t *testing.T, tok string) time.Time {
+	t.Helper()
+	at, err := servicetoken.Inspect(tok)
+	if err != nil {
+		t.Fatalf("minted token is not parseable: %v", err)
+	}
+	return at.ExpireTime.AsTime()
+}
+
+func TestApplyServiceTokenRemintsExpiredToken(t *testing.T) {
+	_, priv, err := tokensigner.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := map[string]string{"ACCESS_TOKEN_SIGNING_KEY": priv}
+	spec := &ServiceToken{Env: "QUOTA_TOKEN", Scope: "account:quota", Caller: "billing"}
+	now := time.Now()
+	fresh := signedServiceToken(t, priv, "account:quota", now.Add(-time.Hour), now.Add(100*24*time.Hour))
+	cases := map[string]string{
+		"expired":     signedServiceToken(t, priv, "account:quota", now.Add(-170*24*time.Hour), now.Add(-time.Hour)),
+		"near expiry": signedServiceToken(t, priv, "account:quota", now.Add(-170*24*time.Hour), now.Add(5*24*time.Hour)),
+		"wrong scope": signedServiceToken(t, priv, "acme:issue", now.Add(-time.Hour), now.Add(100*24*time.Hour)),
+		"garbage":     "not-a-token",
+	}
+	for name, old := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := map[string]string{"QUOTA_TOKEN": old}
+			prev := map[string]string{"QUOTA_TOKEN": old}
+			if err := ApplyServiceToken(env, prev, cluster, spec); err != nil {
+				t.Fatal(err)
+			}
+			if env["QUOTA_TOKEN"] == old {
+				t.Fatal("token was reused")
+			}
+			if exp := tokenExpiry(t, env["QUOTA_TOKEN"]); exp.Before(now.Add(100 * 24 * time.Hour)) {
+				t.Fatalf("new token expires too soon: %v", exp)
+			}
+		})
+	}
+	t.Run("healthy token is kept", func(t *testing.T) {
+		env := map[string]string{"QUOTA_TOKEN": fresh}
+		if err := ApplyServiceToken(env, map[string]string{"QUOTA_TOKEN": fresh}, cluster, spec); err != nil {
+			t.Fatal(err)
+		}
+		if env["QUOTA_TOKEN"] != fresh {
+			t.Fatal("a healthy token must be preserved")
+		}
+	})
+	t.Run("expired token without signer fails", func(t *testing.T) {
+		old := cases["expired"]
+		env := map[string]string{"QUOTA_TOKEN": old}
+		if err := ApplyServiceToken(env, map[string]string{"QUOTA_TOKEN": old}, nil, spec); err == nil {
+			t.Fatal("an expired token that cannot be re-minted must fail the apply")
+		}
+	})
+}
+
+func TestApplyServiceTokenRecomputesAuthHash(t *testing.T) {
+	_, priv, err := tokensigner.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &ServiceToken{Env: "QUOTA_TOKEN", Scope: "account:quota", Caller: "billing", AuthHashEnv: "BILLING_AUTH_HASH", Strip: []string{"CONTROLLER_KEY"}}
+	cluster := map[string]string{"ACCESS_TOKEN_SIGNING_KEY": priv}
+	env := map[string]string{"CONTROLLER_KEY": "rotated-key", "BILLING_AUTH_HASH": "stale-hash"}
+	if err := ApplyServiceToken(env, nil, cluster, spec); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("rotated-key"))
+	if want := hex.EncodeToString(sum[:]); env["BILLING_AUTH_HASH"] != want {
+		t.Fatalf("hash = %q, want %q", env["BILLING_AUTH_HASH"], want)
+	}
+	// No key available: keep what the previous release had.
+	env = map[string]string{"BILLING_AUTH_HASH": "kept"}
+	if err := ApplyServiceToken(env, map[string]string{"QUOTA_TOKEN": signedServiceToken(t, priv, "account:quota", time.Now(), time.Now().Add(150*24*time.Hour))}, cluster, spec); err != nil {
+		t.Fatal(err)
+	}
+	if env["BILLING_AUTH_HASH"] != "kept" {
+		t.Fatalf("hash = %q, want it kept when no cluster key is present", env["BILLING_AUTH_HASH"])
 	}
 }

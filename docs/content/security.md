@@ -346,6 +346,11 @@ the cluster key from `flynn-host` because the release stores
 `BILLING_AUTH_HASH` (sha256 of that key), not the key. A cluster without
 the billing plugin boots and accepts git pushes. Rotate with
 `flynn-host token:rotate billing-plugin QUOTA_TOKEN account:quota`.
+`plugin:update` re-mints `QUOTA_TOKEN` (and `ACME_TOKEN`) when the stored
+token is expired, unparseable, carries a different scope, or expires within
+30 days. A healthy token is kept. It also recomputes `BILLING_AUTH_HASH` from
+the current cluster key on every update. `flynn-host production:check` warns
+(`service-token`) before a token reaches that window.
 Until that release is deployed, a billing process that still has
 `CONTROLLER_KEY` is accepted.
 

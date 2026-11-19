@@ -242,7 +242,9 @@ are the usual candidates; Kafka and ClickHouse stay false until they do).
 Install reads `flynn-plugin.json` only. A `service_token` object mints
 `env` with `scope` (`account:quota` or `acme:issue`) from the controller
 signing key, then deletes every name in `strip` so that release does not
-keep `CONTROLLER_KEY`. Catalog plugins log that their jobs
+keep `CONTROLLER_KEY`. Update keeps the stored token only while it is valid
+for that scope and more than 30 days from expiry; otherwise it mints a new
+one, and it recomputes `auth_hash_env` from the current cluster key. Catalog plugins log that their jobs
 receive `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY`, and access-token keys
 (cluster-admin equivalent) and continue. Billing and ACME are the
 exceptions: after install their releases have the service token instead. A third-party source (path, git

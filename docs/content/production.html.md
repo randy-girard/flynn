@@ -35,6 +35,7 @@ not migrate the blobstore, set `flynn-max-processes` or
 
 | Line | Meaning |
 | --- | --- |
+| `service-token` | Reads the billing and letsencrypt plugin releases. Warns when `QUOTA_TOKEN` or `ACME_TOKEN` is expired, unparseable, the wrong scope, or within 30 days of expiry. No row when healthy or not installed. Fix with `plugin:update` or `token:rotate`. |
 | `tenancy` | `GET /tenancy` (`cluster_settings.tenancy_mode`). A controller error is `fail` and is not treated as `self_hosted`. |
 | `placement` | `GET /cluster/placement` (`cluster_settings.workload_placement`). `mixed` is `ok`. `split` with no host that is not shutting down and tagged `flynn-role=core` is `fail`. `split` with no `flynn-role=app` host is `warn`. A non-omni job on the wrong role is `warn` and names the app. The check does not write the mode or any tag. Set it with `flynn-host placement:mode` and `flynn-host init --role`. |
 | `blobstore` | Prints the default name only, never `BACKEND_*` values. Empty `DEFAULT_BACKEND`, a `postgres` name (any case), or a parsed `backend` type that is missing or `postgres` (any case) is hosted `fail` and self-hosted `warn`. `s3`, `minio`, `gcs`, and `azure` are `ok`. The check does not migrate. A green line means that release's parsed type is not `postgres`. It is not proof bytes left Postgres. |

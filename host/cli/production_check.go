@@ -17,6 +17,7 @@ import (
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/blobstore/data"
+	"github.com/randy-girard/flynn/controller/servicetoken"
 	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
@@ -99,6 +100,12 @@ Self-hosted mode warns. A large self-hosted cluster needs the same sink.
 The ring is not retention. If tenancy cannot be read, the mode is
 unknown, or GET /sinks fails, this line fails. It is not a self-hosted
 warning. A parsed sink config that does not qualify is not a list error.
+
+Service tokens: the billing (QUOTA_TOKEN) and letsencrypt (ACME_TOKEN)
+releases are read. A token that is expired, unparseable, has the wrong
+scope, or expires within 30 days adds a service-token warn. A healthy
+token, a missing plugin, or a missing token adds no row. The token is
+never printed. A warn does not exit 1.
 
 Overlay prints the live flannel NETWORK and subnet length. It does not
 hardcode a network. This line is informational.
@@ -377,6 +384,7 @@ func collectProductionRows(cfg productionCheckConfig) []productionRow {
 	addBackupLine(add, api, now)
 	addLogSinkLine(add, api, mode)
 	addOverlayLine(add, meta, metaErr)
+	addServiceTokenLine(add, api, now)
 	return rows
 }
 
@@ -1357,4 +1365,34 @@ func parseFlannelOverlay(data []byte) (string, uint, error) {
 		return "", 0, err
 	}
 	return parsed.Network.String(), parsed.SubnetLen, nil
+}
+
+// serviceTokenApps are the plugin apps that carry a long-lived service token.
+var serviceTokenApps = []struct{ app, env, scope string }{
+	{"billing-plugin", "QUOTA_TOKEN", "account:quota"},
+	{"letsencrypt-plugin", "ACME_TOKEN", "acme:issue"},
+}
+
+// addServiceTokenLine warns for each plugin service token that is expired,
+// unparseable, carries the wrong scope, or is inside servicetoken.RenewBefore
+// of expiry. Plugins that are not installed, or that hold no token, add no
+// row. The token value is never printed.
+func addServiceTokenLine(add func(productionRow), api productionAPI, now time.Time) {
+	for _, st := range serviceTokenApps {
+		release, err := api.GetAppRelease(st.app)
+		if err != nil || release == nil {
+			continue
+		}
+		tok := strings.TrimSpace(release.Env[st.env])
+		if tok == "" {
+			continue
+		}
+		if ok, why := servicetoken.Reusable(tok, st.scope, now); !ok {
+			add(productionRow{
+				status: "warn", check: "service-token",
+				detail: st.app + " " + st.env + " " + why,
+				action: "Run flynn-host token:rotate " + st.app + " " + st.env + " " + st.scope + ", or flynn plugin:update. Plugin update re-mints a token inside 30 days of expiry.",
+			})
+		}
+	}
 }

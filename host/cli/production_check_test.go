@@ -664,7 +664,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/placement,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/sinks" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/placement,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/sinks" || strings.Join(f.api.releases, ",") != "blobstore,billing-plugin,letsencrypt-plugin" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -902,7 +902,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "fail", check: "log-sink", detail: "error=unknown tenancy", action: "not a self-hosted warning"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
-	if f.api.profileReads != 1 || len(f.api.releases) != 1 || f.zpoolCalls != 1 || f.metaCalls != 1 || f.hostCalls != 1 {
+	if f.api.profileReads != 1 || len(f.api.releases) != 3 || f.zpoolCalls != 1 || f.metaCalls != 1 || f.hostCalls != 1 {
 		t.Fatalf("short-circuited after tenancy error: profiles=%d releases=%v zpool=%d meta=%d hosts=%d", f.api.profileReads, f.api.releases, f.zpoolCalls, f.metaCalls, f.hostCalls)
 	}
 	assertBlobstoreMigrateAction(t, blobstoreAction(t, got))
@@ -1224,7 +1224,7 @@ func TestProductionCheckBlobstoreAndProfileErrors(t *testing.T) {
 	got, err := f.run(t)
 	assertFailed(t, err)
 	mustCheck(t, got, "fail", "blobstore", "error=no blobstore release")
-	if len(f.api.releases) != 1 || f.api.releases[0] != "blobstore" {
+	if len(f.api.releases) != 3 || f.api.releases[0] != "blobstore" {
 		t.Fatalf("releases %v", f.api.releases)
 	}
 
