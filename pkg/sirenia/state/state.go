@@ -1751,6 +1751,12 @@ func nextAsyncMembership(idKey string, st *State, peers []*discoverd.Instance) (
 
 	for _, a := range st.Async {
 		id := peerApplianceID(idKey, a)
+		// A peer listed twice (or listed as primary or sync too) would be its
+		// own downstream and wait forever for itself to replicate.
+		if _, dup := present[id]; dup && id != "" {
+			changes = true
+			continue
+		}
 		cur := instanceByApplianceID(idKey, id, peers)
 		if cur == nil {
 			if keepMissing && id != "" {
@@ -1772,8 +1778,10 @@ func nextAsyncMembership(idKey string, st *State, peers []*discoverd.Instance) (
 	for _, d := range st.Deposed {
 		id := peerApplianceID(idKey, d)
 		if cur := instanceByApplianceID(idKey, id, peers); cur != nil {
-			present[id] = struct{}{}
-			newAsync = append(newAsync, cur)
+			if _, dup := present[id]; !dup {
+				present[id] = struct{}{}
+				newAsync = append(newAsync, cur)
+			}
 			changes = true
 			continue
 		}
