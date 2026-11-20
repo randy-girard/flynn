@@ -688,7 +688,35 @@ The controller records privileged actions in its `core_audit` table: who
 app it touched, and when. Only successful requests are recorded, from
 both the HTTP API and the gRPC API.
 Request bodies are not stored, so env values and keys never land in the
-log; entries keep the method, path, and status.
+log; entries keep the method, path, and status. Every row also passes
+through one redaction step before it is written: a field whose name looks
+like a password, key, token, secret, or credential is stored as
+`[redacted]` at any depth (booleans such as `password_changed` are kept),
+and inside an `env` map names such as `DATABASE_URL` are redacted too.
+`user.update` records which user fields a `PATCH /users/:id` set and
+`password_changed: true` when it set a password, never the password.
+
+Before migration 94, `user.update` rows held the new password in clear
+text. Migration 94 removes it from existing rows, but cluster backups taken
+before the upgrade, and copies the enterprise plugin imported or sent to
+its audit webhook, still hold it. Rotate the passwords of users changed
+through `PATCH /users/:id` (dashboard password changes and resets synced
+to the controller, and `flynn-host user:bootstrap-admin --password` on an
+existing user) on a cluster that ran an older controller, and treat older backups as holding
+those passwords.
+
+### Request log (`AUDIT_LOG=true`)
+
+Setting `AUDIT_LOG=true` on the controller logs every request with its
+JSON body. Only bodies that describe app configuration are logged in full:
+app create and meta updates, releases, jobs, deploys, formations, scale,
+routes, collaborators, transfers, quotas, and the `/cluster/*` settings,
+runtimes, and hosts. Those bodies get the same redaction as `core_audit`,
+whatever the route type. Any other body (users, tokens, providers and
+resources, sinks, GitHub, ACME, managed certificates, `PUT /domain`,
+regions, tenant backups, plugin add-ons, and any route added later) is
+logged as its field names only, for example
+`[body not logged; fields: email,password]`.
 
 `tenancy.force_self_hosted` is written before a cluster-key
 `PUT /tenancy` with `"force": true` switches a hosted cluster to

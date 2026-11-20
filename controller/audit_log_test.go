@@ -12,6 +12,7 @@ import (
 	"time"
 
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/controller/redact"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	router "github.com/randy-girard/flynn/router/types"
@@ -25,7 +26,7 @@ func TestRedactEnvSecrets(t *testing.T) {
 		"ACCESS_KEY":     "ak",
 		"SAFE":           "ok",
 	}
-	redactEnv(env)
+	redact.Env(env)
 	if env["SAFE"] != "ok" {
 		t.Fatal("non-secret kept")
 	}
@@ -88,8 +89,8 @@ func TestMaybeRedactReleaseJobAndRouteBodies(t *testing.T) {
 	buf = mustJSON(t, tcp)
 	req = httptest.NewRequest("PUT", "/apps/x/routes/1", nil)
 	maybeRedactBody(req, buf)
-	if strings.Contains(buf.String(), redactedPlaceholder) {
-		t.Fatal("tcp routes must not be rewritten as HTTP TLS redaction")
+	if strings.Contains(buf.String(), "still-secret") {
+		t.Fatalf("tcp route key logged: %s", buf.String())
 	}
 }
 
@@ -117,6 +118,66 @@ func TestLimitedBodyReaderAndAuditBuffer(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), redactedPlaceholder) {
 		t.Fatalf("expected redaction: %s", buf.String())
+	}
+}
+
+// TestAuditBodyRedactsSecrets runs request bodies that carry passwords,
+// keys, and tokens through the AUDIT_LOG=true body capture. No secret may
+// reach the logged body, whatever the route or route type.
+func TestAuditBodyRedactsSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		method, path, body, secret string
+	}{
+		{"POST", "/users", `{"email":"a@example.com","password":"S1-user-create-pw"}`, "S1-user-create-pw"},
+		{"PATCH", "/users/u1", `{"password":"S2-user-patch-pw"}`, "S2-user-patch-pw"},
+		{"PUT", "/github/app", `{"app_id":1,"private_key":"S3-gh-private-key","webhook_secret":"S3b-gh-hook","client_secret":"S3c-gh-client"}`, "S3"},
+		{"PUT", "/providers/postgres/resources/r1", `{"id":"r1","env":{"PGPASSWORD":"S4-pg-pw","DATABASE_URL":"postgres://u:S4b@h/db"}}`, "S4"},
+		{"POST", "/providers/postgres/resources", `{"config":{"password":"S5-resource-config-pw"}}`, "S5"},
+		{"POST", "/sinks", `{"kind":"syslog","config":{"url":"syslog+tls://S6-sink-token@logs.example.com:514"}}`, "S6"},
+		{"POST", "/apps/x/routes", `{"type":"tcp","service":"x-web","tls_key":"S7-tcp-tls-key"}`, "S7"},
+		{"PUT", "/apps/x/routes/http/r1", `{"domain":"x.example.com","tls_key":"S8-untyped-tls-key","certificate":{"key":"S8b-cert-key","cert":"public"}}`, "S8"},
+		{"POST", "/releases", `{"env":{"SECRET_KEY":"S9-release-env"},"processes":{"web":{"env":{"REDIS_PASSWORD":"S9b-proc-env"}}}}`, "S9"},
+		{"POST", "/apps/x/jobs", `{"env":{"AUTH_TOKEN":"S10-job-env"}}`, "S10"},
+		{"PUT", "/acme/config", `{"enabled":true,"account_key":"S11-acme-account-key"}`, "S11"},
+		{"PUT", "/managed-certificates/m1", `{"key":"S12-managed-cert-key"}`, "S12"},
+		{"PUT", "/domain", `{"domain":"new.example.com","tls_key":"S13-domain-tls-key"}`, "S13"},
+		{"POST", "/tenant-backups/r1/finish", `{"credentials":{"access_key":"S14-backup-cred"}}`, "S14"},
+		{"PUT", "/apps/x/github", `{"repo":"o/r","installation_token":"S15-gh-install-token"}`, "S15"},
+		{"PUT", "/apps/x/plugin-addons/redis", `{"config":{"password":"S16-addon-pw"}}`, "S16"},
+		{"POST", "/cluster/regions", `{"region":"eu","domain":"eu.example.com","tls_pin":"pin","controller_key":"S17-region-key"}`, "S17"},
+		{"POST", "/tokens", `{"name":"ci","token":"S18-token-body"}`, "S18"},
+		{"PUT", "/tenancy", `{"mode":"self_hosted","cluster_key":"S19-tenancy-key"}`, "S19"},
+		{"PUT", "/cluster/policy", `{"enforced":true,"webhook_secret":"S20-policy-secret"}`, "S20"},
+		{"POST", "/apps/x/meta", `{"meta":{"github_token":"S21-meta-token"}}`, "S21"},
+		{"POST", "/apps/x/builds", `{"env":{"NPM_TOKEN":"S22-build-env"}}`, "S22"},
+	} {
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.Copy(io.Discard, r.Body)
+			w.WriteHeader(200)
+		})
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		rw := httphelper.NewResponseWriter(httptest.NewRecorder(), nil)
+		buf := handleRequestWithAuditBodyBuffer(inner, rw, req)
+		if strings.Contains(buf.String(), tc.secret) {
+			t.Errorf("%s %s logged a secret: %s", tc.method, tc.path, buf.String())
+		}
+	}
+
+	// Allowed bodies keep the values that are not secrets.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.Copy(io.Discard, r.Body) })
+	req := httptest.NewRequest("POST", "/releases", strings.NewReader(`{"env":{"PORT":"8080","SECRET_KEY":"x"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	buf := handleRequestWithAuditBodyBuffer(inner, httphelper.NewResponseWriter(httptest.NewRecorder(), nil), req)
+	if !strings.Contains(buf.String(), "8080") || !strings.Contains(buf.String(), redactedPlaceholder) {
+		t.Fatalf("release body lost its safe values: %s", buf.String())
+	}
+	// A body the allowlist does not cover is reduced to its field names.
+	req = httptest.NewRequest("PATCH", "/users/u1", strings.NewReader(`{"password":"pw-value","email":"e@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	buf = handleRequestWithAuditBodyBuffer(inner, httphelper.NewResponseWriter(httptest.NewRecorder(), nil), req)
+	if got := buf.String(); strings.Contains(got, "e@example.com") || !strings.Contains(got, "email") || !strings.Contains(got, "password") {
+		t.Fatalf("unlisted body = %s, want field names only", got)
 	}
 }
 
