@@ -68,13 +68,16 @@ type server struct {
 	router *httprouter.Router
 	auth   *authorizer.Authorizer
 	client controller.Client
+	// fetchLayer reads a stored layer config; ct.ErrNotFound when absent.
+	fetchLayer func(id string) (*ct.ImageLayer, error)
 }
 
 func newServer(auth *authorizer.Authorizer, client controller.Client) *server {
 	s := &server{
-		router: httprouter.New(),
-		auth:   auth,
-		client: client,
+		router:     httprouter.New(),
+		auth:       auth,
+		client:     client,
+		fetchLayer: blobstoreLayer,
 	}
 	s.router.GET("/layer/:id", s.handleGetLayer)
 	s.router.POST("/layer/:id", s.handleCreateLayer)
@@ -104,38 +107,58 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetLayer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	id := p.ByName("id")
-	req, err := http.NewRequest("GET", utils.ConfigURL(id), nil)
-	if err != nil {
+	layer, err := s.fetchLayer(p.ByName("id"))
+	if err == ct.ErrNotFound {
+		http.NotFound(w, r)
+		return
+	} else if err != nil {
 		httphelper.Error(w, err)
 		return
+	}
+	httphelper.JSON(w, http.StatusOK, layer)
+}
+
+// blobstoreLayer reads the layer config tarreceive stored for id.
+func blobstoreLayer(id string) (*ct.ImageLayer, error) {
+	req, err := http.NewRequest("GET", utils.ConfigURL(id), nil)
+	if err != nil {
+		return nil, err
 	}
 	blobstoreauth.Apply(req)
 	res, err := httphelper.RetryClient.Do(req)
 	if err != nil {
-		httphelper.Error(w, err)
-		return
+		return nil, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
-		http.NotFound(w, r)
-		return
+		return nil, ct.ErrNotFound
 	} else if res.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(res.Body)
-		httphelper.Error(w, fmt.Errorf("unexpected blobstore response: %s: %s", res.Status, body))
-		return
+		return nil, fmt.Errorf("unexpected blobstore response: %s: %s", res.Status, body)
 	}
 	var layer ct.ImageLayer
 	if err := json.NewDecoder(res.Body).Decode(&layer); err != nil {
-		httphelper.Error(w, err)
-		return
+		return nil, err
 	}
-	httphelper.JSON(w, http.StatusOK, &layer)
+	return &layer, nil
 }
 
 func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	id := p.ByName("id")
 	flat := r.Header.Get("X-Flynn-Flattened-Layer") == "1"
+
+	// The layer is named by the SHA256 of its tar. Once its config is
+	// stored, keep it: rebuilding can produce different squashfs bytes, and
+	// images that already name the old hash would no longer verify (NEW-05).
+	if existing, err := s.fetchLayer(id); err == nil {
+		// Read the upload so the client sees the answer, not a reset.
+		io.Copy(ioutil.Discard, r.Body)
+		httphelper.JSON(w, http.StatusOK, existing)
+		return
+	} else if err != ct.ErrNotFound {
+		httphelper.Error(w, err)
+		return
+	}
 
 	layer, err := func() (*ct.ImageLayer, error) {
 		// copy the tar to a temp file and generate its SHA256 hash
