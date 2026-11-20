@@ -231,12 +231,26 @@ names `billing`, if `plugins.json` does not point at that repo. Configure
 `plugin:credentials` the same way as any other private GitHub clone. The
 install does not skip a member it cannot resolve.
 
-Resource providers may set **`provider.tenant_safe`** (`tenant_safe` in
-`flynn-plugin.json`). The controller stores it on the provider. In `hosted`
-tenancy mode, a non-operator can provision only providers with `tenant_safe`
-true. `self_hosted` ignores the flag. Leave it false until the provider has
-per-resource credentials and limits (Postgres, MariaDB, MongoDB, and Redis
-are the usual candidates; Kafka and ClickHouse stay false until they do).
+Resource providers may set **`provider.tenant_safe`**. The key goes inside
+the `provider` object of `flynn-plugin.json`; a top-level `tenant_safe` is
+ignored:
+
+```json
+"provider": {
+  "name": "redis",
+  "url": "http://redis-plugin.discoverd/clusters",
+  "tenant_safe": true
+}
+```
+
+The controller stores it on the provider. Install creates the provider with
+the flag, and every later install or update sets the stored flag to the
+manifest's value (`PUT /providers/:id`, cluster key only), so turning it on
+or off in a new plugin release takes effect on update. In `hosted` tenancy
+mode, a non-operator can provision only providers with `tenant_safe` true.
+`self_hosted` ignores the flag. Leave it false until the provider has
+per-resource credentials and limits. The official Postgres, MariaDB, MongoDB,
+Redis, Kafka, and ClickHouse providers set it.
 
 
 Install reads `flynn-plugin.json` only. A `service_token` object mints
