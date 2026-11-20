@@ -113,7 +113,15 @@ places the replica on another host, promotes it if the primary job is gone, then
 recreates a replica. The plugin worker holding the failover lease promotes only
 after it has itself seen the primary job gone on every 5-second check for 30
 seconds; a lease change, or a gap of more than 10 seconds between checks,
-starts the 30 seconds over. When an upgrade replaces a follower, the replacement takes
+starts the 30 seconds over. With the primary gone the replica's link is down, so the
+watch promotes a follower whose link dropped no more than 30 seconds before the
+primary job stopped; a follower that never finished its first sync, or lost
+its link long before, is not promoted. Promotion restarts the follower's job
+as a writable primary and the fenced old primary rejoins as its follower.
+Followers of a primary with no running job, and follower jobs younger than two
+minutes, are not replaced as broken. The replica avoids the primary's host when the
+controller's host stats show another host with room for the runtime; a user
+follower otherwise starts on any host. When an upgrade replaces a follower, the replacement takes
 the old follower's name and is scaled back up to its original process count; a
 failed switch restores both apps. A primary cannot be deleted while it still has
 followers.
