@@ -274,6 +274,12 @@ func sireniaStuckReason(status *sireniaclient.Status, probeErr error, jobAge tim
 			peerIDListedInClusterState(status.Peer.ID, status.Peer.State) {
 			return "role_mismatch"
 		}
+		// An async listed twice is its own downstream and never catches up.
+		// Older primaries keep the duplicate; restarting the async makes the
+		// primary drop both entries and add the replacement once.
+		if role == sirenia.RoleAsync && peerIDListingCount(status.Peer.ID, status.Peer.State) > 1 {
+			return "duplicate_in_state"
+		}
 	}
 	running := status.Database != nil && status.Database.Running
 	if !running && jobAge >= seedGrace {
@@ -283,8 +289,13 @@ func sireniaStuckReason(status *sireniaclient.Status, probeErr error, jobAge tim
 }
 
 func peerIDListedInClusterState(peerID string, state *sirenia.State) bool {
+	return peerIDListingCount(peerID, state) > 0
+}
+
+// peerIDListingCount is how many of primary, sync and the asyncs name peerID.
+func peerIDListingCount(peerID string, state *sirenia.State) int {
 	if state == nil || peerID == "" {
-		return false
+		return 0
 	}
 	match := func(inst *discoverd.Instance) bool {
 		if inst == nil || inst.Meta == nil {
@@ -297,15 +308,19 @@ func peerIDListedInClusterState(peerID string, state *sirenia.State) bool {
 		}
 		return false
 	}
-	if match(state.Primary) || match(state.Sync) {
-		return true
+	n := 0
+	if match(state.Primary) {
+		n++
+	}
+	if match(state.Sync) {
+		n++
 	}
 	for _, async := range state.Async {
 		if match(async) {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 func sireniaRepairSeedGrace() time.Duration {

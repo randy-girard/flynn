@@ -526,3 +526,39 @@ func TestRestartDownSireniaJobs(t *testing.T) {
 		t.Fatal("empty processes should not scale")
 	}
 }
+
+// An async listed twice in cluster state is its own downstream and never
+// becomes healthy. Primaries built before the membership dedupe keep the
+// duplicate, so the update repair must restart that peer: once it leaves
+// discoverd the primary drops both entries and the replacement joins once.
+func TestSireniaInstanceStuck_DuplicateAsyncInState(t *testing.T) {
+	now := time.Date(2026, 11, 20, 2, 0, 0, 0, time.UTC)
+	peer := func(id string) *discoverd.Instance {
+		return &discoverd.Instance{Meta: map[string]string{"POSTGRES_ID": id}}
+	}
+	state := &sirenia.State{Primary: peer("p"), Sync: peer("s"), Async: []*discoverd.Instance{peer("a"), peer("a")}}
+	status := &sireniaclient.Status{
+		Peer:     &sirenia.PeerInfo{ID: "a", Role: sirenia.RoleAsync, State: state},
+		Database: &sireniaclient.DatabaseInfo{Running: true},
+	}
+	if reason := sireniaStuckReason(status, nil, time.Hour, now, defaultSireniaRepairSeedGrace, sireniaRepairRetryPendingGrace); reason != "duplicate_in_state" {
+		t.Fatalf("reason=%q want duplicate_in_state", reason)
+	}
+
+	healthy := &sireniaclient.Status{
+		Peer:     &sirenia.PeerInfo{ID: "a", Role: sirenia.RoleAsync, State: &sirenia.State{Primary: peer("p"), Sync: peer("s"), Async: []*discoverd.Instance{peer("a")}}},
+		Database: &sireniaclient.DatabaseInfo{Running: true},
+	}
+	if reason := sireniaStuckReason(healthy, nil, time.Hour, now, defaultSireniaRepairSeedGrace, sireniaRepairRetryPendingGrace); reason != "" {
+		t.Fatalf("single listing must not be stuck, got %q", reason)
+	}
+
+	// The primary and sync are never restarted for this; only the async.
+	primary := &sireniaclient.Status{
+		Peer:     &sirenia.PeerInfo{ID: "p", Role: sirenia.RolePrimary, State: &sirenia.State{Primary: peer("p"), Sync: peer("s"), Async: []*discoverd.Instance{peer("p")}}},
+		Database: &sireniaclient.DatabaseInfo{Running: true},
+	}
+	if reason := sireniaStuckReason(primary, nil, time.Hour, now, defaultSireniaRepairSeedGrace, sireniaRepairRetryPendingGrace); reason != "" {
+		t.Fatalf("primary must not be restarted for a duplicate listing, got %q", reason)
+	}
+}
