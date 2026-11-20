@@ -45,6 +45,26 @@ func TestInstanceValidAndClone(t *testing.T) {
 	}
 }
 
+// A clone is a new instance: its Host and Port come from its own Addr, not
+// from a host/port the original had already cached.
+func TestInstanceCloneRecomputesHostPort(t *testing.T) {
+	inst := &Instance{ID: "x", Proto: "tcp", Addr: "10.0.0.1:8080", Index: 3, Meta: map[string]string{"a": "1"}}
+	if inst.Host() != "10.0.0.1" || inst.Port() != "8080" {
+		t.Fatalf("%s %s", inst.Host(), inst.Port())
+	}
+	clone := inst.Clone()
+	if clone.ID != "x" || clone.Proto != "tcp" || clone.Addr != "10.0.0.1:8080" || clone.Index != 3 || clone.Meta["a"] != "1" {
+		t.Fatalf("clone lost fields: %#v", clone)
+	}
+	clone.Addr = "10.0.0.2:9090"
+	if clone.Host() != "10.0.0.2" || clone.Port() != "9090" {
+		t.Fatalf("clone host/port = %s %s, want 10.0.0.2 9090", clone.Host(), clone.Port())
+	}
+	if inst.Host() != "10.0.0.1" || inst.Port() != "8080" {
+		t.Fatalf("original changed: %s %s", inst.Host(), inst.Port())
+	}
+}
+
 func TestEventKindJSON(t *testing.T) {
 	if EventKindUp.String() != "up" || EventKind(99).String() != "unknown" {
 		t.Fatal("string")

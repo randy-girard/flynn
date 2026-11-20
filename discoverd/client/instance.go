@@ -169,13 +169,27 @@ func (inst *Instance) id() string {
 	return md5sum(inst.Proto + "-" + inst.Addr)
 }
 
+// Copy returns a new Instance with the same exported fields. Meta is shared
+// with inst. The copy computes Host and Port from its own Addr. Use Copy (or
+// Clone) instead of *inst: Instance holds a sync.Once that must not be copied.
+func (inst *Instance) Copy() *Instance {
+	return &Instance{
+		ID:    inst.ID,
+		Addr:  inst.Addr,
+		Proto: inst.Proto,
+		Meta:  inst.Meta,
+		Index: inst.Index,
+	}
+}
+
+// Clone is Copy with its own copy of Meta.
 func (inst *Instance) Clone() *Instance {
-	res := *inst
+	res := inst.Copy()
 	res.Meta = make(map[string]string, len(inst.Meta))
 	for k, v := range inst.Meta {
 		res.Meta[k] = v
 	}
-	return &res
+	return res
 }
 
 func md5sum(data string) string {

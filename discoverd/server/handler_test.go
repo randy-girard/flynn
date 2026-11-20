@@ -866,6 +866,42 @@ func TestHandler_GetInstancesRedactsAuthKey(t *testing.T) {
 	}
 }
 
+// Redacting AUTH_KEY must copy every exported field and leave the store's
+// instance untouched.
+func TestHandler_GetInstancesRedactKeepsFieldsAndSource(t *testing.T) {
+	h := NewHandler()
+	src := &discoverd.Instance{
+		ID:    "inst0",
+		Addr:  "10.0.0.1:1111",
+		Proto: "http",
+		Index: 7,
+		Meta:  map[string]string{"AUTH_KEY": "controller-secret", "FLYNN_APP_NAME": "controller"},
+	}
+	src.Host() // fill the cached host/port before the handler copies it
+	h.Store.InstancesFn = func(service string) ([]*discoverd.Instance, error) {
+		return []*discoverd.Instance{src}, nil
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("GET", "/services/controller/instances", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var got []*discoverd.Instance
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "inst0" || got[0].Addr != "10.0.0.1:1111" || got[0].Proto != "http" || got[0].Index != 7 {
+		t.Fatalf("unexpected instances: %#v", got)
+	}
+	if _, ok := got[0].Meta["AUTH_KEY"]; ok || got[0].Meta["FLYNN_APP_NAME"] != "controller" {
+		t.Fatalf("unexpected meta: %#v", got[0].Meta)
+	}
+	if src.Meta["AUTH_KEY"] != "controller-secret" || len(src.Meta) != 2 {
+		t.Fatalf("store instance changed: %#v", src.Meta)
+	}
+}
+
 // MustNewHTTPRequest returns a new HTTP request. Panic on error.
 func TestHandler_PostHeartbeats(t *testing.T) {
 	h := NewHandler()

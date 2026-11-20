@@ -186,6 +186,38 @@ func TestStore_RemoveService_ErrNotFound(t *testing.T) {
 	}
 }
 
+// Ensure Instances returns copies: changing a returned instance does not
+// change the stored one, and each copy computes Host/Port from its own Addr.
+func TestStore_InstancesReturnsCopies(t *testing.T) {
+	s := MustOpenStore()
+	defer s.Close()
+	if err := s.AddService("service0", nil); err != nil {
+		t.Fatal(err)
+	}
+	inst := &discoverd.Instance{ID: "inst0", Addr: "10.0.0.1:1111", Proto: "tcp", Meta: map[string]string{"k": "v"}}
+	if err := s.AddInstance("service0", inst); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := s.Instances("service0")
+	if err != nil {
+		t.Fatal(err)
+	} else if len(a) != 1 || a[0].Host() != "10.0.0.1" {
+		t.Fatalf("unexpected instances: %#v", a)
+	}
+	a[0].Addr = "10.0.0.2:2222"
+	a[0].Index = 99
+
+	b, err := s.Instances("service0")
+	if err != nil {
+		t.Fatal(err)
+	} else if len(b) != 1 || b[0] == a[0] {
+		t.Fatalf("expected a fresh copy: %#v", b)
+	} else if b[0].Addr != "10.0.0.1:1111" || b[0].Index == 99 || b[0].Meta["k"] != "v" || b[0].Port() != "1111" {
+		t.Fatalf("stored instance changed: %#v", b[0])
+	}
+}
+
 // Ensure the store can add instances to a service.
 func TestStore_AddInstance(t *testing.T) {
 	s := MustOpenStore()

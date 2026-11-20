@@ -628,7 +628,7 @@ func redactInstance(inst *discoverd.Instance) *discoverd.Instance {
 	if _, ok := inst.Meta[instanceAuthKeyMeta]; !ok {
 		return inst
 	}
-	cp := *inst
+	cp := inst.Copy()
 	meta := make(map[string]string, len(inst.Meta)-1)
 	for k, v := range inst.Meta {
 		if k == instanceAuthKeyMeta {
@@ -637,7 +637,7 @@ func redactInstance(inst *discoverd.Instance) *discoverd.Instance {
 		meta[k] = v
 	}
 	cp.Meta = meta
-	return &cp
+	return cp
 }
 
 func redactInstances(instances []*discoverd.Instance) []*discoverd.Instance {
