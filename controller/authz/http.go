@@ -574,6 +574,16 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		return rkCluster, "", ""
 	case "tenant-backups":
 		return rkCluster, "", ""
+	case "resources":
+		// GET /resources is every resource the caller may see. The handler
+		// keeps a user's list to the resources its accounts own (flynn
+		// resource and plugin commands find a resource by name here). Only a
+		// user session may ask; app-scoped and compile tokens use
+		// /apps/:id/resources.
+		if len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead) {
+			return rkUserSession, "", ""
+		}
+		return rkCluster, "", ""
 	case "releases":
 		if m == http.MethodPost {
 			return rkCreateRelease, "", ""

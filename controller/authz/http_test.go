@@ -177,6 +177,14 @@ func TestHTTPAllowed(t *testing.T) {
 		{"stranger_grant_cannot_get_other_app", wrongApp, http.MethodGet, "/apps/app-1", false},
 		{"user_can_whoami", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/whoami", true},
 		{"app_read_cannot_whoami", appRead, http.MethodGet, "/whoami", false},
+		{"user_can_read_own_grants", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/whoami/grants", true},
+		{"app_read_cannot_read_grants", appRead, http.MethodGet, "/whoami/grants", false},
+		{"user_can_list_resources", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/resources", true},
+		{"app_read_cannot_list_resources", appRead, http.MethodGet, "/resources", false},
+		{"app_write_cannot_list_resources", appWrite, http.MethodGet, "/resources", false},
+		{"user_cannot_post_resources", &authorizer.Token{UserID: "u1"}, http.MethodPost, "/resources", false},
+		{"user_cannot_get_resources_subpath", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/resources/r1", false},
+		{"cluster_key_can_list_resources", clusterKey, http.MethodGet, "/resources", true},
 		{"user_cannot_create_user", &authorizer.Token{UserID: "u1"}, http.MethodPost, "/users", false},
 		{"cluster_admin_user_can_create_user", &authorizer.Token{UserID: "u1", Scopes: []string{"cluster:admin"}}, http.MethodPost, "/users", true},
 		{"cluster_key_can_create_user", clusterKey, http.MethodPost, "/users", true},
@@ -610,7 +618,7 @@ func TestBuildCredentialIsNotUserSession(t *testing.T) {
 		if UserBound(tok) {
 			t.Fatalf("%s token with a user id must not be user-bound", scope)
 		}
-		for _, route := range [][2]string{{"POST", "/tokens"}, {"GET", "/tokens"}, {"GET", "/whoami"}, {"POST", "/apps/app-1/transfer"}} {
+		for _, route := range [][2]string{{"POST", "/tokens"}, {"GET", "/tokens"}, {"GET", "/whoami"}, {"GET", "/whoami/grants"}, {"GET", "/resources"}, {"POST", "/apps/app-1/transfer"}} {
 			if HTTPAllowed(tok, route[0], route[1]) {
 				t.Fatalf("%s token allowed on %s %s", scope, route[0], route[1])
 			}
