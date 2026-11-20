@@ -285,3 +285,19 @@ func contains(ids []string, id string) bool {
 	}
 	return false
 }
+
+// NEW-05: builders store slugs under the app's own blobstore prefix, the only
+// one its build token reaches, so the compile is told which app it is for.
+// The controller's app ID wins over anything a caller put in the env.
+func TestHostJobSetsAppIDForBlobstorePrefix(t *testing.T) {
+	job := HostJob(HostJobInput{
+		HostID: "host1",
+		UUID:   "uuid-1",
+		AppID:  "app-1",
+		Type:   "slugbuilder",
+		Env:    map[string]string{"FLYNN_APP_ID": "app-2"},
+	})
+	if got := job.Config.Env["FLYNN_APP_ID"]; got != "app-1" {
+		t.Fatalf("FLYNN_APP_ID = %q, want app-1", got)
+	}
+}

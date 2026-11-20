@@ -109,6 +109,17 @@ func handler(r *data.FileRepo) http.Handler {
 	})
 }
 
+// repoExists reports whether the repo holds a live object at name.
+func repoExists(r *data.FileRepo) func(string) (bool, error) {
+	return func(name string) (bool, error) {
+		_, err := r.Get(name, false)
+		if err == backend.ErrNotFound {
+			return false, nil
+		}
+		return err == nil, err
+	}
+}
+
 func main() {
 	defer shutdown.Exit()
 
@@ -173,7 +184,7 @@ func runServer(_ *docopt.Args) error {
 			keys = []string{k}
 		}
 	}
-	mux.Handle("/", protect(handler(repo), keys, clusterAuthorizer(keys)))
+	mux.Handle("/", protect(handler(repo), keys, clusterAuthorizer(keys), repoExists(repo)))
 	mux.Handle(status.Path, status.Handler(func() status.Status {
 		if err := db.Exec("SELECT 1"); err != nil {
 			return status.Unhealthy

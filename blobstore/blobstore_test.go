@@ -587,3 +587,28 @@ func testFilesystem(r *data.FileRepo, testMeta bool, t *testing.T) {
 
 	wg.Wait()
 }
+
+// NEW-05: repoExists drives the scoped overwrite refusal, so it must see a
+// stored object and miss a deleted one.
+func TestRepoExists(t *testing.T) {
+	db := initDB(t)
+	defer db.Close()
+	r := data.NewFileRepo(db, []backend.Backend{backend.Postgres}, "postgres")
+	exists := repoExists(r)
+	name := "/slugs/apps/app-1/layers/" + random.String(8) + ".squashfs"
+	if found, err := exists(name); err != nil || found {
+		t.Fatalf("before put: found=%v err=%v", found, err)
+	}
+	if err := r.Put(name, bytes.NewReader([]byte("layer")), 0, "application/octet-stream"); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := exists(name); err != nil || !found {
+		t.Fatalf("after put: found=%v err=%v", found, err)
+	}
+	if err := r.Delete(name); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := exists(name); err != nil || found {
+		t.Fatalf("after delete: found=%v err=%v", found, err)
+	}
+}

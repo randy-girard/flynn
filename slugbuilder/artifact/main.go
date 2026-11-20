@@ -112,9 +112,11 @@ func run(dir string, uid, gid int) error {
 	}
 	layerSHA := hex.EncodeToString(h.Sum(nil))
 
-	// upload the layer to the blobstore
+	// upload the layer to the app's own blobstore prefix; the build token
+	// reaches no other (NEW-05)
+	appID := os.Getenv("FLYNN_APP_ID")
 	fmt.Println("-----> Uploading slug to blobstore")
-	layerURL := fmt.Sprintf("http://blobstore.discoverd/slugs/layers/%s.squashfs", layerSHA)
+	layerURL := blobstoreauth.SlugLayerURL(appID, layerSHA)
 	if err := uploadSlug(layer, layerURL); err != nil {
 		return err
 	}
@@ -147,28 +149,13 @@ func run(dir string, uid, gid int) error {
 		}},
 	}
 
-	rawManifest := manifest.RawManifest()
-	manifestURL := fmt.Sprintf("http://blobstore.discoverd/slugs/images/%s.json", manifest.ID())
-	if err := upload(bytes.NewReader(rawManifest), manifestURL); err != nil {
+	artifact := slugArtifact(appID, os.Getenv("SLUG_IMAGE_ID"), manifest)
+	if err := upload(bytes.NewReader(artifact.RawManifest), artifact.URI); err != nil {
 		return err
 	}
 
 	processCommands := determineProcessCommands(dir)
-	processTypes := processTypeNames(processCommands)
-
-	artifact := &ct.Artifact{
-		ID:   os.Getenv("SLUG_IMAGE_ID"),
-		Type: ct.ArtifactTypeFlynn,
-		URI:  manifestURL,
-		Meta: map[string]string{
-			"blobstore":                 "true",
-			"slugbuilder.process_types": strings.Join(processTypes, ","),
-		},
-		RawManifest:      rawManifest,
-		Hashes:           manifest.Hashes(),
-		Size:             int64(len(rawManifest)),
-		LayerURLTemplate: "http://blobstore.discoverd/slugs/layers/{id}.squashfs",
-	}
+	artifact.Meta["slugbuilder.process_types"] = strings.Join(processTypeNames(processCommands), ",")
 	if len(processCommands) > 0 {
 		if raw, err := json.Marshal(processCommands); err == nil {
 			artifact.Meta["slugbuilder.process_commands"] = string(raw)
@@ -183,6 +170,22 @@ func run(dir string, uid, gid int) error {
 
 	fmt.Printf("-----> Compiled slug size is %s\n", units.BytesSize(float64(length)))
 	return nil
+}
+
+// slugArtifact is the artifact for a slug image stored under appID's
+// blobstore prefix (the legacy shared one when appID is empty).
+func slugArtifact(appID, id string, manifest *ct.ImageManifest) *ct.Artifact {
+	rawManifest := manifest.RawManifest()
+	return &ct.Artifact{
+		ID:               id,
+		Type:             ct.ArtifactTypeFlynn,
+		URI:              blobstoreauth.SlugImageURL(appID, manifest.ID()),
+		Meta:             map[string]string{"blobstore": "true"},
+		RawManifest:      rawManifest,
+		Hashes:           manifest.Hashes(),
+		Size:             int64(len(rawManifest)),
+		LayerURLTemplate: blobstoreauth.SlugLayerURLTemplate(appID),
+	}
 }
 
 const maxSlugUploadAttempts = 3
@@ -218,7 +221,9 @@ func upload(data io.Reader, url string) error {
 		return err
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusOK {
+	// 409: the content-addressed object is already stored under this name,
+	// which is the hash of these bytes. The blobstore refuses to replace it.
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusConflict {
 		return fmt.Errorf("unexpected HTTP status: %s", res.Status)
 	}
 	return nil

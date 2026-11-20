@@ -3,7 +3,8 @@
 // The blobstore accepts the cluster AUTH_KEY / CONTROLLER_KEY as HTTP Basic
 // or Bearer, and an HMAC query token on per-app build-cache paths. Build jobs
 // that hold a scoped controller token present it as Bearer; the server allows
-// that credential only on slug/tarreceive upload paths.
+// that credential only on its own app's /slugs/apps/<app>/ and
+// /tarreceive/apps/<app>/ objects (BuildPathAllowed).
 package blobstoreauth
 
 import (
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -273,10 +275,112 @@ func IsPublicPath(path, method string) bool {
 	return path == "/" && strings.EqualFold(method, http.MethodHead)
 }
 
-// IsBuildUploadPath is a slug or tarreceive object path that a scoped
-// build:artifacts token may GET/HEAD/PUT.
-func IsBuildUploadPath(path string) bool {
-	return strings.HasPrefix(path, "/slugs/") || strings.HasPrefix(path, "/tarreceive/")
+// baseURL is the blobstore root every cluster component addresses.
+const baseURL = "http://blobstore.discoverd"
+
+// appsDir is the directory under /slugs and /tarreceive that holds one
+// sub-directory per app. A build token reaches only its own app's
+// sub-directory (BuildPathAllowed).
+const appsDir = "apps"
+
+// SlugLayerURL is where slugbuilder stores a slug layer. With an app ID it is
+// that app's own prefix (/slugs/apps/<app>/layers/<sha>.squashfs); with none
+// it is the legacy shared directory, which only the cluster key may write.
+func SlugLayerURL(appID, sha string) string {
+	return baseURL + appPrefix("slugs", appID) + "/layers/" + sha + ".squashfs"
+}
+
+// SlugImageURL is where slugbuilder stores a slug image manifest.
+func SlugImageURL(appID, id string) string {
+	return baseURL + appPrefix("slugs", appID) + "/images/" + id + ".json"
+}
+
+// SlugLayerURLTemplate is the LayerURLTemplate of a slug artifact.
+func SlugLayerURLTemplate(appID string) string {
+	return baseURL + appPrefix("slugs", appID) + "/layers/{id}.squashfs"
+}
+
+// TarreceiveImageURL is where a dockerbuilder build stores its image
+// manifest. Its layers stay in the shared /tarreceive/layers store, which
+// only the tarreceive service writes.
+func TarreceiveImageURL(appID, id string) string {
+	return baseURL + appPrefix("tarreceive", appID) + "/images/" + id + ".json"
+}
+
+func appPrefix(root, appID string) string {
+	if appID == "" {
+		return "/" + root
+	}
+	return "/" + root + "/" + appsDir + "/" + appID
+}
+
+// BuildPathAllowed reports whether a scoped build:artifacts token whose app
+// grants are appIDs may GET, HEAD or PUT the cleaned object path p. Only that
+// app's own objects qualify: /slugs/apps/<app>/{layers,images}/<name> and
+// /tarreceive/apps/<app>/images/<name>. The legacy shared /slugs and
+// /tarreceive directories and every other app's prefix are cluster-key only.
+func BuildPathAllowed(p string, appIDs []string) bool {
+	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	if len(parts) != 5 || parts[1] != appsDir || parts[2] == "" || parts[4] == "" || parts[4] == "." || parts[4] == ".." {
+		return false
+	}
+	switch {
+	case parts[0] == "slugs" && (parts[3] == "layers" || parts[3] == "images"):
+	case parts[0] == "tarreceive" && parts[3] == "images":
+	default:
+		return false
+	}
+	for _, id := range appIDs {
+		if id != "" && id == parts[2] {
+			return true
+		}
+	}
+	return false
+}
+
+// IsContentAddressedPath reports an image layer or manifest object, which is
+// named by the hash of its content. A scoped credential never needs to
+// replace one, so the blobstore refuses a scoped PUT over an existing one.
+func IsContentAddressedPath(p string) bool {
+	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	var dir string
+	switch {
+	case len(parts) == 3:
+		dir = parts[1]
+	case len(parts) == 5 && parts[1] == appsDir && parts[2] != "":
+		dir = parts[3]
+	default:
+		return false
+	}
+	if parts[0] != "slugs" && parts[0] != "tarreceive" {
+		return false
+	}
+	return (dir == "layers" || dir == "images") && parts[len(parts)-1] != ""
+}
+
+// sharedLayerPath is a layer in the shared tarreceive store. tarreceive
+// writes these itself, after checking the tar hash, so a build artifact may
+// reference them.
+func sharedLayerPath(p string) bool {
+	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	return len(parts) == 3 && parts[0] == "tarreceive" && parts[1] == "layers" && parts[2] != "" && parts[2] != "." && parts[2] != ".."
+}
+
+// BuildArtifactURLAllowed reports whether an artifact URL registered by a
+// scoped build token may be stored. Hosts fetch artifact layers with the
+// cluster key, so a URL outside the app's own prefix would read another
+// app's blobs. Only plain http URLs on the cluster blobstore qualify, with a
+// path that is already clean, no query, inside the app's own prefix or the
+// shared tarreceive layer store.
+func BuildArtifactURLAllowed(raw string, appIDs []string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.Host != "blobstore.discoverd" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return false
+	}
+	if u.RawPath != "" || path.Clean(u.Path) != u.Path {
+		return false
+	}
+	return BuildPathAllowed(u.Path, appIDs) || sharedLayerPath(u.Path)
 }
 
 // IsBlobstoreHost reports a blobstore.discoverd request host (with or without

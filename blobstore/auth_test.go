@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,12 +28,67 @@ import (
 
 func authServer(t *testing.T, keys []string, tokens *authorizer.Authorizer) *httptest.Server {
 	t.Helper()
+	return authServerWithObjects(t, keys, tokens, nil)
+}
+
+// authServerWithObjects serves protect over an inner handler that records
+// every call; existing names the objects the store already holds.
+func authServerWithObjects(t *testing.T, keys []string, tokens *authorizer.Authorizer, existing map[string]bool) *httptest.Server {
+	t.Helper()
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Inner", r.Method+" "+r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, "ok")
 	})
-	return httptest.NewServer(protect(inner, keys, tokens))
+	exists := func(p string) (bool, error) { return existing[p], nil }
+	return httptest.NewServer(protect(inner, keys, tokens, exists))
+}
+
+// buildTokenAuthorizer signs a build:artifacts token for appID the way
+// buildtoken.Mint does and returns it with an authorizer that verifies it.
+func buildTokenAuthorizer(t *testing.T, appID string) (string, *authorizer.Authorizer) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	token, err := tokensigner.New(priv).Sign(&api.AccessToken{
+		UserEmail:  "build:myapp",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(15 * time.Minute)),
+		Scopes:     []string{authz.ScopeBuildArtifacts},
+		AppGrants:  []*api.AppGrant{{AppId: appID, Permissions: []string{"app:write"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, err := authorizer.ParseTokenKey(base64.URLEncoding.EncodeToString(pub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token, authorizer.New([]string{"secret"}, nil, pk, time.Hour)
+}
+
+// statusWith sends method path with body "x" after setup and returns the
+// status and whether the inner handler ran.
+func statusWith(t *testing.T, srv *httptest.Server, method, path string, setup func(*http.Request)) (int, bool) {
+	t.Helper()
+	req, err := http.NewRequest(method, srv.URL+path, strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setup(req)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	return res.StatusCode, res.Header.Get("X-Inner") != ""
 }
 
 func TestProtectRejectsUnauthenticatedObjectMethods(t *testing.T) {
@@ -261,10 +317,10 @@ func TestProtectBuildTokenPaths(t *testing.T) {
 		return res.StatusCode
 	}
 
-	if got := do(http.MethodPut, "/slugs/layers/abc.squashfs"); got != http.StatusOK {
+	if got := do(http.MethodPut, "/slugs/apps/app-1/layers/abc.squashfs"); got != http.StatusOK {
 		t.Fatalf("build PUT slug = %d", got)
 	}
-	if got := do(http.MethodPut, "/tarreceive/images/x.json"); got != http.StatusOK {
+	if got := do(http.MethodPut, "/tarreceive/apps/app-1/images/x.json"); got != http.StatusOK {
 		t.Fatalf("build PUT tarreceive = %d", got)
 	}
 	if got := do(http.MethodGet, "/repos/app.tar"); got != http.StatusUnauthorized {
@@ -279,7 +335,7 @@ func TestProtectDisabledWithoutKeys(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(protect(inner, nil, nil))
+	srv := httptest.NewServer(protect(inner, nil, nil, nil))
 	defer srv.Close()
 	res, err := http.Get(srv.URL + "/file.txt")
 	if err != nil {
@@ -358,15 +414,15 @@ func TestProtectBuildTokenRejectsCopyFrom(t *testing.T) {
 
 	bearer := func(req *http.Request) { req.Header.Set("Authorization", "Bearer "+token) }
 	for _, src := range []string{"/repos/victim.tar", "/slugs/layers/other.squashfs", "/tarreceive/images/x.json"} {
-		if got := copyFromStatus(t, srv, "/slugs/layers/x.squashfs", bearer, src); got < 400 {
+		if got := copyFromStatus(t, srv, "/slugs/apps/app-1/layers/x.squashfs", bearer, src); got < 400 {
 			t.Fatalf("build token Copy-From %s = %d, want >= 400", src, got)
 		}
 	}
 	// A second Copy-From value must not slip past a check on the first.
-	if got := copyFromStatus(t, srv, "/slugs/layers/x.squashfs", bearer, "", "/repos/victim.tar"); got < 400 {
+	if got := copyFromStatus(t, srv, "/slugs/apps/app-1/layers/x.squashfs", bearer, "", "/repos/victim.tar"); got < 400 {
 		t.Fatalf("build token multi-value Copy-From = %d, want >= 400", got)
 	}
-	if got := copyFromStatus(t, srv, "/slugs/layers/x.squashfs", bearer); got != http.StatusOK {
+	if got := copyFromStatus(t, srv, "/slugs/apps/app-1/layers/x.squashfs", bearer); got != http.StatusOK {
 		t.Fatalf("build token plain PUT = %d", got)
 	}
 }
@@ -383,5 +439,95 @@ func TestProtectClusterKeyMayCopyFrom(t *testing.T) {
 		if got := copyFromStatus(t, srv, "/dst.txt", setup, "/src.txt"); got != http.StatusOK {
 			t.Fatalf("cluster key Copy-From = %d", got)
 		}
+	}
+}
+
+// NEW-05: a build token for app-1 reads and writes only app-1's prefix. It
+// cannot read or replace app-2's slug, nor the legacy shared directories.
+func TestProtectBuildTokenScopedToOwnApp(t *testing.T) {
+	token, tokens := buildTokenAuthorizer(t, "app-1")
+	srv := authServer(t, []string{"secret"}, tokens)
+	defer srv.Close()
+	bearer := func(req *http.Request) { req.Header.Set("Authorization", "Bearer "+token) }
+
+	for _, c := range []struct {
+		method, path string
+		ok           bool
+	}{
+		{http.MethodPut, "/slugs/apps/app-1/layers/abc.squashfs", true},
+		{http.MethodGet, "/slugs/apps/app-1/layers/abc.squashfs", true},
+		{http.MethodHead, "/slugs/apps/app-1/images/abc.json", true},
+		{http.MethodPut, "/tarreceive/apps/app-1/images/abc.json", true},
+		{http.MethodGet, "/slugs/apps/app-2/layers/abc.squashfs", false},
+		{http.MethodPut, "/slugs/apps/app-2/layers/abc.squashfs", false},
+		{http.MethodGet, "/tarreceive/apps/app-2/images/abc.json", false},
+		{http.MethodGet, "/slugs/layers/abc.squashfs", false},
+		{http.MethodPut, "/slugs/layers/abc.squashfs", false},
+		{http.MethodPut, "/slugs/images/abc.json", false},
+		{http.MethodGet, "/tarreceive/images/abc.json", false},
+		{http.MethodPut, "/tarreceive/layers/abc.squashfs", false},
+		{http.MethodGet, "/slugs/apps/app-1/layers/../../app-2/layers/abc.squashfs", false},
+		{http.MethodDelete, "/slugs/apps/app-1/layers/abc.squashfs", false},
+	} {
+		code, ran := statusWith(t, srv, c.method, c.path, bearer)
+		if c.ok && (code != http.StatusOK || !ran) {
+			t.Errorf("%s %s = %d (inner ran %v), want 200", c.method, c.path, code, ran)
+		}
+		if !c.ok && (code < 400 || ran) {
+			t.Errorf("%s %s = %d (inner ran %v), want refused", c.method, c.path, code, ran)
+		}
+	}
+}
+
+// NEW-05: a scoped credential cannot replace a content-addressed object that
+// already exists. The cluster key still can (operator repair, tarreceive).
+func TestProtectRefusesScopedPutOverExistingLayer(t *testing.T) {
+	token, tokens := buildTokenAuthorizer(t, "app-1")
+	existing := map[string]bool{
+		"/slugs/apps/app-1/layers/abc.squashfs":  true,
+		"/slugs/apps/app-1/images/abc.json":      true,
+		"/tarreceive/apps/app-1/images/abc.json": true,
+	}
+	srv := authServerWithObjects(t, []string{"secret"}, tokens, existing)
+	defer srv.Close()
+	bearer := func(req *http.Request) { req.Header.Set("Authorization", "Bearer "+token) }
+
+	for p := range existing {
+		code, ran := statusWith(t, srv, http.MethodPut, p, bearer)
+		if code != http.StatusConflict || ran {
+			t.Errorf("build PUT over existing %s = %d (inner ran %v), want 409", p, code, ran)
+		}
+		// Reading it back is still fine.
+		if code, ran := statusWith(t, srv, http.MethodGet, p, bearer); code != http.StatusOK || !ran {
+			t.Errorf("build GET existing %s = %d", p, code)
+		}
+	}
+	// A new content-addressed object is written.
+	if code, ran := statusWith(t, srv, http.MethodPut, "/slugs/apps/app-1/layers/new.squashfs", bearer); code != http.StatusOK || !ran {
+		t.Errorf("build PUT new layer = %d (inner ran %v)", code, ran)
+	}
+	// The cluster key may still replace one.
+	basic := func(req *http.Request) { req.SetBasicAuth("", "secret") }
+	if code, ran := statusWith(t, srv, http.MethodPut, "/slugs/apps/app-1/layers/abc.squashfs", basic); code != http.StatusOK || !ran {
+		t.Errorf("cluster key PUT over existing = %d (inner ran %v)", code, ran)
+	}
+}
+
+// NEW-05: a store error while checking for an existing object refuses the
+// scoped PUT rather than writing over something that might be there.
+func TestProtectScopedPutFailsClosedOnLookupError(t *testing.T) {
+	token, tokens := buildTokenAuthorizer(t, "app-1")
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Inner", "1")
+		w.WriteHeader(http.StatusOK)
+	})
+	exists := func(string) (bool, error) { return false, errors.New("db down") }
+	srv := httptest.NewServer(protect(inner, []string{"secret"}, tokens, exists))
+	defer srv.Close()
+	code, ran := statusWith(t, srv, http.MethodPut, "/slugs/apps/app-1/layers/abc.squashfs", func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+token)
+	})
+	if code < 500 || ran {
+		t.Fatalf("lookup error = %d (inner ran %v), want 5xx", code, ran)
 	}
 }

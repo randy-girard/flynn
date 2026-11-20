@@ -92,6 +92,7 @@ func importImage(tarPath string, client controller.Client, tarClient *tarclient.
 		TarClient:        tarClient,
 		ControllerClient: client,
 		ArtifactID:       imageID,
+		AppID:            os.Getenv("FLYNN_APP_ID"),
 	}); err != nil {
 		return err
 	}

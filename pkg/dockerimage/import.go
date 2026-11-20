@@ -18,6 +18,10 @@ type ImportOptions struct {
 	}
 	ArtifactID   string
 	ArtifactMeta map[string]string
+	// AppID puts the image manifest under that app's blobstore prefix when
+	// ControllerClient registers the artifact (a build token reaches no
+	// other). Empty keeps the legacy shared path.
+	AppID string
 }
 
 // ImportResult is the outcome of importing a docker save archive.
@@ -67,7 +71,7 @@ func ImportSaveDir(saveDir string, opts ImportOptions) (*ImportResult, error) {
 		if opts.ArtifactID == "" {
 			return nil, fmt.Errorf("missing artifact ID")
 		}
-		artifact, err = CreateArtifact(opts.ControllerClient, build, opts.ArtifactID, meta)
+		artifact, err = CreateArtifact(opts.ControllerClient, build, opts.ArtifactID, meta, opts.AppID)
 	} else {
 		artifact, err = opts.TarClient.CreateArtifact(build.Manifest)
 		if err == nil && len(meta) > 0 {

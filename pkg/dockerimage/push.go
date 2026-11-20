@@ -142,37 +142,40 @@ func entrypointEnv(env []string) map[string]string {
 	return out
 }
 
-// CreateArtifact uploads the image manifest to the blobstore and registers the
-// artifact with the controller.
+// CreateArtifact uploads the image manifest to appID's blobstore prefix (the
+// only one a build token reaches; the legacy shared one when appID is empty)
+// and registers the artifact with the controller.
 func CreateArtifact(client interface {
 	CreateArtifact(*ct.Artifact) error
-}, build *BuildResult, id string, meta map[string]string) (*ct.Artifact, error) {
-	rawManifest := build.Manifest.RawManifest()
-	imageURL := fmt.Sprintf("http://blobstore.discoverd/tarreceive/images/%s.json", build.Manifest.ID())
-	if err := uploadManifest(rawManifest, imageURL); err != nil {
+}, build *BuildResult, id string, meta map[string]string, appID string) (*ct.Artifact, error) {
+	artifact := imageArtifact(build, id, meta, appID)
+	if err := uploadManifest(artifact.RawManifest, artifact.URI); err != nil {
 		return nil, err
 	}
+	if err := client.CreateArtifact(artifact); err != nil {
+		return nil, err
+	}
+	return artifact, nil
+}
+
+// imageArtifact is the artifact for a built image whose manifest is stored
+// under appID's prefix. Layers stay in the shared tarreceive store.
+func imageArtifact(build *BuildResult, id string, meta map[string]string, appID string) *ct.Artifact {
+	rawManifest := build.Manifest.RawManifest()
 	artifactMeta := map[string]string{"blobstore": "true"}
 	for k, v := range meta {
 		artifactMeta[k] = v
 	}
-	artifact := &ct.Artifact{
+	return &ct.Artifact{
 		ID:               id,
 		Type:             ct.ArtifactTypeFlynn,
-		URI:              imageURL,
+		URI:              blobstoreauth.TarreceiveImageURL(appID, build.Manifest.ID()),
 		Meta:             artifactMeta,
 		RawManifest:      rawManifest,
 		Hashes:           build.Manifest.Hashes(),
 		Size:             int64(len(rawManifest)),
 		LayerURLTemplate: "http://blobstore.discoverd/tarreceive/layers/{id}.squashfs",
 	}
-	if id == "" {
-		artifact.ID = ""
-	}
-	if err := client.CreateArtifact(artifact); err != nil {
-		return nil, err
-	}
-	return artifact, nil
 }
 
 func uploadManifest(data []byte, url string) error {
@@ -186,7 +189,8 @@ func uploadManifest(data []byte, url string) error {
 		return err
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusOK {
+	// 409: the content-addressed manifest is already stored under this name.
+	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusConflict {
 		return fmt.Errorf("unexpected HTTP status: %s", res.Status)
 	}
 	return nil

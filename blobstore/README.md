@@ -19,6 +19,15 @@ request. The source is not authorized separately, so only the cluster key (or a
 cluster-admin token) may use this header. Signed build cache URLs (`BUILD_CACHE_URL`, `BUILD_CACHE_PUT_URL`) and
 scoped `build:artifacts` tokens get `403` on any PUT that carries it.
 
+A scoped `build:artifacts` token reaches only its own app's objects:
+`/slugs/apps/<app-id>/layers/*`, `/slugs/apps/<app-id>/images/*`, and
+`/tarreceive/apps/<app-id>/images/*` (GET, HEAD, PUT). Everything else,
+including the older shared `/slugs/layers/`, `/slugs/images/`, and
+`/tarreceive/` directories, needs the cluster key. Layer and image objects are
+content addressed, so a scoped PUT over one that already exists is refused
+with `409 Conflict` and nothing is written. The cluster key may still replace
+any object.
+
 ```shell
 # create /file1.txt
 echo data | curl -u :$AUTH_KEY -X PUT --data-binary @- http://blobstore.discoverd/file1.txt

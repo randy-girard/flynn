@@ -18,7 +18,11 @@ import (
 // are accepted only on that app's cache objects, expire, and are split into a
 // read token (GET/HEAD) and a write token (PUT). Copy-From is
 // refused for every credential except the cluster key and cluster-admin tokens.
-func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer) http.Handler {
+// A scoped build token reaches only its own app's /slugs/apps/<app>/ and
+// /tarreceive/apps/<app>/ objects, and may not PUT over a content-addressed
+// layer or manifest that already exists (exists reports that; nil means the
+// store holds nothing).
+func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer, exists func(string) (bool, error)) http.Handler {
 	if tokens == nil && len(keys) == 0 {
 		log.Println("warning: blobstore authentication disabled (set AUTH_KEY)")
 		return inner
@@ -54,6 +58,12 @@ func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer) h
 					http.Error(w, "Forbidden: Blobstore-Copy-From requires the cluster key", http.StatusForbidden)
 					return
 				}
+				if req.Method == http.MethodPut && !tok.HasClusterAdmin() && blobstoreauth.IsContentAddressedPath(p) {
+					if code, msg := refuseOverwrite(p, exists); code != 0 {
+						http.Error(w, msg, code)
+						return
+					}
+				}
 				inner.ServeHTTP(w, req)
 				return
 			}
@@ -88,10 +98,37 @@ func allowToken(tok *authorizer.Token, method, p string) bool {
 	}
 	switch method {
 	case http.MethodGet, http.MethodHead, http.MethodPut:
-		return blobstoreauth.IsBuildUploadPath(p)
+		return blobstoreauth.BuildPathAllowed(p, grantAppIDs(tok))
 	default:
 		return false
 	}
+}
+
+// grantAppIDs is the app IDs a scoped token is bound to.
+func grantAppIDs(tok *authorizer.Token) []string {
+	ids := make([]string, 0, len(tok.AppGrants))
+	for _, g := range tok.AppGrants {
+		ids = append(ids, g.AppID)
+	}
+	return ids
+}
+
+// refuseOverwrite returns a non-zero status when a scoped PUT to the
+// content-addressed path p must not run: 409 when the object exists, 503
+// when the store cannot say (fail closed).
+func refuseOverwrite(p string, exists func(string) (bool, error)) (int, string) {
+	if exists == nil {
+		return 0, ""
+	}
+	found, err := exists(p)
+	if err != nil {
+		log.Println("error checking for existing object:", err)
+		return http.StatusServiceUnavailable, "Service Unavailable"
+	}
+	if found {
+		return http.StatusConflict, "Conflict: content-addressed object already exists"
+	}
+	return 0, ""
 }
 
 func clusterAuthorizer(keys []string) *authorizer.Authorizer {

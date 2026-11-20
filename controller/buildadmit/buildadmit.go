@@ -233,6 +233,11 @@ func HostJob(in HostJobInput) *host.Job {
 		}
 		env[k] = v
 	}
+	// Builders store the slug or image manifest under this app's own
+	// blobstore prefix, the only one the minted build token reaches.
+	if in.AppID != "" {
+		env["FLYNN_APP_ID"] = in.AppID
+	}
 	meta := map[string]string{
 		"flynn-controller.app":      in.AppID,
 		"flynn-controller.app_name": in.AppName,

@@ -161,11 +161,127 @@ func TestIsPublicAndBuildPaths(t *testing.T) {
 	if IsPublicPath("/", http.MethodGet) {
 		t.Fatal("GET / lists files and must require auth")
 	}
-	if !IsBuildUploadPath("/slugs/layers/abc.squashfs") || !IsBuildUploadPath("/tarreceive/images/x.json") {
-		t.Fatal("builder upload prefixes")
+}
+
+// NEW-05: a build token reaches only its own app's prefix. The legacy shared
+// /slugs/ and /tarreceive/ directories are cluster-key only.
+func TestBuildPathAllowedIsPerApp(t *testing.T) {
+	apps := []string{"app-1"}
+	for _, p := range []string{
+		"/slugs/apps/app-1/layers/abc.squashfs",
+		"/slugs/apps/app-1/images/abc.json",
+		"/tarreceive/apps/app-1/images/abc.json",
+	} {
+		if !BuildPathAllowed(p, apps) {
+			t.Errorf("%s should be allowed for app-1", p)
+		}
 	}
-	if IsBuildUploadPath("/repos/x.tar") || IsBuildUploadPath("/plugins/x") {
-		t.Fatal("repos/plugins are cluster-key only")
+	for _, p := range []string{
+		"/slugs/apps/app-2/layers/abc.squashfs",
+		"/tarreceive/apps/app-2/images/abc.json",
+		"/slugs/layers/abc.squashfs",
+		"/slugs/images/abc.json",
+		"/tarreceive/images/x.json",
+		"/tarreceive/layers/x.squashfs",
+		"/tarreceive/apps/app-1/layers/x.squashfs",
+		"/slugs/apps/app-1/other/x",
+		"/slugs/apps/app-1/layers/",
+		"/slugs/apps/app-1/layers/a/b",
+		"/slugs/apps/app-1/layers/../../app-2/layers/x",
+		"/slugs/apps/app-1",
+		"/repos/x.tar",
+		"/plugins/x",
+		"/app-1-cache.tgz",
+	} {
+		if BuildPathAllowed(p, apps) {
+			t.Errorf("%s must not be allowed for app-1", p)
+		}
+	}
+	if BuildPathAllowed("/slugs/apps/app-1/layers/x", nil) {
+		t.Error("no grants, no paths")
+	}
+	if BuildPathAllowed("/slugs/apps//layers/x", []string{""}) {
+		t.Error("an empty app id grants nothing")
+	}
+}
+
+// NEW-05: layer and image objects are named by their content hash, so a
+// scoped credential never needs to replace one.
+func TestIsContentAddressedPath(t *testing.T) {
+	for _, p := range []string{
+		"/slugs/layers/abc.squashfs",
+		"/slugs/images/abc.json",
+		"/tarreceive/layers/abc.squashfs",
+		"/tarreceive/layers/abc.json",
+		"/tarreceive/images/abc.json",
+		"/slugs/apps/app-1/layers/abc.squashfs",
+		"/slugs/apps/app-1/images/abc.json",
+		"/tarreceive/apps/app-1/images/abc.json",
+	} {
+		if !IsContentAddressedPath(p) {
+			t.Errorf("%s is content addressed", p)
+		}
+	}
+	for _, p := range []string{"/app-1-cache.tgz", "/repos/app-1.tar", "/slugs/x", "/backups/x.tar"} {
+		if IsContentAddressedPath(p) {
+			t.Errorf("%s is not content addressed", p)
+		}
+	}
+}
+
+func TestAppBlobURLs(t *testing.T) {
+	for _, c := range []struct{ got, want string }{
+		{SlugLayerURL("app-1", "abc"), "http://blobstore.discoverd/slugs/apps/app-1/layers/abc.squashfs"},
+		{SlugImageURL("app-1", "abc"), "http://blobstore.discoverd/slugs/apps/app-1/images/abc.json"},
+		{SlugLayerURLTemplate("app-1"), "http://blobstore.discoverd/slugs/apps/app-1/layers/{id}.squashfs"},
+		{TarreceiveImageURL("app-1", "abc"), "http://blobstore.discoverd/tarreceive/apps/app-1/images/abc.json"},
+		// No app id (an operator run with the cluster key): the legacy layout.
+		{SlugLayerURL("", "abc"), "http://blobstore.discoverd/slugs/layers/abc.squashfs"},
+		{SlugImageURL("", "abc"), "http://blobstore.discoverd/slugs/images/abc.json"},
+		{SlugLayerURLTemplate(""), "http://blobstore.discoverd/slugs/layers/{id}.squashfs"},
+		{TarreceiveImageURL("", "abc"), "http://blobstore.discoverd/tarreceive/images/abc.json"},
+	} {
+		if c.got != c.want {
+			t.Errorf("got %s, want %s", c.got, c.want)
+		}
+	}
+}
+
+// NEW-05: an artifact a build token registers is fetched by hosts with the
+// cluster key, so every URL in it must stay in the app's own prefix (or the
+// shared tarreceive layer store, which only tarreceive writes).
+func TestBuildArtifactURLAllowed(t *testing.T) {
+	apps := []string{"app-1"}
+	for _, u := range []string{
+		"http://blobstore.discoverd/slugs/apps/app-1/images/abc.json",
+		"http://blobstore.discoverd/slugs/apps/app-1/layers/abc.squashfs",
+		"http://blobstore.discoverd/tarreceive/apps/app-1/images/abc.json",
+		"http://blobstore.discoverd/tarreceive/layers/abc.squashfs",
+	} {
+		if !BuildArtifactURLAllowed(u, apps) {
+			t.Errorf("%s should be allowed", u)
+		}
+	}
+	for _, u := range []string{
+		"http://blobstore.discoverd/slugs/apps/app-2/images/abc.json",
+		"http://blobstore.discoverd/slugs/layers/abc.squashfs",
+		"http://blobstore.discoverd/slugs/images/abc.json",
+		"http://blobstore.discoverd/tarreceive/images/abc.json",
+		"http://blobstore.discoverd/repos/app-2.tar",
+		"http://blobstore.discoverd/slugs/apps/app-1/layers/..%2F..%2Fapp-2%2Flayers%2Fx.squashfs",
+		"http://blobstore.discoverd/slugs/apps/app-1/../app-2/layers/x.squashfs",
+		"http://BLOBSTORE.discoverd:80/slugs/apps/app-2/layers/x.squashfs",
+		"http://blobstore.discoverd/tarreceive/layers/a/b.squashfs",
+		"http://blobstore.discoverd/slugs/apps/app-1/layers/x.squashfs?token=1",
+		"file:///var/lib/flynn/layer-cache/x.squashfs",
+		"https://example.com/x.squashfs",
+		"http://example.com/x.squashfs",
+		"",
+		"::",
+	} {
+		if BuildArtifactURLAllowed(u, apps) {
+			t.Errorf("%q must not be allowed", u)
+		}
 	}
 }
 
