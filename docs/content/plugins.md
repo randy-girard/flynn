@@ -584,6 +584,51 @@ The platform `postgres` system app does the same: its `postgres` peers set
 addon=postgres …`. `flynn-host update` adds the variable to clusters
 bootstrapped before this change and redeploys the peers.
 
+## Caller identity on controller-proxied calls
+
+When the controller forwards a client's API request to a plugin (today the
+`/github/...` and `/apps/:id/github...` routes go to the GitHub plugin), it
+authenticates to the plugin with the cluster controller key, whoever the user
+is. The key on its own therefore says nothing about the caller. The controller
+adds two headers:
+
+- `X-Flynn-Origin: user` when the caller is not a cluster admin (PLG-04).
+- `X-Flynn-Caller`: the caller's identity, signed. It carries `admin`,
+  `user_id`, `account` (the personal account, `user:<id>`), and `app_grants`
+  (the per-app permissions the controller resolved for the caller), bound to
+  the request method and URI and valid for two minutes. The value is
+  authenticated with HMAC-SHA256 keyed by the controller key, so only a holder
+  of that key can mint one, and a value copied from one request does not
+  verify on another route.
+
+The controller drops any client-supplied `X-Flynn-Origin` or `X-Flynn-Caller`
+before it forwards, so a client cannot claim to be someone else. A plugin reads
+the identity with `github.com/randy-girard/flynn/pkg/plugincaller`:
+
+```go
+caller, err := plugincaller.FromRequest(r, controllerKey)
+switch {
+case errors.Is(err, plugincaller.ErrNoCaller):
+	// An older controller, or a direct call with the key. Use X-Flynn-Origin
+	// to tell an operator from a user; a user without an identity sees nothing
+	// account-scoped.
+case err != nil:
+	// Present but invalid (forged, expired, or signed for another request):
+	// refuse the request.
+case caller.Admin:
+	// A cluster admin.
+default:
+	// caller.UserID, caller.Account, caller.Can(appID, "app:github:write"),
+	// caller.AppIDs("app:github:write")
+}
+```
+
+`Can` and `AppIDs` apply the controller's own permission implications
+(`app:write` covers `app:github:write`, and so on), so a plugin does not keep a
+copy of them. A plugin that scopes data to an account should fail closed when
+the identity is missing for a non-admin call, so an older controller never
+widens what a tenant sees.
+
 ## Production
 
 With no local checkout, an alias pulls the plugin’s published GitHub Release

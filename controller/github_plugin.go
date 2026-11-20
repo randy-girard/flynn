@@ -11,6 +11,7 @@ import (
 	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/plugincaller"
 	"golang.org/x/net/context"
 )
 
@@ -97,11 +98,23 @@ func (c *controllerAPI) proxyGitHubPlugin(ctx context.Context, w http.ResponseWr
 	// cluster admin so it applies per-account checks (PLG-04), and never pass a
 	// client-supplied value through.
 	out.Header.Del("X-Flynn-Origin")
-	if tok := authz.TokenFromContext(ctx); tok != nil && !tok.HasClusterAdmin() {
+	tok := authz.TokenFromContext(ctx)
+	if tok != nil && !tok.HasClusterAdmin() {
 		out.Header.Set("X-Flynn-Origin", "user")
 	}
+	// The signed caller identity (NEW-01) lets the plugin scope what it returns
+	// to the caller's account. A client-supplied value is always dropped.
+	plugincaller.SetHeader(out.Header, "")
 	if key := firstNonEmpty(os.Getenv("AUTH_KEY"), os.Getenv("CONTROLLER_KEY")); key != "" {
-		out.SetBasicAuth("", strings.Split(key, ",")[0])
+		key = strings.Split(key, ",")[0]
+		out.SetBasicAuth("", key)
+		if caller := plugincaller.FromToken(tok); caller != nil {
+			v, err := plugincaller.Sign(key, *caller, out.Method, req.URL.RequestURI(), time.Now())
+			if err != nil {
+				return false
+			}
+			plugincaller.SetHeader(out.Header, v)
+		}
 	}
 	client := c.githubHTTP
 	if client == nil {
