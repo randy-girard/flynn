@@ -135,7 +135,9 @@ To connect to a console for the cluster, run `flynn clickhouse:cli` (alias
 does not require the ClickHouse client to be installed locally or firewall or
 security changes, as it runs in a container on the Flynn cluster. The CLI uses
 `--secure` against **9440** and accepts the Flynn-minted appliance certificate
-(the private CA is not in the image trust store). External clients should
+(the private CA is not in the image trust store). The password reaches
+`clickhouse-client` as `CLICKHOUSE_PASSWORD` in the job environment, never as
+a `--password` argument. External clients should
 still pass `FLYNN_CLICKHOUSE_TRUSTED_CERT`.
 
 ### Dumping and restoring

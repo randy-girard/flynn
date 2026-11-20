@@ -126,6 +126,13 @@ To connect to a `mongosh` console for the database, run `flynn mongodb:cli`
 installed locally or firewall/security changes, as it runs in a container on
 the Flynn cluster.
 
+The job connects from its environment (`MONGO_HOST`, `MONGO_USER`,
+`MONGO_PWD`, `MONGO_DATABASE`). The password is never a job argument, so it is
+not in the job's recorded arguments or the process list. Arguments after `--`
+go to
+`mongosh`. The console stays open unless they name a script (`--eval`,
+`--file`, or a `.js` file). A host or credentials given there have no effect.
+
 ### Dumping and restoring
 
 `flynn mongodb:dump` writes one `mongodump --archive --oplog` of
