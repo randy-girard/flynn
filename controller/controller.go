@@ -451,6 +451,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.DELETE("/memberships", httphelper.WrapHandler(api.DeleteMembership))
 	httpRouter.GET("/memberships", httphelper.WrapHandler(api.ListMemberships))
 	httpRouter.GET("/whoami", httphelper.WrapHandler(api.WhoAmI))
+	httpRouter.GET("/whoami/grants", httphelper.WrapHandler(api.WhoAmIGrants))
 	httpRouter.POST("/tokens", httphelper.WrapHandler(api.CreateToken))
 	httpRouter.GET("/tokens", httphelper.WrapHandler(api.ListTokens))
 	httpRouter.DELETE("/tokens/:tokens_id", httphelper.WrapHandler(api.DeleteToken))

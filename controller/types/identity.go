@@ -114,6 +114,23 @@ type WhoAmI struct {
 	Account string `json:"account"`
 }
 
+// CallerGrants is GET /whoami/grants: the caller's grants after the
+// controller expands its credential (a login token or a personal access
+// token) from the apps its user can reach. Grants are keyed by app id only.
+// gitreceive asks for it on a tenant's behalf, since a tenant's login token
+// names the user and carries no grants of its own.
+type CallerGrants struct {
+	UserID       string           `json:"user_id"`
+	ClusterAdmin bool             `json:"cluster_admin"`
+	AppGrants    []CallerAppGrant `json:"app_grants"`
+}
+
+// CallerAppGrant is one app's permissions in CallerGrants.
+type CallerAppGrant struct {
+	AppID       string   `json:"app_id"`
+	Permissions []string `json:"permissions"`
+}
+
 // UserCreate is POST /users.
 type UserCreate struct {
 	Email        string `json:"email"`

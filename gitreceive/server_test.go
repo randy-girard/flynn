@@ -726,3 +726,174 @@ func TestInitRepoAcceptsPushToCheckedOutBranch(t *testing.T) {
 	run(src, "commit", "-q", "-am", "second")
 	run(src, "push", "dest", "HEAD")
 }
+
+// fakeCallers answers GET /whoami/grants by the credential on the request.
+type fakeCallers struct {
+	byCred  map[string]*ct.CallerGrants
+	blocked map[string]bool
+	calls   int
+}
+
+func (f *fakeCallers) CallerGrants(r *http.Request) (*ct.CallerGrants, error) {
+	f.calls++
+	cred := ""
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		cred = strings.TrimPrefix(auth, "Bearer ")
+	} else {
+		_, cred, _ = r.BasicAuth()
+	}
+	if f.blocked[cred] {
+		return nil, errCallerForbidden
+	}
+	if g, ok := f.byCred[cred]; ok {
+		return g, nil
+	}
+	return nil, errCallerUnauthorized
+}
+
+// TestGitHandlerTenantGrantsFromController: a tenant's login token names the
+// user but carries no app grants; the controller expands it per request.
+// gitreceive must ask the controller for the caller's grants, so a tenant can
+// push and fetch its own app, and still not another tenant's.
+func TestGitHandlerTenantGrantsFromController(t *testing.T) {
+	pubKey, privKey, err := tokensigner.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, err := authorizer.ParseTokenKey(pubKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign, err := tokensigner.ParseSigningKey(privKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := authorizer.New([]string{"cluster-secret"}, nil, pk, time.Hour)
+	apps := &fakeApps{apps: map[string]*ct.App{
+		"mine":   {ID: "uuid-a", Name: "mine"},
+		"theirs": {ID: "uuid-b", Name: "theirs"},
+		// An app named after another app's id must not pick up that grant.
+		"uuid-a": {ID: "uuid-c", Name: "uuid-a"},
+	}}
+	h := newGitHandler(apps, auth)
+	var prepared string
+	h.prepare = func(cacheKey string) (string, error) {
+		prepared = cacheKey
+		dir := t.TempDir()
+		if out, err := exec.Command("git", "init", dir).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git init: %s: %s", err, out)
+		}
+		return dir, nil
+	}
+
+	userTok := func(userID string) string {
+		t.Helper()
+		now := time.Now()
+		s, err := sign.Sign(&api.AccessToken{
+			UserId:     userID,
+			UserEmail:  userID + "@flynn.test",
+			IssueTime:  timestamppb.New(now),
+			ExpireTime: timestamppb.New(now.Add(10 * time.Minute)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	tenantA := userTok("user-a")
+	viewer := userTok("viewer")
+	suspended := userTok("suspended")
+	unknown := userTok("unknown")
+	ownGrant := []ct.CallerAppGrant{{AppID: "uuid-a", Permissions: []string{"app:admin"}}}
+	callers := &fakeCallers{byCred: map[string]*ct.CallerGrants{
+		tenantA:                 {UserID: "user-a", AppGrants: ownGrant},
+		"flynn_pat_tenant-a":    {UserID: "user-a", AppGrants: ownGrant},
+		"flynn_pat_admin":       {UserID: "admin", ClusterAdmin: true},
+		viewer:                  {UserID: "viewer", AppGrants: []ct.CallerAppGrant{{AppID: "uuid-a", Permissions: []string{"app:read"}}}},
+		unknown:                 {UserID: "unknown"},
+		"flynn_pat_by_app_name": {UserID: "user-a", AppGrants: []ct.CallerAppGrant{{AppID: "mine", Permissions: []string{"app:admin"}}}},
+	}, blocked: map[string]bool{suspended: true}}
+	h.callers = callers
+
+	do := func(path, cred string, basic bool) int {
+		t.Helper()
+		prepared = ""
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		if basic {
+			req.SetBasicAuth("Bearer", cred)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+cred)
+		}
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	push := func(app string) string { return "/" + app + ".git/info/refs?service=git-receive-pack" }
+	fetch := func(app string) string { return "/" + app + ".git/info/refs?service=git-upload-pack" }
+
+	cases := []struct {
+		name     string
+		path     string
+		cred     string
+		basic    bool
+		want     int
+		wantPrep string
+	}{
+		{"tenant_push_own", push("mine"), tenantA, false, 200, "uuid-a"},
+		// git-credentials sends username=Bearer and the token as password.
+		{"tenant_push_own_basic", push("mine"), tenantA, true, 200, "uuid-a"},
+		{"tenant_fetch_own", fetch("mine"), tenantA, false, 200, "uuid-a"},
+		{"tenant_cannot_push_other", push("theirs"), tenantA, false, 403, ""},
+		{"tenant_cannot_fetch_other", fetch("theirs"), tenantA, false, 403, ""},
+		{"tenant_cannot_push_app_named_like_own_id", push("uuid-a"), tenantA, false, 403, ""},
+		{"viewer_cannot_push", push("mine"), viewer, false, 403, ""},
+		{"viewer_can_fetch", fetch("mine"), viewer, false, 200, "uuid-a"},
+		{"user_without_apps_cannot_push", push("mine"), unknown, false, 403, ""},
+		{"pat_push_own", push("mine"), "flynn_pat_tenant-a", true, 200, "uuid-a"},
+		{"pat_cannot_push_other", push("theirs"), "flynn_pat_tenant-a", true, 403, ""},
+		{"admin_pat_push_any", push("theirs"), "flynn_pat_admin", true, 200, "uuid-b"},
+		{"pat_grant_keyed_by_name_ignored", push("mine"), "flynn_pat_by_app_name", true, 403, ""},
+		{"unknown_pat_unauthorized", push("mine"), "flynn_pat_nope", true, 401, ""},
+		{"not_a_pat_unauthorized", push("mine"), "garbage", true, 401, ""},
+		{"suspended_user_forbidden", push("mine"), suspended, false, 403, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := do(tc.path, tc.cred, tc.basic); got != tc.want {
+				t.Fatalf("status=%d, want %d", got, tc.want)
+			}
+			if prepared != tc.wantPrep {
+				t.Fatalf("prepare cacheKey=%q, want %q", prepared, tc.wantPrep)
+			}
+		})
+	}
+
+	// A token that already carries the grant, the cluster key, and a
+	// cluster:admin token are decided locally; the controller is not asked.
+	callers.calls = 0
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", push("theirs"), nil)
+	req.SetBasicAuth("", "cluster-secret")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("cluster key push=%d", rec.Code)
+	}
+	now := time.Now()
+	adminJWT, err := sign.Sign(&api.AccessToken{UserId: "admin", IssueTime: timestamppb.New(now), ExpireTime: timestamppb.New(now.Add(time.Minute)), Scopes: []string{"cluster:admin"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := do(push("theirs"), adminJWT, false); got != 200 {
+		t.Fatalf("admin jwt push=%d", got)
+	}
+	deployTok, err := sign.Sign(&api.AccessToken{IssueTime: timestamppb.New(now), ExpireTime: timestamppb.New(now.Add(time.Minute)), AppGrants: []*api.AppGrant{{AppId: "uuid-a", Permissions: []string{"app:deploy"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := do(push("mine"), deployTok, false); got != 200 {
+		t.Fatalf("app-scoped token push=%d", got)
+	}
+	if callers.calls != 0 {
+		t.Fatalf("controller asked %d times for locally decided credentials", callers.calls)
+	}
+}

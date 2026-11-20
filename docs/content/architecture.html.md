@@ -235,7 +235,9 @@ releases through the controller and roll out with the same deploy logic.
 Git pushes are received over HTTPS by the gitreceive component which spawns
 a receiver that starts a new *slugbuilder* job to process the build. If the repo
 has been pushed before, a cached archive of the repo will be downloaded from the
-*blobstore* before receiving the git push.
+*blobstore* before receiving the git push. A tenant's push is authorized
+against the grants the controller returns for that caller from
+`GET /whoami/grants` (see [Security](security.md)).
 
 ### slugbuilder
 

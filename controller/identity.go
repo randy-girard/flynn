@@ -431,6 +431,32 @@ func (c *controllerAPI) WhoAmI(ctx context.Context, w http.ResponseWriter, _ *ht
 	httphelper.JSON(w, 200, ct.WhoAmI{User: *u, Account: "user:" + u.ID})
 }
 
+// WhoAmIGrants is GET /whoami/grants: the caller's grants after expandToken,
+// keyed by app id. gitreceive forwards a tenant's credential here, because a
+// login token carries no grants and a personal access token is only known to
+// the controller. Compile and service credentials never reach it (the route
+// is a user session route).
+func (c *controllerAPI) WhoAmIGrants(ctx context.Context, w http.ResponseWriter, _ *http.Request) {
+	tok := authz.TokenFromContext(ctx)
+	out := ct.CallerGrants{AppGrants: []ct.CallerAppGrant{}}
+	if tok == nil || tok.HasClusterAdmin() {
+		out.ClusterAdmin = true
+		if tok != nil {
+			out.UserID = tok.UserID
+		}
+		httphelper.JSON(w, 200, out)
+		return
+	}
+	out.UserID = tok.UserID
+	for _, g := range tok.AppGrants {
+		if g.AppID == "" || len(g.Permissions) == 0 {
+			continue
+		}
+		out.AppGrants = append(out.AppGrants, ct.CallerAppGrant{AppID: g.AppID, Permissions: append([]string(nil), g.Permissions...)})
+	}
+	httphelper.JSON(w, 200, out)
+}
+
 func (c *controllerAPI) CreateToken(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	tok := authz.TokenFromContext(ctx)
 	if !authz.UserBound(tok) {

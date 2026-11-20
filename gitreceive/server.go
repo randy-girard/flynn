@@ -12,6 +12,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -96,6 +97,7 @@ type appLookup interface {
 
 type gitHandler struct {
 	controller appLookup
+	callers    callerLookup
 	auth       *authorizer.Authorizer
 	signer     *tokensigner.Signer
 	preview    previewLookup
@@ -132,6 +134,7 @@ func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandle
 	}
 	return &gitHandler{
 		controller: controller,
+		callers:    newControllerCallers(url),
 		auth:       auth,
 		preview:    newPipelinePreviewClient(),
 		webhookURL: strings.TrimRight(url, "/") + "/github/webhook",
@@ -154,8 +157,11 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, err := h.auth.AuthorizeRequest(r)
-	if err != nil {
+	tok, err := h.authorizeCaller(r)
+	if errors.Is(err, errCallerForbidden) {
+		http.Error(w, "Forbidden", 403)
+		return
+	} else if err != nil {
 		w.Header().Set("WWW-Authenticate", "Basic")
 		http.Error(w, "Authentication required", 401)
 		return
