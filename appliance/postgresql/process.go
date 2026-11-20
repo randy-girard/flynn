@@ -125,6 +125,13 @@ type Process struct {
 	// reseedScheduled keeps a single reseed goroutine when WAL recycle is
 	// logged after start() already returned success.
 	reseedScheduled atomic.Bool
+	// basebackupMtx guards basebackupUpstream and cancelBasebackup, the
+	// upstream an in-flight pg_basebackup pulls from and how to abort it.
+	// Reconfigure aborts it before taking p.mtx when sirenia has moved this
+	// peer to another upstream or role.
+	basebackupMtx      sync.Mutex
+	basebackupUpstream *discoverd.Instance
+	cancelBasebackup   func()
 
 	// cancelSyncWait cancels the goroutine that is waiting for the downstream to
 	// catch up, if running
@@ -284,6 +291,10 @@ func (p *Process) Info() (*client.DatabaseInfo, error) {
 }
 
 func (p *Process) Reconfigure(config *state.Config) error {
+	// A reseed holds p.mtx for the whole pg_basebackup. Abort one that pulls
+	// from an upstream sirenia has replaced, or the new config waits on a
+	// copy from a dead primary.
+	p.cancelSupersededBasebackup(config)
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 
@@ -731,12 +742,16 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 	log.Info("pulling basebackup", "staging", staging)
 	p.basebackup.Store(&client.BasebackupProgress{UpdatedAt: time.Now().UTC()})
 	defer p.basebackup.Store(nil)
+	superseded := make(chan struct{})
+	p.setBasebackupUpstream(upstream, superseded)
+	defer p.setBasebackupUpstream(nil, nil)
 	cmd := exec.Command(
 		p.binPath("pg_basebackup"),
 		"--pgdata", staging,
 		"--dbname", fmt.Sprintf(
-			"host=%s port=%s user=flynn password=%s application_name=%s",
+			"host=%s port=%s user=flynn password=%s application_name=%s %s",
 			upstream.Host(), upstream.Port(), p.password, upstream.Meta[IDKey],
+			basebackupConnTimeouts,
 		),
 		"--wal-method=stream",
 		// Force an immediate checkpoint on the upstream instead of
@@ -748,8 +763,25 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 		"--progress",
 		"--verbose",
 	)
-	cmd.Stderr = io.MultiWriter(os.Stderr, &basebackupProgressWriter{dst: &p.basebackup})
-	err := p.runCmd(cmd)
+	activity := &activityWriter{}
+	activity.touch()
+	cmd.Stderr = io.MultiWriter(os.Stderr, activity, &basebackupProgressWriter{dst: &p.basebackup})
+	err := p.runCmdUntil(cmd, func() error {
+		select {
+		case <-superseded:
+			return errBasebackupSuperseded
+		default:
+		}
+		// Past 100% the copy is complete and pg_basebackup may spend a
+		// long, silent time syncing a large data directory to disk.
+		if pr := p.basebackup.Load(); pr != nil && pr.Percent >= 100 {
+			return nil
+		}
+		if idle := activity.idle(); idle > basebackupStallTimeout {
+			return fmt.Errorf("pg_basebackup made no progress for %s, upstream %s is unreachable", idle.Round(time.Second), upstream.Addr)
+		}
+		return nil
+	})
 	if err != nil {
 		log.Error("error pulling basebackup", "err", err)
 		if rmErr := os.RemoveAll(staging); rmErr != nil {
@@ -810,8 +842,9 @@ func (p *Process) reseedStandbyFromUpstream(log log15.Logger, upstream *discover
 	if err := p.pullBasebackup(log, upstream); err != nil {
 		// pullBasebackup leaves the existing datadir untouched on failure.
 		// Restart on it so a sync can still take over when its upstream is
-		// the peer that just went away.
-		if p.dataDirInitialized() && !p.stopped() {
+		// the peer that just went away. A superseded pull skips this: the
+		// Reconfigure waiting on p.mtx applies the new role and starts it.
+		if p.dataDirInitialized() && !p.stopped() && !errors.Is(err, errBasebackupSuperseded) {
 			if startErr := p.start(); startErr != nil {
 				log.Error("error restarting on existing data after failed reseed", "err", startErr)
 			} else {
@@ -1914,16 +1947,37 @@ func (p *Process) clusterAlreadyInitialized() bool {
 	return err == nil
 }
 func (p *Process) runCmd(cmd *exec.Cmd) error {
+	return p.runCmdUntil(cmd, nil)
+}
+
+// runCmdUntil runs cmd and kills it when the process is stopped or abort
+// returns an error, which is then returned. abort is polled every
+// checkInterval.
+func (p *Process) runCmdUntil(cmd *exec.Cmd, abort func() error) error {
 	p.log.Debug("running command", "fn", "runCmd", "cmd", cmd.Args)
 	cmd.Stdout = os.Stdout
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
+	// pg_basebackup --wal-method=stream forks a WAL receiver that shares
+	// stderr. Killing only the parent leaves cmd.Wait waiting on that pipe,
+	// so kill the whole process group, and stop waiting on the pipe soon
+	// after the kill.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
+	kill := func(reason error) error {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Process.Kill()
+		}
+		<-done
+		return reason
+	}
 	// pg_basebackup and initdb run while p.mtx is held. /stop sets stopped
 	// before it takes the lock; kill the child so Stop can proceed instead of
 	// waiting out a basebackup the deploy client will abandon after 10s.
@@ -1934,13 +1988,14 @@ func (p *Process) runCmd(cmd *exec.Cmd) error {
 		case err := <-done:
 			return err
 		case <-tick.C:
-			if p.stopped() && cmd.Process != nil {
-				_ = cmd.Process.Kill()
-				err := <-done
-				if err == nil {
-					err = errors.New("stopped")
+			if p.stopped() {
+				return kill(errors.New("stopped"))
+			}
+			if abort != nil {
+				if err := abort(); err != nil {
+					p.log.Error("killing command", "fn", "runCmd", "cmd", cmd.Path, "err", err)
+					return kill(err)
 				}
-				return err
 			}
 		}
 	}
