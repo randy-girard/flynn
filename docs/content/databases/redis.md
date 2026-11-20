@@ -124,7 +124,13 @@ controller's host stats show another host with room for the runtime; a user
 follower otherwise starts on any host. When an upgrade replaces a follower, the replacement takes
 the old follower's name and is scaled back up to its original process count; a
 failed switch restores both apps. A primary cannot be deleted while it still has
-followers.
+followers. After a failover the fenced old primary is the follower, so
+`flynn addons:destroy` takes it first and then the promoted primary. The
+promoted primary's claim on the old name (`FLYNN_REDIS_SERVICE_ALIAS`) does
+not stop the old primary's app from being deleted: the controller's delete
+guard counts an app that reads another app's data, not one that only answers
+on its discoverd name. Postgres and MySQL `*_SERVICE_ALIAS` keys are treated
+the same way.
 
 ### Dumping and restoring
 

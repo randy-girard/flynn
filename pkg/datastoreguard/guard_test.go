@@ -89,3 +89,57 @@ func (m *memReleases) GetAppRelease(id string) (*ct.Release, error) {
 	}
 	return m.rel[id], nil
 }
+
+// NEW-31: after a keep-service failover the promoted primary claims the old
+// primary's discoverd name (FLYNN_REDIS_SERVICE_ALIAS) and the old primary
+// follows the promoted one (FLYNN_REDIS_LEADER). Counting the alias as a data
+// reference refused both deletes, so addons:destroy leaked both apps.
+func failedOverRedisPair() *memReleases {
+	return &memReleases{apps: []*ct.App{
+		{ID: "old", Name: "redis-lagoon-04896"},
+		{ID: "new", Name: "redis-estuary-39405"},
+	}, rel: map[string]*ct.Release{
+		"old": {Env: map[string]string{
+			"FLYNN_REDIS":        "redis-lagoon-04896",
+			"FLYNN_REDIS_ROLE":   "follower",
+			"FLYNN_REDIS_LEADER": "redis-estuary-39405",
+			"REDIS_MASTER_HOST":  "leader.redis-lagoon-04896.discoverd",
+		}},
+		"new": {Env: map[string]string{
+			"FLYNN_REDIS":               "redis-estuary-39405",
+			"FLYNN_REDIS_ROLE":          "primary",
+			"FLYNN_REDIS_SERVICE_ALIAS": "redis-lagoon-04896",
+		}},
+	}}
+}
+
+func TestRefuseIfReferencedAllowsOldPrimaryAfterFailover(t *testing.T) {
+	src := failedOverRedisPair()
+	if err := RefuseIfReferenced(src, "redis-lagoon-04896"); err != nil {
+		t.Fatalf("the promoted primary's service alias must not block deleting the old primary: %v", err)
+	}
+}
+
+func TestRefuseIfReferencedKeepsPromotedPrimaryWhileOldPrimaryFollows(t *testing.T) {
+	src := failedOverRedisPair()
+	if err := RefuseIfReferenced(src, "redis-estuary-39405"); err == nil {
+		t.Fatal("the old primary still replicates from the promoted one; its delete must wait")
+	}
+	src.apps = src.apps[1:]
+	delete(src.rel, "old")
+	if err := RefuseIfReferenced(src, "redis-estuary-39405"); err != nil {
+		t.Fatalf("with the old primary gone the promoted primary must be deletable: %v", err)
+	}
+}
+
+func TestReferencesIgnoresServiceAliasForEveryFailoverPlugin(t *testing.T) {
+	for _, key := range []string{"FLYNN_REDIS_SERVICE_ALIAS", "FLYNN_POSTGRES_SERVICE_ALIAS", "FLYNN_MYSQL_SERVICE_ALIAS"} {
+		if References(map[string]string{key: "db-old-1"}, "db-old-1") {
+			t.Errorf("%s claims a discoverd name; it does not read that app's data", key)
+		}
+	}
+	env := map[string]string{"FLYNN_REDIS_SERVICE_ALIAS": "db-old-1", "REDIS_URL": "redis://:x@leader.db-old-1.discoverd:6379"}
+	if !References(env, "db-old-1") {
+		t.Fatal("an alias must not hide a real reference in another key")
+	}
+}
