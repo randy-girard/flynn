@@ -44,9 +44,13 @@ confirmation, and `addons:types`. The plugin owns the type: verbs, create
 options, runtimes, expose defaults, and destroy rules.
 
 Declare one type in `flynn-plugin.json` under `addon`. Install stamps it on
-the plugin app as `flynn-plugin-addon`, which is what `flynn addons:types`
-and `flynn addons:create --help` read. Official plugins that are not installed
-are not listed. `addons:create <type>` for a missing type tells the operator
+the plugin app as `flynn-plugin-addon`. The controller serves the installed
+types and plugin CLI specs on `GET /plugin-catalog`, which is what
+`flynn addons:types`, `flynn addons:create --help`, and plugin commands
+read, for a tenant as well as a cluster admin. In `hosted` mode a tenant
+does not see a provider without `tenant_safe`. A controller without that
+route is read the old way, from `GET /apps?all=true`, which only a cluster
+admin can use. Official plugins that are not installed are not listed. `addons:create <type>` for a missing type tells the operator
 to run `flynn-host plugin:install <type>`.
 
 ```json
@@ -247,7 +251,8 @@ The controller stores it on the provider. Install creates the provider with
 the flag, and every later install or update sets the stored flag to the
 manifest's value (`PUT /providers/:id`, cluster key only), so turning it on
 or off in a new plugin release takes effect on update. In `hosted` tenancy
-mode, a non-operator can provision only providers with `tenant_safe` true.
+mode, a non-operator can provision only providers with `tenant_safe` true,
+and `GET /plugin-catalog` leaves the others out of that user's catalog.
 `self_hosted` ignores the flag. Leave it false until the provider has
 per-resource credentials and limits. The official Postgres, MariaDB, MongoDB,
 Redis, Kafka, and ClickHouse providers set it.

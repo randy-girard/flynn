@@ -362,6 +362,17 @@ organization it manages); unowned platform resources and other tenants'
 resources are left out. App-scoped and compile tokens are denied and use
 `GET /apps/:id/resources`. A cluster admin still sees every resource.
 
+`GET /plugin-catalog` is open to user sessions. It is the plugin commands
+and add-on types the flynn CLI offers (`flynn help`, `addons:types`,
+`addons:create`, `addons:attach`, `flynn redis` and the other plugin
+commands). The body is the CLI and add-on specs from each installed
+plugin's manifest and the plugin app names, with no app ids, meta, env, or
+provider URLs. A tenant's `GET /apps` lists only its own apps, never plugin
+apps, so the CLI cannot build this list itself. In `hosted` mode a
+non-operator does not see a provider without `tenant_safe` (or its add-on
+type and plugin command), the same providers `addons:create` refuses.
+App-scoped and compile tokens are denied.
+
 Billing quota writes and suspension use scope `account:quota` in
 `QUOTA_TOKEN`. The token lasts up to 180 days. It is not `cluster:admin`.
 It may list tenant apps (`GET /apps`) and list each app's formations
