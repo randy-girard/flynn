@@ -453,6 +453,11 @@ flynn route:add http www.example.com
 DNS will also need to be configured for the domain, in this example
 `www.example.com` should be set to a CNAME to `$APPNAME.$CLUSTERDOMAIN`.
 
+On a hosted cluster the app's owner account must first verify the domain
+(or a parent such as `example.com`) with a `_flynn-verify` TXT record. The
+controller looks the record up itself. See
+[Hosted custom domains](security.md#hosted-custom-domains).
+
 ### Path-based HTTP routes
 
 A path on an HTTP route (`example.com/api`) can only be created by a cluster

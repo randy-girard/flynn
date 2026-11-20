@@ -1,6 +1,9 @@
 package tenancy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestHandleRules(t *testing.T) {
 	for _, ok := range []string{"ab", "a1", "user-name", "a01234567890123456789012345678901234567"} {
@@ -102,5 +105,49 @@ func TestScaleIncreases(t *testing.T) {
 	}
 	if ScaleIncreases(old, map[string]int{"web": 0}) {
 		t.Fatal("scale down is not an increase")
+	}
+}
+
+// TestValidateDomainClaim: a hosted account may only claim a registrable name
+// it could prove with DNS. Public suffixes (ICANN and private, such as
+// github.io), single labels, IP literals, wildcards, special-use names and
+// the cluster's own domains are refused before a token is issued.
+func TestValidateDomainClaim(t *testing.T) {
+	platform := []string{"cluster.test", "apps.example.net"}
+	bad := []string{
+		"", "com", "COM.", "uk", "co.uk", "github.io", "herokuapp.com",
+		"localhost", "foo.localhost", "printer.local", "db.internal", "x.invalid", "site.test", "site.example", "x.onion", "router.home.arpa",
+		"1.2.3.4", "::1", "[::1]", "*.example.com", "exa mple.com", "-bad.example.com",
+		"bad-.example.com", "ex_ample.com", "a..example.com", ".example.com",
+		"cluster.test", "controller.cluster.test", "myapp.cluster.test",
+		"apps.example.net", "x.apps.example.net", "example.net",
+		strings.Repeat("a", 64) + ".example.com",
+	}
+	for _, h := range bad {
+		if err := ValidateDomainClaim(h, platform); err == nil {
+			t.Errorf("ValidateDomainClaim(%q) = nil, want error", h)
+		}
+	}
+	good := []string{"example.com", "shop.example.com", "Example.CO.UK.", "me.github.io", "xn--bcher-kva.ch"}
+	for _, h := range good {
+		if err := ValidateDomainClaim(h, platform); err != nil {
+			t.Errorf("ValidateDomainClaim(%q) = %v, want nil", h, err)
+		}
+	}
+	if err := ValidateDomainClaim("example.com", nil); err != nil {
+		t.Fatalf("no platform domains: %v", err)
+	}
+}
+
+// TestHostnameAllowedIgnoresInvalidVerifiedRows: a verified row stored before
+// claim validation (for example "com") must not open every *.com hostname.
+func TestHostnameAllowedIgnoresInvalidVerifiedRows(t *testing.T) {
+	for _, v := range []string{"com", "co.uk", "github.io", "cluster.test"} {
+		if err := HostnameAllowed(ModeHosted, "victim."+v, "myapp", "cluster.test", []string{v}); err == nil {
+			t.Errorf("verified %q must not allow victim.%s", v, v)
+		}
+	}
+	if err := HostnameAllowed(ModeHosted, "www.shop.example.com", "myapp", "cluster.test", []string{"com", "shop.example.com"}); err != nil {
+		t.Fatalf("valid verified row must still apply: %v", err)
 	}
 }

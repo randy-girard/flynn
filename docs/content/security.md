@@ -266,6 +266,39 @@ failed later page is an error and is not a partial list. The router, the
 scheduler, and the host firewall depend on that: a partial read must not
 delete routes, mark jobs down, or drop firewall exposes.
 
+## Hosted custom domains
+
+In `hosted` mode a route hostname outside the cluster domain needs a
+verified domain for the app's owner account, either the exact name or a
+parent. `self_hosted` does not check this. The flow is two API calls:
+
+1. `POST /domains/verify {"hostname":"example.com","owner_account":"user:<id>"}`
+   returns a token and `txt_name` (`_flynn-verify.example.com`). The caller
+   must be an admin of that account.
+2. Publish the token as a TXT record at `txt_name`, then
+   `POST /domains/verify/example.com/check`. The controller looks the record
+   up itself, with a 5 second timeout, and marks the domain verified only
+   when one TXT value equals the token.
+
+The claim is refused when the name is a single label, an IP address, a
+wildcard, not a valid DNS name, a special-use name (`localhost`, `.local`,
+`.internal`, `.test`, `.example`, `.invalid`, `.onion`, `.alt`, `.arpa`), or
+itself a public suffix on the [Public Suffix List](https://publicsuffix.org/)
+(`com`, `co.uk`, and private suffixes such as `github.io`). It is also
+refused when the name is the cluster domain (`DEFAULT_ROUTE_DOMAIN` or the
+`app_domain` override), a name under it, or a parent of it. `check` applies
+the same rule again.
+
+A `records` array in the `check` body is accepted from the cluster key only,
+for operators and tests. Any other caller that sends `records` gets a
+validation error and the domain stays unverified. Before controller
+migration 93 the controller trusted those records from any caller, so a
+tenant could "verify" `com` and route every `*.com` name not already taken.
+Migration 93 clears `verified_at` on every stored domain, keeping the claim
+and token, so each owner must publish the TXT record and run `check` again
+before adding new routes under it. Existing routes are not removed. Route
+checks also ignore any stored verified row that fails the claim rule above.
+
 ## Applications
 
 Applications run in their own network namespace on the overlay. User jobs

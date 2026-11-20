@@ -985,3 +985,34 @@ func (MigrateSuite) TestMigrateClearsPATScopes(c *C) {
 		c.Assert(got, Equals, rows[scopes], Commentf("scopes=%q", scopes))
 	}
 }
+
+// TestMigrateResetsDomainVerification checks that migration 93 clears
+// verified_at on every custom domain. Before CORE-20 a tenant could mark any
+// name verified by sending its own TXT records, so no stored row is trusted.
+// The claim and token stay so the owner can re-run the DNS check.
+func (MigrateSuite) TestMigrateResetsDomainVerification(c *C) {
+	db := setupTestDB(c, "controllertest_domain_reset")
+	var before, rest postgres.Migrations
+	for _, m := range *migrations {
+		if m.ID < 93 {
+			before = append(before, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	c.Assert(before.Migrate(db), IsNil)
+	for _, h := range []string{"com", "shop.example.com", "pending.example.com"} {
+		at := "now()"
+		if h == "pending.example.com" {
+			at = "NULL"
+		}
+		c.Assert(db.Exec(`INSERT INTO verified_domains (hostname, owner_account, token, verified_at) VALUES ($1, 'user:core20', 'tok-'||$1, `+at+`)`, h), IsNil)
+	}
+	c.Assert(rest.Migrate(db), IsNil)
+	var n int
+	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM verified_domains WHERE verified_at IS NOT NULL`).Scan(&n), IsNil)
+	c.Assert(n, Equals, 0)
+	var token string
+	c.Assert(db.QueryRow(`SELECT token FROM verified_domains WHERE hostname = 'shop.example.com'`).Scan(&token), IsNil)
+	c.Assert(token, Equals, "tok-shop.example.com")
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -593,6 +594,10 @@ func (c *controllerAPI) VerifyDomain(ctx context.Context, w http.ResponseWriter,
 	if !c.canAdminAccount(ctx, w, body.OwnerAccount) {
 		return
 	}
+	if err := tenancy.ValidateDomainClaim(body.Hostname, c.platformDomains()); err != nil {
+		httphelper.ValidationError(w, "hostname", err.Error())
+		return
+	}
 	token := random.Hex(16)
 	if err := c.tenancy.InsertDomain(body.Hostname, body.OwnerAccount, token); err != nil {
 		respondWithError(w, err)
@@ -614,13 +619,24 @@ func (c *controllerAPI) CheckDomain(ctx context.Context, w http.ResponseWriter, 
 	if !c.canAdminAccount(ctx, w, d.OwnerAccount) {
 		return
 	}
+	if err := tenancy.ValidateDomainClaim(hostname, c.platformDomains()); err != nil {
+		httphelper.ValidationError(w, "hostname", err.Error())
+		return
+	}
 	var body ct.DomainCheck
 	_ = httphelper.DecodeJSON(req, &body)
 	records := body.Records
-	if len(records) == 0 {
-		looked, err := net.LookupTXT(tenancy.TXTName(hostname))
+	if len(records) > 0 {
+		// Supplied records are an operator and test shortcut. Anyone else
+		// could send their own token and skip DNS.
+		if tok := authz.TokenFromContext(ctx); tok == nil || !tok.ClusterKey {
+			httphelper.ValidationError(w, "records", "only the cluster key may supply TXT records; publish the record and check again")
+			return
+		}
+	} else {
+		looked, err := c.resolveTXT(ctx, tenancy.TXTName(hostname))
 		if err != nil {
-			httphelper.ValidationError(w, "hostname", "TXT lookup failed and no records were supplied")
+			httphelper.ValidationError(w, "hostname", "TXT lookup for "+tenancy.TXTName(hostname)+" failed")
 			return
 		}
 		records = looked
@@ -637,4 +653,26 @@ func (c *controllerAPI) CheckDomain(ctx context.Context, w http.ResponseWriter, 
 	d.VerifiedAt = &now
 	d.TXTName = tenancy.TXTName(hostname)
 	httphelper.JSON(w, 200, d)
+}
+
+// domainTXTTimeout bounds the controller's own TXT lookup for CheckDomain.
+const domainTXTTimeout = 5 * time.Second
+
+func (c *controllerAPI) resolveTXT(ctx context.Context, name string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, domainTXTTimeout)
+	defer cancel()
+	if c.lookupTXT != nil {
+		return c.lookupTXT(ctx, name)
+	}
+	return net.DefaultResolver.LookupTXT(ctx, name)
+}
+
+// platformDomains are the cluster's own domains. No account may claim one,
+// a name under one, or a parent of one.
+func (c *controllerAPI) platformDomains() []string {
+	out := []string{os.Getenv("DEFAULT_ROUTE_DOMAIN")}
+	if c.appRepo != nil {
+		out = append(out, c.appRepo.DefaultDomain())
+	}
+	return out
 }

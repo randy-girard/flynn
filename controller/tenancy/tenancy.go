@@ -8,9 +8,11 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"strings"
 
 	"golang.org/x/crypto/scrypt"
+	"golang.org/x/net/publicsuffix"
 )
 
 const (
@@ -228,7 +230,9 @@ func HostnameAllowed(mode, hostname, appName, clusterDomain string, verified []s
 	}
 	for _, v := range verified {
 		v = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(v)), ".")
-		if v == "" {
+		// A row stored before claim validation (for example "com") is
+		// not a domain anyone proved, so it allows nothing.
+		if ValidateDomainClaim(v, []string{apex}) != nil {
 			continue
 		}
 		if host == v || strings.HasSuffix(host, "."+v) {
@@ -236,6 +240,70 @@ func HostnameAllowed(mode, hostname, appName, clusterDomain string, verified []s
 		}
 	}
 	return fmt.Errorf("hostname %s requires a verified domain for this account", host)
+}
+
+// specialUseTLDs are RFC 6761 / RFC 7686 / RFC 9476 names that never prove
+// public DNS control.
+var specialUseTLDs = map[string]struct{}{
+	"localhost": {}, "local": {}, "internal": {}, "invalid": {},
+	"test": {}, "example": {}, "onion": {}, "alt": {}, "arpa": {},
+}
+
+// ValidateDomainClaim reports whether hostname may be claimed as a hosted
+// custom domain. It must be a syntactically valid DNS name with at least two
+// labels, not an IP literal or wildcard, not a special-use name, not itself a
+// public suffix (ICANN or private, so "com", "co.uk" and "github.io" are
+// refused), and not equal to, under, or a parent of a platform domain.
+func ValidateDomainClaim(hostname string, platform []string) error {
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	if host == "" {
+		return fmt.Errorf("hostname is required")
+	}
+	if net.ParseIP(strings.Trim(host, "[]")) != nil {
+		return fmt.Errorf("hostname %s is an IP address", host)
+	}
+	if len(host) > 253 {
+		return fmt.Errorf("hostname %s is too long", host)
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return fmt.Errorf("hostname %s must have at least two labels", host)
+	}
+	for _, l := range labels {
+		if !validDNSLabel(l) {
+			return fmt.Errorf("hostname %s is not a valid DNS name", host)
+		}
+	}
+	tld := labels[len(labels)-1]
+	if _, ok := specialUseTLDs[tld]; ok {
+		return fmt.Errorf("hostname %s is a special-use name", host)
+	}
+	if suffix, _ := publicsuffix.PublicSuffix(host); suffix == host {
+		return fmt.Errorf("hostname %s is a public suffix", host)
+	}
+	for _, p := range platform {
+		p = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(p)), ".")
+		if p == "" {
+			continue
+		}
+		if host == p || strings.HasSuffix(host, "."+p) || strings.HasSuffix(p, "."+host) {
+			return fmt.Errorf("hostname %s is reserved for the cluster", host)
+		}
+	}
+	return nil
+}
+
+func validDNSLabel(l string) bool {
+	if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(l); i++ {
+		ch := l[i]
+		if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // VerifyTXT reports whether any TXT record equals token.

@@ -626,6 +626,9 @@ type controllerAPI struct {
 	authorizer        *authorizer.Authorizer
 	tokenSigner       *tokensigner.Signer
 	limiter           *accountLimiter
+	// lookupTXT resolves domain verification records. Nil uses the system
+	// resolver. Tests replace it so they do not need live DNS.
+	lookupTXT func(ctx context.Context, name string) ([]string, error)
 
 	eventListener    *data.EventListener
 	eventListenerMtx sync.Mutex

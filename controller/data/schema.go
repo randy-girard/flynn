@@ -1555,6 +1555,14 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 		SET scopes = CASE WHEN 'user' = ANY (regexp_split_to_array(scopes, '[ ,]+')) THEN 'user' ELSE '' END
 		WHERE scopes <> '' AND scopes <> 'user'`,
 	)
+
+	// Custom domains must be proved again. Before 93 POST
+	// /domains/verify/:hostname/check trusted TXT records in the request
+	// body, so a tenant could mark any name (even "com") verified. Claims
+	// and tokens stay; the owner re-runs the check against real DNS.
+	migrations.Add(93,
+		`UPDATE verified_domains SET verified_at = NULL WHERE verified_at IS NOT NULL`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

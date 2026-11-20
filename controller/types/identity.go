@@ -231,7 +231,9 @@ type DomainVerification struct {
 	VerifiedAt   *time.Time `json:"verified_at"`
 }
 
-// DomainCheck supplies TXT records so tests do not need live DNS.
+// DomainCheck is the body of POST /domains/verify/:hostname/check. Records
+// are honoured only for the cluster key (operators and tests); every other
+// caller gets the controller's own TXT lookup.
 type DomainCheck struct {
 	Records []string `json:"records"`
 }

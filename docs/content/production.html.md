@@ -266,6 +266,13 @@ running, `reserve_resources` is not cleared, and running jobs are not
 rescheduled. Use it to put a test or misconfigured cluster back to
 `self_hosted`. It is not a way to retire customers from a hosted cluster.
 
+In `hosted` mode a tenant route outside the cluster domain needs a domain
+the owner account proved with a DNS TXT record. The controller does the
+lookup itself and refuses public suffixes, special-use names, and the
+cluster's own domains. Controller migration 93 clears every stored
+verification, so owners re-run the check after this update. See
+[Hosted custom domains](security.md#hosted-custom-domains).
+
 When the reversal is allowed, an account with no `account_quotas` row is
 unlimited immediately, including while apps that are still running keep
 running. An explicit quota row still applies, in hosted mode and in
