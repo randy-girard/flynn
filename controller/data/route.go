@@ -548,9 +548,12 @@ func scanTCPRoute(s postgres.Scanner) (*router.Route, error) {
 // RouteListScope is the caller filter for a route page. UserScope false
 // returns every route, including system apps. That is what the router and
 // the host firewall need. A user token sets UserScope and only sees apps
-// they own or collaborate on, with catalog-internal apps hidden.
+// they own or collaborate on, with catalog-internal apps hidden. AnyOwner
+// keeps UserScope's catalog filter and drops the owner and grant filter
+// (the acme:issue service token).
 type RouteListScope struct {
 	UserScope     bool
+	AnyOwner      bool
 	Owner         string
 	GrantKeys     []string
 	PlatformNames []string
@@ -572,7 +575,7 @@ func (r *RouteRepo) ListPage(scope RouteListScope, before *time.Time, beforeID, 
 	if before != nil {
 		ts = *before
 	}
-	rows, err := r.db.Query("route_list_page", ts, beforeID, beforeType, scope.UserScope, names, scope.Owner, grants, count)
+	rows, err := r.db.Query("route_list_page", ts, beforeID, beforeType, scope.UserScope, names, scope.Owner, grants, count, scope.AnyOwner)
 	if err != nil {
 		return nil, err
 	}

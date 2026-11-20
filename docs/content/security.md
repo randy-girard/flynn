@@ -210,7 +210,8 @@ Omit `count` and the response is one JSON array. Pass `count` (at most
 `count` is the end. There is no `next` link.
 
 `GET /routes` for a user token includes only routes of apps that user owns
-or collaborates on, and hides catalog-internal apps. That filter runs
+or collaborates on, and hides catalog-internal apps. The `acme:issue`
+service token drops the owner filter and keeps the catalog filter. That filter runs
 before the limit. The cluster key, a nil internal caller, and a
 cluster-admin token see every route, including system apps. That is
 different from `GET /apps`, which hides bootstrap apps unless `?all=true`.
@@ -364,12 +365,20 @@ Until that release is deployed, a billing process that still has
 Router route sync stays on the cluster key in the router release. Certificate
 issuance runs in the letsencrypt plugin. Scope `acme:issue` (`ACME_TOKEN`)
 may list and update managed certificates, read `GET /acme/config`, list apps
-and routes, and create or change routes. It may not read release env, change
-a formation, or `PUT /acme/config`. Install strips `CONTROLLER_KEY` and the
+and routes, and create or change routes. `GET /routes` (paged or not) gives
+it the routes of every app its `GET /apps` returns, whatever the owner, and
+hides bootstrap system apps. A system app's routes stay closed to it by id
+too. It may not read release env, change a formation, or `PUT /acme/config`. Install strips `CONTROLLER_KEY` and the
 signing keys from that release. `ACME_TOKEN` wins over `CONTROLLER_KEY` when
 both are set. An empty token keeps the cluster key so HTTP-01 renewal still
 works during a rolling update. There is no DNS-01 issuer in this tree.
 Rotate with `flynn-host token:rotate letsencrypt-plugin ACME_TOKEN acme:issue`.
+`flynn letsencrypt:list`, `:enable`, `:disable`, and `:status` run in the
+CLI with the caller's own token, so the controller checks the caller's
+route permissions. They never borrow `ACME_TOKEN`. The plugin's own
+`letsencrypt-cli` needs the plugin credential and is an operator tool on
+the plugin app; its `FLYNN_APP_ID` app filter is a convenience, not a
+tenant boundary.
 
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, taffy

@@ -986,7 +986,8 @@ WHERE (
       )
     )
     AND (
-      a.owner_account = $6::text
+      $9::bool
+      OR a.owner_account = $6::text
       OR a.app_id::text = ANY($7::text[])
       OR a.name = ANY($7::text[])
     )

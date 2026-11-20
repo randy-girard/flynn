@@ -368,6 +368,16 @@ func (c *controllerAPI) routeListScope(ctx context.Context) data.RouteListScope 
 	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() || c == nil || c.appRepo == nil {
 		return data.RouteListScope{PlatformNames: []string{}, GrantKeys: []string{}}
 	}
+	if authz.HasACMEIssue(tok) {
+		// The letsencrypt plugin lists the same apps as its GET /apps:
+		// every owner, catalog-internal apps hidden.
+		return data.RouteListScope{
+			UserScope:     true,
+			AnyOwner:      true,
+			GrantKeys:     []string{},
+			PlatformNames: authz.PlatformAppNames(),
+		}
+	}
 	return data.RouteListScope{
 		UserScope:     true,
 		Owner:         "user:" + tok.UserID,
@@ -381,6 +391,8 @@ func (c *controllerAPI) filterRoutes(ctx context.Context, routes []*router.Route
 	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() || c.appRepo == nil {
 		return routes
 	}
+	// acme:issue sees the routes of every app its GET /apps returns.
+	acme := authz.HasACMEIssue(tok)
 	var out []*router.Route
 	for _, route := range routes {
 		appID := strings.TrimPrefix(route.ParentRef, ct.RouteParentRefPrefix)
@@ -392,7 +404,7 @@ func (c *controllerAPI) filterRoutes(ctx context.Context, routes []*router.Route
 			continue
 		}
 		app := raw.(*ct.App)
-		if appVisible(tok, app) {
+		if (acme && !catalogInternalApp(app)) || appVisible(tok, app) {
 			out = append(out, route)
 		}
 	}

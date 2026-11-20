@@ -8,7 +8,10 @@ import (
 	. "github.com/flynn/go-check"
 	"github.com/randy-girard/flynn/controller/api"
 	"github.com/randy-girard/flynn/controller/authz"
+	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
+	router "github.com/randy-girard/flynn/router/types"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -40,4 +43,72 @@ func (s *S) TestACMEIssueTokenCanRenewButNotReadEnv(c *C) {
 	c.Assert(code, Equals, http.StatusForbidden)
 	code, _ = s.scopedStatus(c, http.MethodGet, raw, "/acme/config", "")
 	c.Assert(code, Not(Equals), http.StatusForbidden)
+}
+
+// TestACMEIssueTokenSeesUserAppRoutes is the letsencrypt plugin's view:
+// with ACME_TOKEN it lists routes (paged, as the client does, and unpaged)
+// and turns HTTPS on for a tenant app's route. Routes of bootstrap system
+// apps stay hidden, the same as its GET /apps.
+func (s *S) TestACMEIssueTokenSeesUserAppRoutes(c *C) {
+	tenantApp := s.createTestApp(c, &ct.App{Name: "new22-tenant-app", OwnerAccount: "user:new22-tenant"})
+	systemApp := s.createTestApp(c, &ct.App{Name: "new22-system-app", Meta: map[string]string{"flynn-system-app": "true"}})
+	tenantRoute := s.createTestRoute(c, tenantApp.ID, (&router.HTTPRoute{Domain: "new22-tenant.example.com", Service: "new22-tenant-app-web"}).ToRoute())
+	systemRoute := s.createTestRoute(c, systemApp.ID, (&router.HTTPRoute{Domain: "new22-system.example.com", Service: "new22-system-app-web"}).ToRoute())
+
+	now := time.Now()
+	raw, err := s.tokenSigner.Sign(&api.AccessToken{
+		UserId:     "acme",
+		UserEmail:  "acme@flynn.local",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(15 * time.Minute)),
+		Scopes:     []string{authz.ScopeACMEIssue},
+	})
+	c.Assert(err, IsNil)
+
+	for _, query := range []string{"", "count=1000"} {
+		status, routes := s.getRoutes(c, raw, false, query)
+		c.Assert(status, Equals, http.StatusOK)
+		ids := map[string]bool{}
+		for _, id := range routeIDs(routes) {
+			ids[id] = true
+		}
+		c.Assert(ids["http/"+tenantRoute.ID], Equals, true, Commentf("query %q: acme:issue must see the tenant route", query))
+		c.Assert(ids["http/"+systemRoute.ID], Equals, false, Commentf("query %q: acme:issue must not see a system app route", query))
+	}
+
+	client, err := controller.NewClientWithToken(s.srv.URL, raw)
+	c.Assert(err, IsNil)
+	routes, err := client.RouteList()
+	c.Assert(err, IsNil)
+	var found *router.Route
+	for _, rt := range routes {
+		if rt.Type == "http" && rt.ID == tenantRoute.ID {
+			found = rt
+		}
+	}
+	c.Assert(found, NotNil)
+
+	acmeRepo := data.NewACMEConfigRepo(s.hc.db)
+	prev, err := acmeRepo.Get()
+	c.Assert(err, IsNil)
+	enabled := *prev
+	enabled.Enabled = true
+	c.Assert(acmeRepo.Update(&enabled), IsNil)
+	defer func() { c.Assert(acmeRepo.Update(prev), IsNil) }()
+
+	domain := found.Domain
+	found.ManagedCertificateDomain = &domain
+	c.Assert(client.UpdateRoute(tenantApp.Name, "http/"+found.ID, found), IsNil)
+	got, err := s.c.GetRoute(tenantApp.ID, "http/"+found.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.ManagedCertificateDomain, NotNil)
+	c.Assert(*got.ManagedCertificateDomain, Equals, domain)
+
+	// A system app's routes stay out of reach even by id.
+	sysDomain := systemRoute.Domain
+	systemRoute.ManagedCertificateDomain = &sysDomain
+	c.Assert(client.UpdateRoute(systemApp.ID, "http/"+systemRoute.ID, systemRoute), NotNil)
+	got, err = s.c.GetRoute(systemApp.ID, "http/"+systemRoute.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.ManagedCertificateDomain, IsNil)
 }
