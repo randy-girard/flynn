@@ -590,6 +590,25 @@ func TestHandler_PutLeader_ErrConfigNotFound(t *testing.T) {
 	}
 }
 
+// A follower peer may not have applied AddService yet (NEW-19). It must send
+// the claim to the raft leader instead of answering "not manual" from its own
+// stale config.
+func TestHandler_PutLeader_FollowerRedirectsBeforeConfigCheck(t *testing.T) {
+	h := NewHandler()
+	h.Store.IsLeaderFn = func() bool { return false }
+	h.Store.LeaderFn = func() string { return "host1:1111" }
+	h.Store.ConfigFn = func(service string) *discoverd.ServiceConfig { return nil }
+	h.Store.SetServiceLeaderFn = func(service, id string) error { return server.ErrNotLeader }
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("PUT", "http://host0:1111/services/abc/leader", strings.NewReader(`{"id":"xxx"}`)))
+	if w.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	} else if loc := w.Header().Get("Location"); loc != `http://host1:1111/services/abc/leader` {
+		t.Fatalf("unexpected Location header: %s", loc)
+	}
+}
+
 // Ensure the handler returns an error if the service does not have manual election.
 func TestHandler_PutLeader_ErrNotManual(t *testing.T) {
 	h := NewHandler()

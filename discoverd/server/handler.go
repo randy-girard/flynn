@@ -97,6 +97,7 @@ type Handler struct {
 	}
 	Store interface {
 		Leader() string
+		IsLeader() bool
 		AddService(service string, config *discoverd.ServiceConfig) error
 		RemoveService(service string) error
 		SetServiceMeta(service string, meta *discoverd.ServiceMeta) error
@@ -408,6 +409,14 @@ func (h *Handler) serveGetInstances(w http.ResponseWriter, r *http.Request, para
 func (h *Handler) servePutLeader(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	// Retrieve path parameters.
 	service := params.ByName("service")
+
+	// Only the raft leader has every applied AddService. A follower peer can
+	// lag behind the AddService the caller just made and would answer "not
+	// manual" from its stale config (NEW-19), so it forwards the claim.
+	if !h.Store.IsLeader() {
+		h.redirectToLeader(w, r)
+		return
+	}
 
 	// Check if the service allows manual leader election.
 	config := h.Store.Config(service)
