@@ -339,6 +339,29 @@ or this token for that app, and rejects a `cluster:admin` JWT. Rotate it
 by restarting the gitreceive release after `ACCESS_TOKEN_SIGNING_KEY`
 changes. Do not paste `CONTROLLER_KEY` into the app being built.
 
+A tenant's `flynn login` token names the user and carries no app grants;
+the controller works them out on each request from the apps the user's
+account can reach. gitreceive cannot do that itself, so for a user token
+that is not `cluster:admin` it sends the caller's own `Authorization`
+header (nothing else) to `GET /whoami/grants` and checks the push or fetch
+against the returned grants. Those grants are keyed by app id only, and the
+check matches the app's id, so an app named after another app's id does not
+pick up that grant. A tenant can push (`app:deploy`) and clone (`app:read`)
+its own apps and collaborator apps, and gets `403` on another tenant's app.
+A suspended account gets `403`. A personal access token is resolved the same
+way, so `git push` works with `flynn cluster:add --token`. The cluster key,
+a `cluster:admin` token, and app-scoped tokens (dashboard grants, the
+receiver's `gitreceive:build` token) are decided from the token alone. If the
+controller cannot be reached, a user token keeps only the grants it carries,
+which for a tenant is none. `GET /whoami/grants` is a user-session route:
+compile and service tokens are denied.
+
+`GET /resources` is open to user sessions. A non-admin user sees only the
+resources whose owner account it administers (its own account, or an
+organization it manages); unowned platform resources and other tenants'
+resources are left out. App-scoped and compile tokens are denied and use
+`GET /apps/:id/resources`. A cluster admin still sees every resource.
+
 Billing quota writes and suspension use scope `account:quota` in
 `QUOTA_TOKEN`. The token lasts up to 180 days. It is not `cluster:admin`.
 It may list tenant apps (`GET /apps`) and list each app's formations
