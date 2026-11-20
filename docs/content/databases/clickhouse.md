@@ -110,8 +110,8 @@ Scaling down drains the highest node ids, then runs `SYSTEM SYNC DATABASE
 REPLICA` and `SYSTEM SYNC REPLICA` on the remaining nodes so they fetch every
 part the drained node holds. If they do not catch up within 10 minutes the
 scale-down stops with an error and the drained node keeps running. Only then
-is the node removed from the Keeper voters: if it is the Keeper leader, a
-remaining node takes the leadership first, and the node is stopped only after
+is the node removed from the Keeper voters: if it is the Keeper leader, it
+hands the leadership to another node first, and the node is stopped only after
 a remaining node leads exactly the remaining voters. Its replicas are dropped
 with `SYSTEM DROP REPLICA` once the remaining nodes have a leader again. A
 resource whose nodes predate this behaviour needs `clickhouse:maintenance`
