@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -73,7 +74,7 @@ usage: flynn-host user:token <email>
 Mint a personal access token for <email> and print it once.
 `)
 	Register("tenancy:mode", runTenancyMode, `
-usage: flynn-host tenancy:mode [<mode>]
+usage: flynn-host tenancy:mode [--force] [<mode>]
 
 Show or set the cluster tenancy mode (self_hosted or hosted) using the local
 cluster key. The body is {"mode": mode} only. Hosted does not enable signup,
@@ -82,10 +83,19 @@ is refused when that check would fail. self_hosted is refused while the
 cluster is hosted and a non-system app still has an owner. That reversal is
 not safe.
 
+Options:
+	--force  switch a hosted cluster to self_hosted even though a non-system
+	         app still has an owner_account. Cluster key only. Recorded in
+	         the controller audit log as tenancy.force_self_hosted.
+	         owner_account is not cleared, account_quotas rows stay, an
+	         account with no quota row becomes unlimited immediately, and
+	         reserve_resources is not cleared.
+
 Examples:
 
     $ flynn-host tenancy:mode
     $ flynn-host tenancy:mode hosted
+    $ flynn-host tenancy:mode --force self_hosted
 `)
 	Register("tenancy:network-policy", runTenancyNetworkPolicy, `
 usage: flynn-host tenancy:network-policy [--mode <mode>] --owner <account> [--allow <spec>]...
@@ -283,7 +293,11 @@ func runTenancyMode(args *docopt.Args, client *cluster.Client) error {
 		return err
 	}
 	mode := strings.TrimSpace(args.String["<mode>"])
+	force := args.Bool["--force"]
 	if mode == "" {
+		if force {
+			return fmt.Errorf("--force needs a mode: flynn-host tenancy:mode --force self_hosted")
+		}
 		var s ct.TenancySettings
 		if err := v.Get("/tenancy", &s); err != nil {
 			return err
@@ -291,17 +305,51 @@ func runTenancyMode(args *docopt.Args, client *cluster.Client) error {
 		fmt.Printf("mode: %s\nsignup_enabled: %v\n", s.Mode, s.SignupEnabled)
 		return nil
 	}
+	hostedCheck := func() error {
+		// Same rows as production:check, judged as hosted. This does not
+		// print that command or change its lines.
+		return hostedProductionBlock(hostProductionCheckConfig(client, "flynn-default"))
+	}
+	put := func(mode string, force bool) error {
+		if !force {
+			return v.Put("/tenancy", tenancyModeBody(mode), &ct.TenancySettings{})
+		}
+		_, err := v.SetTenancyMode(mode, true)
+		return err
+	}
+	return applyTenancyMode(os.Stderr, put, hostedCheck, mode, force)
+}
+
+// forceSelfHostedWarning is printed before tenancy:mode --force self_hosted
+// sends the override.
+const forceSelfHostedWarning = `WARNING: forcing tenancy_mode self_hosted while the cluster is hosted.
+  - owner_account is not cleared on any app.
+  - account_quotas rows stay and still apply.
+  - an account with no quota row becomes unlimited immediately, including
+    while its apps keep running.
+  - reserve_resources is not cleared and running jobs are not rescheduled.
+  - the controller records this as tenancy.force_self_hosted in core_audit.
+`
+
+// applyTenancyMode validates and sends a tenancy mode change. --force is only
+// for self_hosted. The controller decides whether the override is needed
+// and refuses it from anything but the cluster key.
+func applyTenancyMode(out io.Writer, put func(mode string, force bool) error, hostedCheck func() error, mode string, force bool) error {
 	if err := tenancy.ValidateMode(mode); err != nil {
 		return err
 	}
+	if force && mode != tenancy.ModeSelfHosted {
+		return fmt.Errorf("--force only applies to self_hosted")
+	}
 	if mode == tenancy.ModeHosted {
-		// Same rows as production:check, judged as hosted. This does not
-		// print that command or change its lines.
-		if err := hostedProductionBlock(hostProductionCheckConfig(client, "flynn-default")); err != nil {
+		if err := hostedCheck(); err != nil {
 			return err
 		}
 	}
-	return v.Put("/tenancy", tenancyModeBody(mode), &ct.TenancySettings{})
+	if force {
+		fmt.Fprint(out, forceSelfHostedWarning)
+	}
+	return put(mode, force)
 }
 
 func runTenancyNetworkPolicy(args *docopt.Args) error {

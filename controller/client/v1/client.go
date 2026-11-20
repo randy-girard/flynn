@@ -1520,6 +1520,13 @@ func (c *Client) GetTenancy() (*ct.TenancySettings, error) {
 	return s, c.Get("/tenancy", s)
 }
 
+// SetTenancyMode sends PUT /tenancy. force is the cluster-key-only override
+// for hosted → self_hosted while a non-system app still has an owner.
+func (c *Client) SetTenancyMode(mode string, force bool) (*ct.TenancySettings, error) {
+	s := &ct.TenancySettings{}
+	return s, c.Put("/tenancy", ct.TenancyModeUpdate{Mode: mode, Force: force}, s)
+}
+
 func (c *Client) GetPlacement() (*ct.WorkloadPlacement, error) {
 	s := &ct.WorkloadPlacement{}
 	return s, c.Get("/cluster/placement", s)

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/host/networkpolicy"
 )
 
@@ -52,5 +53,54 @@ func TestHostReadPasswordUsesFlag(t *testing.T) {
 	got, generated, err := hostReadPassword("s3cret")
 	if err != nil || generated || got != "s3cret" {
 		t.Fatalf("%q generated=%v err=%v", got, generated, err)
+	}
+}
+
+// TestTenancyModeForce: --force is only for self_hosted, prints what the
+// override does before it is sent, and passes force=true. Without --force
+// the PUT is the plain mode body and nothing is printed.
+func TestTenancyModeForce(t *testing.T) {
+	type call struct {
+		mode  string
+		force bool
+	}
+	var calls []call
+	put := func(mode string, force bool) error {
+		calls = append(calls, call{mode, force})
+		return nil
+	}
+	noCheck := func() error { return nil }
+
+	var out strings.Builder
+	if err := applyTenancyMode(&out, put, noCheck, "hosted", true); err == nil || !strings.Contains(err.Error(), "self_hosted") {
+		t.Fatalf("--force with hosted: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("hosted --force must not PUT: %v", calls)
+	}
+
+	out.Reset()
+	if err := applyTenancyMode(&out, put, noCheck, "self_hosted", false); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 || len(calls) != 1 || calls[0] != (call{"self_hosted", false}) {
+		t.Fatalf("plain: out %q calls %v", out.String(), calls)
+	}
+
+	out.Reset()
+	if err := applyTenancyMode(&out, put, noCheck, "self_hosted", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 || calls[1] != (call{"self_hosted", true}) {
+		t.Fatalf("force: calls %v", calls)
+	}
+	for _, want := range []string{"WARNING", "owner_account", "unlimited", "account_quotas", "reserve_resources", "tenancy.force_self_hosted"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("warning missing %q: %q", want, out.String())
+		}
+	}
+
+	if _, err := docopt.Parse(commands["tenancy:mode"].usage, []string{"tenancy:mode", "--force", "self_hosted"}, true, "", false); err != nil {
+		t.Fatalf("usage must accept --force: %v", err)
 	}
 }

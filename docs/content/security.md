@@ -580,11 +580,20 @@ The controller records privileged actions in its `core_audit` table: who
 `app.create`, `app.delete`, `release.create`, `app.release.set`,
 `deployment.create`, `formation.set`, `scale.request`, `job.run`,
 `job.kill`, `route.create`, `resource.create`, `token.create`,
-`cluster.runtime_settings.set`, `policy.set`, `collaborator.add`), the
+`cluster.runtime_settings.set`, `policy.set`, `collaborator.add`,
+`tenancy.update`, `tenancy.force_self_hosted`), the
 app it touched, and when. Only successful requests are recorded, from
 both the HTTP API and the gRPC API.
 Request bodies are not stored, so env values and keys never land in the
 log; entries keep the method, path, and status.
+
+`tenancy.force_self_hosted` is written before a cluster-key
+`PUT /tenancy` with `"force": true` switches a hosted cluster to
+`self_hosted` while a non-system app still has an `owner_account`. Its data
+holds the previous mode, the number of owned apps, and what the switch
+leaves in place; see
+[Production — Tenancy mode](production.html.md#tenancy-mode). Only the
+cluster key can send `force`.
 
 Cluster-key or cluster-admin credentials can read it with
 `GET /cluster/audit?after=<id>&limit=<n>` (oldest first, at most 1000

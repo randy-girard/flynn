@@ -252,6 +252,20 @@ does not remove owners. A cluster that is already `self_hosted` is not
 blocked by this rule, so a company that already runs Flynn for itself can
 set the same mode again.
 
+The operator override is `flynn-host tenancy:mode --force self_hosted`. It
+sends `{"mode":"self_hosted","force":true}` to `PUT /tenancy`, and the
+controller accepts `force` from the cluster key only: a cluster admin user, a
+tenant, and an app token get `403`. `force` with `hosted` is a validation
+error. Without `force` the refuse above is unchanged. Before it switches, the
+controller writes a `tenancy.force_self_hosted` row to the
+[audit log](security.md#controller-audit-log) with the previous mode and the
+number of owned non-system apps, and the command prints what the switch does:
+`owner_account` is not cleared, `account_quotas` rows stay and still apply,
+an account with no quota row becomes unlimited immediately while its apps keep
+running, `reserve_resources` is not cleared, and running jobs are not
+rescheduled. Use it to put a test or misconfigured cluster back to
+`self_hosted`. It is not a way to retire customers from a hosted cluster.
+
 When the reversal is allowed, an account with no `account_quotas` row is
 unlimited immediately, including while apps that are still running keep
 running. An explicit quota row still applies, in hosted mode and in

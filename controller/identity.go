@@ -200,9 +200,7 @@ func (c *controllerAPI) GetTenancy(ctx context.Context, w http.ResponseWriter, _
 func (c *controllerAPI) PutTenancy(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	// signup_enabled is not a field here. This handler writes tenancy_mode
 	// only, including when the JSON also contains signup_enabled.
-	var body struct {
-		Mode string `json:"mode"`
-	}
+	var body ct.TenancyModeUpdate
 	if err := httphelper.DecodeJSON(req, &body); err != nil {
 		respondWithError(w, err)
 		return
@@ -211,45 +209,77 @@ func (c *controllerAPI) PutTenancy(ctx context.Context, w http.ResponseWriter, r
 		httphelper.ValidationError(w, "mode", err.Error())
 		return
 	}
-	if err := c.rejectUnsafeSelfHosted(body.Mode); err != nil {
+	if body.Force {
+		if body.Mode != tenancy.ModeSelfHosted {
+			httphelper.ValidationError(w, "force", "force only applies to mode self_hosted")
+			return
+		}
+		if tok := authz.TokenFromContext(ctx); tok == nil || !tok.ClusterKey {
+			httphelper.Forbidden(w, "only the cluster key can force self_hosted")
+			return
+		}
+	}
+	from, owned, err := c.unsafeSelfHostedReversal(body.Mode)
+	if err != nil {
 		respondWithError(w, err)
 		return
+	}
+	if owned > 0 {
+		if !body.Force {
+			respondWithError(w, ct.ValidationError{
+				Field:   "mode",
+				Message: "refusing self_hosted while a non-system app has an owner_account; this is not a safe reversal and does not delete quota rows or clear reserve_resources (the cluster key can override with force: flynn-host tenancy:mode --force self_hosted)",
+			})
+			return
+		}
+		// The override is recorded before the mode changes, so a forced
+		// switch is never left without its audit row.
+		if err := c.tenancy.Audit(c.actor(ctx), "tenancy.force_self_hosted", "", "", map[string]interface{}{
+			"from":       from,
+			"mode":       body.Mode,
+			"force":      true,
+			"owned_apps": owned,
+			"warning":    ForceSelfHostedWarning,
+		}); err != nil {
+			respondWithError(w, err)
+			return
+		}
 	}
 	if err := c.tenancy.SetSettings(body.Mode, nil); err != nil {
 		respondWithError(w, err)
 		return
 	}
-	_ = c.tenancy.Audit(c.actor(ctx), "tenancy.update", "", "", body)
+	_ = c.tenancy.Audit(c.actor(ctx), "tenancy.update", "", "", map[string]interface{}{"mode": body.Mode, "force": body.Force})
 	c.GetTenancy(ctx, w, req)
 }
 
-// rejectUnsafeSelfHosted refuses hosted → self_hosted while a non-system app
-// still has an owner. That switch makes accounts with no quota row unlimited
+// ForceSelfHostedWarning is what a forced hosted → self_hosted switch does.
+// It is stored on the tenancy.force_self_hosted audit row.
+const ForceSelfHostedWarning = "owner_account is not cleared; account_quotas rows stay and still apply; an account with no quota row becomes unlimited immediately, including while its apps keep running; reserve_resources is not cleared; running jobs are not rescheduled"
+
+// unsafeSelfHostedReversal reports the current mode and how many non-system
+// apps still have an owner when mode is self_hosted and the cluster is
+// hosted. That switch makes accounts with no quota row unlimited
 // immediately, including while apps are still running. It does not delete
-// quota rows or clear reserve_resources, and it is not a safe reversal.
-// A cluster that is already self_hosted is left alone.
-func (c *controllerAPI) rejectUnsafeSelfHosted(mode string) error {
+// quota rows or clear reserve_resources, and it is not a safe reversal, so
+// PutTenancy refuses it unless the cluster key sends force. A cluster that
+// is already self_hosted is left alone (owned is 0).
+func (c *controllerAPI) unsafeSelfHostedReversal(mode string) (string, int, error) {
 	if c == nil || c.tenancy == nil || mode != tenancy.ModeSelfHosted {
-		return nil
+		return "", 0, nil
 	}
 	current, err := c.tenancy.GetSettings()
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	if current.Mode != tenancy.ModeHosted {
-		return nil
+		return current.Mode, 0, nil
 	}
 	n, err := c.tenancy.CountNonSystemOwnedApps()
 	if err != nil {
-		return err
+		return "", 0, err
 	}
-	if n == 0 {
-		return nil
-	}
-	return ct.ValidationError{
-		Field:   "mode",
-		Message: "refusing self_hosted while a non-system app has an owner_account; this is not a safe reversal and does not delete quota rows or clear reserve_resources",
-	}
+	return current.Mode, n, nil
 }
 
 func (c *controllerAPI) CreateUser(ctx context.Context, w http.ResponseWriter, req *http.Request) {

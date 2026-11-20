@@ -12,6 +12,14 @@ type TenancySettings struct {
 	SignupEnabled bool   `json:"signup_enabled"`
 }
 
+// TenancyModeUpdate is the PUT /tenancy body. Force is the cluster-key-only
+// override for the hosted → self_hosted refuse while a non-system app still
+// has an owner_account. It is recorded as tenancy.force_self_hosted.
+type TenancyModeUpdate struct {
+	Mode  string `json:"mode"`
+	Force bool   `json:"force,omitempty"`
+}
+
 // WorkloadPlacement is cluster_settings.workload_placement. mixed is today's
 // scheduler. split places by the host tag flynn-role. It is not a region.
 type WorkloadPlacement struct {
