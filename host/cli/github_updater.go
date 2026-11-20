@@ -1524,7 +1524,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		appLog := log.New("name", appInfo.Name)
 		appLog.Info("starting deploy of system app")
 
-		app, err := client.GetApp(appInfo.Name)
+		app, err := updaterdeploy.GetAppWithRetry(client, appInfo.Name, appLog)
 		if err == controller.ErrNotFound && appInfo.Optional {
 			if updaterdeploy.IsOptionalResourceApp(appInfo.Name) {
 				if err := updaterdeploy.EnsureOptionalResourceApp(client, appInfo.Name, images[appInfo.Name], appLog); err != nil {

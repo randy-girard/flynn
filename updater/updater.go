@@ -195,7 +195,7 @@ func run() error {
 		log := log.New("name", appInfo.Name)
 		log.Info("starting deploy of system app")
 
-		app, err := client.GetApp(appInfo.Name)
+		app, err := updaterdeploy.GetAppWithRetry(client, appInfo.Name, log)
 		if err == controller.ErrNotFound && appInfo.Optional {
 			if updaterdeploy.IsOptionalResourceApp(appInfo.Name) {
 				if err := updaterdeploy.EnsureOptionalResourceApp(client, appInfo.Name, images[appInfo.Name], log); err != nil {
