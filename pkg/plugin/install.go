@@ -140,6 +140,7 @@ type RouteClient interface {
 type providerClient interface {
 	ProviderList() ([]*ct.Provider, error)
 	CreateProvider(*ct.Provider) error
+	UpdateProvider(*ct.Provider) error
 }
 
 func (in *Installer) logf(format string, args ...interface{}) {
@@ -1598,9 +1599,18 @@ func ensureProvider(client providerClient, name, url string, tenantSafe bool) er
 		return fmt.Errorf("list providers: %w", err)
 	}
 	for _, p := range providers {
-		if p.Name == name {
+		if p.Name != name {
+			continue
+		}
+		// The row keeps whatever flag it was first created with. Sync it to
+		// the manifest so a release that changes tenant_safe takes effect.
+		if p.TenantSafe == tenantSafe {
 			return nil
 		}
+		if err := client.UpdateProvider(&ct.Provider{ID: p.ID, Name: p.Name, URL: p.URL, TenantSafe: tenantSafe}); err != nil {
+			return fmt.Errorf("update provider %s tenant_safe=%t: %w", name, tenantSafe, err)
+		}
+		return nil
 	}
 	if err := client.CreateProvider(&ct.Provider{Name: name, URL: url, TenantSafe: tenantSafe}); err != nil {
 		return fmt.Errorf("create provider %s: %w", name, err)

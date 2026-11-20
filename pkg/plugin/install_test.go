@@ -516,6 +516,8 @@ type providerStub struct {
 	listErr   error
 	created   *ct.Provider
 	createErr error
+	updated   []*ct.Provider
+	updateErr error
 }
 
 func (s *providerStub) ProviderList() ([]*ct.Provider, error) {
@@ -525,6 +527,51 @@ func (s *providerStub) ProviderList() ([]*ct.Provider, error) {
 func (s *providerStub) CreateProvider(p *ct.Provider) error {
 	s.created = p
 	return s.createErr
+}
+
+func (s *providerStub) UpdateProvider(p *ct.Provider) error {
+	s.updated = append(s.updated, p)
+	return s.updateErr
+}
+
+// An existing provider row keeps the tenant_safe value it was first created
+// with unless ensureProvider syncs it, so a plugin that turns the flag on
+// (or off) in a later release never reaches hosted tenants.
+func TestEnsureProviderUpdatesTenantSafe(t *testing.T) {
+	stub := &providerStub{list: []*ct.Provider{{ID: "p1", Name: "redis", URL: "http://redis-plugin.discoverd"}}}
+	if err := ensureProvider(stub, "redis", "http://redis-plugin.discoverd", true); err != nil {
+		t.Fatal(err)
+	}
+	if stub.created != nil {
+		t.Fatal("must not recreate an existing provider")
+	}
+	if len(stub.updated) != 1 || stub.updated[0].ID != "p1" || !stub.updated[0].TenantSafe {
+		t.Fatalf("want one update of p1 to tenant_safe=true, got %+v", stub.updated)
+	}
+
+	off := &providerStub{list: []*ct.Provider{{ID: "p2", Name: "redis", URL: "http://redis-plugin.discoverd", TenantSafe: true}}}
+	if err := ensureProvider(off, "redis", "http://redis-plugin.discoverd", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(off.updated) != 1 || off.updated[0].ID != "p2" || off.updated[0].TenantSafe {
+		t.Fatalf("want one update of p2 to tenant_safe=false, got %+v", off.updated)
+	}
+
+	same := &providerStub{list: []*ct.Provider{{ID: "p3", Name: "redis", URL: "http://redis-plugin.discoverd", TenantSafe: true}}}
+	if err := ensureProvider(same, "redis", "http://redis-plugin.discoverd", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(same.updated) != 0 {
+		t.Fatalf("unchanged flag must not update: %+v", same.updated)
+	}
+
+	failing := &providerStub{
+		list:      []*ct.Provider{{ID: "p4", Name: "redis", URL: "http://redis-plugin.discoverd"}},
+		updateErr: fmt.Errorf("denied"),
+	}
+	if err := ensureProvider(failing, "redis", "http://redis-plugin.discoverd", true); err == nil {
+		t.Fatal("update error must fail ensureProvider")
+	}
 }
 
 func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
