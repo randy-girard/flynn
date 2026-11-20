@@ -756,20 +756,6 @@ func hasAnyGitHubWrite(tok *authorizer.Token) bool {
 	return false
 }
 
-// GitHubWriteAppIDs returns app IDs the token may connect GitHub on.
-// restricted is false for cluster admins (no catalog filter).
-func GitHubWriteAppIDs(tok *authorizer.Token) (ids []string, restricted bool) {
-	if tok == nil || tok.HasClusterAdmin() {
-		return nil, false
-	}
-	for _, g := range tok.AppGrants {
-		if HasAppPermission(g.Permissions, PermAppGitHubWrite) {
-			ids = append(ids, g.AppID)
-		}
-	}
-	return ids, true
-}
-
 // CanCreateReleaseForApp is true when tok may POST /releases for this app
 // (by id or name). Cluster admins may create for any app; app-scoped tokens
 // need env:write on that app (scale:write alone is not enough).

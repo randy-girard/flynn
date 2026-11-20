@@ -109,18 +109,22 @@ func (m *memGitHubStore) DeleteConnection(appID string) error {
 }
 
 type fakeGitHubAPI struct {
-	insts   []githubapp.Installation
-	repos   map[int64][]githubapp.Repo
-	sha     string
-	checks  githubapp.CheckState
-	token   string
-	findErr error
+	repoCalls int
+	insts     []githubapp.Installation
+	repos     map[int64][]githubapp.Repo
+	sha       string
+	checks    githubapp.CheckState
+	token     string
+	findErr   error
 }
 
 func (f *fakeGitHubAPI) ListInstallations() ([]githubapp.Installation, error) {
 	return f.insts, nil
 }
-func (f *fakeGitHubAPI) ListRepos(id int64) ([]githubapp.Repo, error) { return f.repos[id], nil }
+func (f *fakeGitHubAPI) ListRepos(id int64) ([]githubapp.Repo, error) {
+	f.repoCalls++
+	return f.repos[id], nil
+}
 func (f *fakeGitHubAPI) FindRepo(owner, repo string) (*githubapp.Installation, *githubapp.Repo, error) {
 	if f.findErr != nil {
 		return nil, nil, f.findErr
@@ -460,29 +464,125 @@ func TestGitHubListInstallationsFiltersToLinkedApps(t *testing.T) {
 	}
 }
 
-func TestGitHubListInstallationsFirstConnectUnfiltered(t *testing.T) {
+// A non-admin with github:write and no linked app has nothing to list. The
+// fallback has no installation owners, so "no links yet" must not open the
+// whole GitHub App catalog (NEW-41).
+func TestGitHubListInstallationsNoLinkedAppsSeesNothing(t *testing.T) {
+	for _, perm := range []string{"app:github:write", "app:write"} {
+		api := githubListAPI()
+		gh := api.githubAPI.(*fakeGitHubAPI)
+		tok := &authorizer.Token{UserID: "u-new", AppGrants: []authorizer.AppGrant{{AppID: "app-new", Permissions: []string{perm}}}}
+		rec := httptest.NewRecorder()
+		api.ListGitHubInstallations(tokenCtx(tok), rec, httptest.NewRequest(http.MethodGet, "/github/installations", nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", perm, rec.Code, rec.Body.Bytes())
+		}
+		var insts []ct.GitHubInstallation
+		_ = json.Unmarshal(rec.Body.Bytes(), &insts)
+		if len(insts) != 0 {
+			t.Fatalf("%s: a caller with no linked app must not see the catalog: %+v", perm, insts)
+		}
+
+		for _, id := range []string{"3", "9"} {
+			rec = httptest.NewRecorder()
+			api.ListGitHubInstallationRepos(installationReposCtx(tok, id), rec, httptest.NewRequest(http.MethodGet, "/github/installations/"+id+"/repos", nil))
+			if rec.Code != 200 {
+				t.Fatalf("%s: repos %s %d %s", perm, id, rec.Code, rec.Body.Bytes())
+			}
+			var repos []ct.GitHubRepo
+			_ = json.Unmarshal(rec.Body.Bytes(), &repos)
+			if len(repos) != 0 {
+				t.Fatalf("%s: installation %s repos leaked: %+v", perm, id, repos)
+			}
+		}
+		if gh.repoCalls != 0 {
+			t.Fatalf("%s: GitHub was asked for repos %d times for a caller with no installation", perm, gh.repoCalls)
+		}
+	}
+}
+
+// A grant that names the app by something other than its id links nothing.
+func TestGitHubListInstallationsMatchesGrantByExactAppID(t *testing.T) {
 	api := githubListAPI()
-	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-new", Permissions: []string{"app:write"}}}}
+	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{
+		{AppID: "", Permissions: []string{"app:github:write"}},
+		{AppID: "app-1", Permissions: []string{"app:github:read"}},
+	}}
 	rec := httptest.NewRecorder()
 	api.ListGitHubInstallations(tokenCtx(tok), rec, httptest.NewRequest(http.MethodGet, "/github/installations", nil))
-	if rec.Code != 200 {
-		t.Fatalf("%d %s", rec.Code, rec.Body.Bytes())
-	}
 	var insts []ct.GitHubInstallation
 	_ = json.Unmarshal(rec.Body.Bytes(), &insts)
-	if len(insts) != 2 {
-		t.Fatalf("first connect must list the GitHub App catalog for the picker: %+v", insts)
+	if rec.Code != 200 || len(insts) != 0 {
+		t.Fatalf("%d %+v, want an empty list", rec.Code, insts)
+	}
+}
+
+func githubConnect(api *controllerAPI, tok *authorizer.Token, appID string, in ct.GitHubRepoConnection) *httptest.ResponseRecorder {
+	ctx := context.Background()
+	if tok != nil {
+		ctx = tokenCtx(tok)
+	}
+	ctx = context.WithValue(ctx, "app", &ct.App{ID: appID, Name: appID + "-name"})
+	body, _ := json.Marshal(in)
+	rec := httptest.NewRecorder()
+	api.PutAppGitHub(ctx, rec, jsonReq(http.MethodPut, "/apps/"+appID+"/github", body))
+	return rec
+}
+
+// The fallback cannot tell whose installation is whose, so a non-admin may
+// only connect an installation that one of its apps already uses (NEW-41).
+func TestGitHubConnectNonAdminLimitedToLinkedInstallations(t *testing.T) {
+	api := githubListAPI()
+	store := api.githubStore.(*memGitHubStore)
+	newTok := &authorizer.Token{UserID: "u-new", AppGrants: []authorizer.AppGrant{{AppID: "app-new", Permissions: []string{"app:github:write"}}}}
+
+	// By owner/repo: the lookup must not search other accounts' installations.
+	rec := githubConnect(api, newTok, "app-new", ct.GitHubRepoConnection{Repo: "other/secret"})
+	if rec.Code == 200 {
+		t.Fatalf("non-admin connected another installation's private repo by name: %s", rec.Body.Bytes())
+	}
+	// By installation id.
+	rec = githubConnect(api, newTok, "app-new", ct.GitHubRepoConnection{Repo: "other/secret", InstallationID: 9})
+	if rec.Code == 200 {
+		t.Fatalf("non-admin connected installation 9 by id: %s", rec.Body.Bytes())
+	}
+	if c, err := store.GetConnection("app-new"); err == nil {
+		t.Fatalf("connection stored for app-new: %+v", c)
+	}
+	// The refusal is the same whether or not the repo exists.
+	missing := githubConnect(api, newTok, "app-new", ct.GitHubRepoConnection{Repo: "other/nope"})
+	found := githubConnect(api, newTok, "app-new", ct.GitHubRepoConnection{Repo: "other/secret"})
+	if missing.Code != found.Code || missing.Body.String() != found.Body.String() {
+		t.Fatalf("refusal tells a real repo from a missing one:\n%d %s\n%d %s", found.Code, found.Body.Bytes(), missing.Code, missing.Body.Bytes())
 	}
 
-	rec = httptest.NewRecorder()
-	api.ListGitHubInstallationRepos(installationReposCtx(tok, "9"), rec, httptest.NewRequest(http.MethodGet, "/github/installations/9/repos", nil))
+	// An installation already linked to one of the caller's apps still works,
+	// by name and by id, on that app and on another app the caller can write.
+	linked := &authorizer.Token{UserID: "u-1", AppGrants: []authorizer.AppGrant{
+		{AppID: "app-1", Permissions: []string{"app:github:write"}},
+		{AppID: "app-2", Permissions: []string{"app:write"}},
+	}}
+	rec = githubConnect(api, linked, "app-1", ct.GitHubRepoConnection{Repo: "acme/app", Branch: "release"})
 	if rec.Code != 200 {
-		t.Fatalf("first-connect repos %d %s", rec.Code, rec.Body.Bytes())
+		t.Fatalf("reconnect linked app: %d %s", rec.Code, rec.Body.Bytes())
 	}
-	var repos []ct.GitHubRepo
-	_ = json.Unmarshal(rec.Body.Bytes(), &repos)
-	if len(repos) != 1 || repos[0].FullName != "other/secret" {
-		t.Fatalf("first-connect repos = %+v", repos)
+	rec = githubConnect(api, linked, "app-2", ct.GitHubRepoConnection{Repo: "acme/app", InstallationID: 3})
+	if rec.Code != 200 {
+		t.Fatalf("connect second app to linked installation: %d %s", rec.Code, rec.Body.Bytes())
+	}
+	rec = githubConnect(api, linked, "app-2", ct.GitHubRepoConnection{Repo: "other/secret"})
+	if rec.Code == 200 {
+		t.Fatalf("linked caller connected an unlinked installation: %s", rec.Body.Bytes())
+	}
+
+	// Cluster admins are not limited.
+	rec = githubConnect(api, &authorizer.Token{Scopes: []string{"cluster:admin"}}, "app-new", ct.GitHubRepoConnection{Repo: "other/secret"})
+	if rec.Code != 200 {
+		t.Fatalf("admin connect: %d %s", rec.Code, rec.Body.Bytes())
+	}
+	rec = githubConnect(api, &authorizer.Token{ClusterKey: true}, "app-3", ct.GitHubRepoConnection{Repo: "other/secret", InstallationID: 9})
+	if rec.Code != 200 {
+		t.Fatalf("controller key connect: %d %s", rec.Code, rec.Body.Bytes())
 	}
 }
 

@@ -236,34 +236,6 @@ func TestAppScopedTokenForbiddenOnGETApps(t *testing.T) {
 	}
 }
 
-func TestGitHubWriteAppIDs(t *testing.T) {
-	admin := &authorizer.Token{Scopes: []string{"cluster:admin"}}
-	if ids, restricted := GitHubWriteAppIDs(admin); restricted || len(ids) != 0 {
-		t.Fatalf("admin GitHubWriteAppIDs = %v restricted=%v, want unrestricted", ids, restricted)
-	}
-	if ids, restricted := GitHubWriteAppIDs(nil); restricted || len(ids) != 0 {
-		t.Fatalf("nil GitHubWriteAppIDs = %v restricted=%v, want unrestricted", ids, restricted)
-	}
-	write := &authorizer.Token{AppGrants: []authorizer.AppGrant{
-		{AppID: "app-1", Permissions: []string{PermAppGitHubWrite}},
-		{AppID: "app-2", Permissions: []string{PermAppGitHubRead}},
-		{AppID: "app-3", Permissions: []string{PermAppWrite}},
-	}}
-	ids, restricted := GitHubWriteAppIDs(write)
-	if !restricted {
-		t.Fatal("app-scoped github:write must be restricted")
-	}
-	want := map[string]bool{"app-1": true, "app-3": true}
-	if len(ids) != 2 {
-		t.Fatalf("GitHubWriteAppIDs = %v, want app-1 and app-3", ids)
-	}
-	for _, id := range ids {
-		if !want[id] {
-			t.Fatalf("unexpected app id %q in %v", id, ids)
-		}
-	}
-}
-
 func TestCanCreateReleaseForApp(t *testing.T) {
 	envTok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{PermAppEnvWrite}}}}
 	scaleTok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{PermAppScaleWrite}}}}

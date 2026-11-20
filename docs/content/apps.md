@@ -265,6 +265,18 @@ owned by their personal account or by the account of an app they can
 the plugin who is calling with a signed identity (see
 [Plugins](plugins.md#caller-identity-on-controller-proxied-calls)).
 
+When the github plugin is not installed or not healthy, the controller answers
+these routes itself and keeps no installation owners. A cluster admin still
+sees and connects every installation. Anyone else sees, and can connect, only
+an installation that an app they can `github:write` already uses; with no such
+app the list is empty, and a repo outside those installations is refused the
+same way whether or not it exists. A cluster admin makes the first connection
+for an account.
+
+An app has one GitHub connection, stored under its id whether you name the app
+or give its id (`flynn -a <name> github:connect`, the dashboard, or
+`/apps/<id-or-name>/github`).
+
 The plugin's cluster routes (`/github/app`, installations, export, import)
 accept only the controller key. The per-app `gitreceive:build` token a push
 carries reaches only `GET` and `PUT /apps/<id>/github` for its own app.

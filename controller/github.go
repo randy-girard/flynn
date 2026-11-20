@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/githubapp"
 	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/plugincaller"
 	"golang.org/x/net/context"
 )
 
@@ -178,20 +180,25 @@ func (c *controllerAPI) ListGitHubInstallationRepos(ctx context.Context, w http.
 	httphelper.JSON(w, 200, out)
 }
 
-// githubInstallationAllowlist returns GitHub App installation IDs already
-// linked to apps the caller can github:write. restricted is false for cluster
-// admins and for the first-connect case (github:write but no links yet), so
-// the dashboard Connect GitHub picker still lists the GitHub App catalog.
+// githubInstallationAllowlist returns the GitHub App installations a caller
+// may list and connect when the controller serves GitHub itself (the github
+// plugin is not installed or not healthy). restricted is false only for a
+// cluster admin. Anyone else gets the installations already linked to apps it
+// holds github:write on, matched by exact app id as pkg/plugincaller does.
+//
+// The controller keeps no installation owners (the plugin does), so it cannot
+// tell which account an unlinked installation belongs to. A caller with no
+// linked app therefore gets an empty list, never the whole catalog.
 func (c *controllerAPI) githubInstallationAllowlist(ctx context.Context) (allow map[int64]struct{}, restricted bool) {
-	appIDs, restricted := authz.GitHubWriteAppIDs(authz.TokenFromContext(ctx))
-	if !restricted {
+	tok := authz.TokenFromContext(ctx)
+	if tok.HasClusterAdmin() {
 		return nil, false
 	}
-	if c.githubStore == nil {
-		return map[int64]struct{}{}, true
-	}
 	allow = make(map[int64]struct{})
-	for _, appID := range appIDs {
+	if c.githubStore == nil {
+		return allow, true
+	}
+	for _, appID := range plugincaller.FromToken(tok).AppIDs(authz.PermAppGitHubWrite) {
 		conn, err := c.githubStore.GetConnection(appID)
 		if err != nil {
 			continue
@@ -200,10 +207,26 @@ func (c *controllerAPI) githubInstallationAllowlist(ctx context.Context) (allow 
 			allow[conn.InstallationID] = struct{}{}
 		}
 	}
-	if len(allow) == 0 {
-		return nil, false
-	}
 	return allow, true
+}
+
+// errGitHubRepoUnavailable is the one answer for a repository the caller's
+// installations cannot reach, whether or not it exists somewhere else.
+var errGitHubRepoUnavailable = ct.ValidationError{Field: "repo", Message: "the GitHub App installation cannot access that repository"}
+
+// findGitHubRepo returns the repository owner/repo inside installation id.
+func findGitHubRepo(api githubAPI, id int64, owner, repo string) (*githubapp.Repo, error) {
+	repos, err := api.ListRepos(id)
+	if err != nil {
+		return nil, err
+	}
+	want := strings.ToLower(owner + "/" + repo)
+	for i := range repos {
+		if strings.ToLower(repos[i].FullName) == want {
+			return &repos[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (c *controllerAPI) GetAppGitHub(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -245,8 +268,37 @@ func (c *controllerAPI) PutAppGitHub(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
+	// A caller that is not a cluster admin stays inside the installations its
+	// apps already use, and never learns whether a repository exists elsewhere.
+	allow, restricted := c.githubInstallationAllowlist(ctx)
 	var ghRepo *githubapp.Repo
-	if in.InstallationID <= 0 {
+	switch {
+	case in.InstallationID > 0:
+		if _, ok := allow[in.InstallationID]; restricted && !ok {
+			respondWithError(w, errGitHubRepoUnavailable)
+			return
+		}
+		if ghRepo, err = findGitHubRepo(api, in.InstallationID, in.Owner, in.Repo); err != nil {
+			respondWithError(w, err)
+			return
+		}
+	case restricted:
+		ids := make([]int64, 0, len(allow))
+		for id := range allow {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		for _, id := range ids {
+			if ghRepo, err = findGitHubRepo(api, id, in.Owner, in.Repo); err != nil {
+				respondWithError(w, err)
+				return
+			}
+			if ghRepo != nil {
+				in.InstallationID = id
+				break
+			}
+		}
+	default:
 		inst, repo, err := api.FindRepo(in.Owner, in.Repo)
 		if err != nil {
 			respondWithError(w, err)
@@ -255,31 +307,17 @@ func (c *controllerAPI) PutAppGitHub(ctx context.Context, w http.ResponseWriter,
 		in.InstallationID = inst.ID
 		in.AccountLogin = inst.Account.Login
 		ghRepo = repo
-	} else {
-		repos, err := api.ListRepos(in.InstallationID)
-		if err != nil {
-			respondWithError(w, err)
-			return
-		}
-		want := strings.ToLower(in.Owner + "/" + in.Repo)
-		for i := range repos {
-			if strings.ToLower(repos[i].FullName) == want {
-				ghRepo = &repos[i]
-				break
-			}
-		}
-		if ghRepo == nil {
-			respondWithError(w, ct.ValidationError{Field: "repo", Message: "the GitHub App installation cannot access that repository"})
-			return
-		}
-		if in.AccountLogin == "" {
-			insts, err := api.ListInstallations()
-			if err == nil {
-				for _, inst := range insts {
-					if inst.ID == in.InstallationID {
-						in.AccountLogin = inst.Account.Login
-						break
-					}
+	}
+	if ghRepo == nil {
+		respondWithError(w, errGitHubRepoUnavailable)
+		return
+	}
+	if in.AccountLogin == "" {
+		if insts, err := api.ListInstallations(); err == nil {
+			for _, inst := range insts {
+				if inst.ID == in.InstallationID {
+					in.AccountLogin = inst.Account.Login
+					break
 				}
 			}
 		}
