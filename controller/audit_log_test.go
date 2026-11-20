@@ -147,6 +147,7 @@ func TestAuditHTTPAction(t *testing.T) {
 		{"POST", "/apps/web/github/deploy", "github.deploy", "web"},
 		{"POST", "/releases", "release.create", ""},
 		{"POST", "/providers/postgres/resources", "resource.create", ""},
+		{"PUT", "/providers/postgres", "provider.update", ""},
 		{"PUT", "/providers/postgres/resources/x/apps/web", "resource.app.add", "web"},
 		{"POST", "/tokens", "token.create", ""},
 		{"DELETE", "/tokens/t1", "token.delete", ""},

@@ -65,6 +65,9 @@ func auditHTTPAction(method, path string) (action, appRef string, ok bool) {
 	case "releases":
 		return "release.create", "", n == 1 && method == http.MethodPost
 	case "providers":
+		if n == 2 && method == http.MethodPut {
+			return "provider.update", "", true
+		}
 		if n == 3 && p[2] == "resources" && method == http.MethodPost {
 			return "resource.create", "", true
 		}

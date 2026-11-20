@@ -218,6 +218,22 @@ func (c *Client) CreateProvider(provider *ct.Provider) error {
 	return c.Post("/providers", provider, provider)
 }
 
+// UpdateProvider sets tenant_safe on the provider named by provider.ID, or
+// provider.Name when ID is empty. Other fields are not changed.
+func (c *Client) UpdateProvider(provider *ct.Provider) error {
+	id := provider.ID
+	if id == "" {
+		id = provider.Name
+	}
+	if id == "" {
+		return errors.New("controller: provider id or name required")
+	}
+	body := struct {
+		TenantSafe bool `json:"tenant_safe"`
+	}{provider.TenantSafe}
+	return c.Put(fmt.Sprintf("/providers/%s", id), body, provider)
+}
+
 // GetProvider returns the provider identified by providerID.
 func (c *Client) GetProvider(providerID string) (*ct.Provider, error) {
 	provider := &ct.Provider{}

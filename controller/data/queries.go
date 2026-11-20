@@ -88,6 +88,7 @@ var preparedStatements = map[string]string{
 	"provider_select_by_name":                  providerSelectByNameQuery,
 	"provider_select_by_name_or_id":            providerSelectByNameOrIDQuery,
 	"provider_insert":                          providerInsertQuery,
+	"provider_update_tenant_safe":              providerUpdateTenantSafeQuery,
 	"resource_list":                            resourceListQuery,
 	"resource_list_by_provider":                resourceListByProviderQuery,
 	"resource_list_by_app":                     resourceListByAppQuery,
@@ -795,6 +796,10 @@ FROM providers WHERE deleted_at IS NULL AND (provider_id = $1 OR name = $2) LIMI
 	providerInsertQuery = `
 INSERT INTO providers (name, url, tenant_safe) VALUES ($1, $2, $3)
 RETURNING provider_id, created_at, updated_at`
+	providerUpdateTenantSafeQuery = `
+UPDATE providers SET tenant_safe = $2, updated_at = now()
+WHERE provider_id = $1 AND deleted_at IS NULL
+RETURNING provider_id, name, url, tenant_safe, created_at, updated_at`
 	resourceListQuery = `
 SELECT resource_id, provider_id, external_id, env,
   ARRAY(

@@ -743,6 +743,28 @@ func (s *S) TestCreateProvider(c *C) {
 	c.Assert(err, Equals, controller.ErrNotFound)
 }
 
+func (s *S) TestUpdateProviderTenantSafe(c *C) {
+	provider := s.createTestProvider(c, &ct.Provider{URL: "https://update-tenant-safe.example.com", Name: "update-tenant-safe"})
+	c.Assert(provider.TenantSafe, Equals, false)
+
+	// Only tenant_safe changes. Name and URL in the body are ignored.
+	c.Assert(s.c.UpdateProvider(&ct.Provider{ID: provider.ID, Name: "renamed", URL: "https://other.example.com", TenantSafe: true}), IsNil)
+	got, err := s.c.GetProvider(provider.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.TenantSafe, Equals, true)
+	c.Assert(got.Name, Equals, "update-tenant-safe")
+	c.Assert(got.URL, Equals, "https://update-tenant-safe.example.com")
+
+	// Lookup by name works too, and the flag can be turned back off.
+	c.Assert(s.c.UpdateProvider(&ct.Provider{Name: provider.Name, TenantSafe: false}), IsNil)
+	got, err = s.c.GetProvider(provider.Name)
+	c.Assert(err, IsNil)
+	c.Assert(got.TenantSafe, Equals, false)
+
+	err = s.c.UpdateProvider(&ct.Provider{ID: "missing-provider-update", TenantSafe: true})
+	c.Assert(err, Equals, controller.ErrNotFound)
+}
+
 func (s *S) TestProviderList(c *C) {
 	s.createTestProvider(c, &ct.Provider{URL: "https://example.org", Name: "list-test"})
 

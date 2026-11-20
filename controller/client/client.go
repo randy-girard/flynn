@@ -33,6 +33,7 @@ type Client interface {
 	UpdateAppMeta(app *ct.App) error
 	DeleteApp(appID string) (*ct.AppDeletion, error)
 	CreateProvider(provider *ct.Provider) error
+	UpdateProvider(provider *ct.Provider) error
 	GetProvider(providerID string) (*ct.Provider, error)
 	ProvisionResource(req *ct.ResourceReq) (*ct.Resource, error)
 	GetResource(providerID, resourceID string) (*ct.Resource, error)

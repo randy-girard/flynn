@@ -20,6 +20,30 @@ import (
 	"golang.org/x/net/context"
 )
 
+// UpdateProvider is PUT /providers/:providers_id. It changes tenant_safe
+// only; name and URL in the body are ignored. Authz limits it to the cluster
+// key (plugin install and update).
+func (c *controllerAPI) UpdateProvider(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	var in struct {
+		TenantSafe *bool `json:"tenant_safe"`
+	}
+	if err := httphelper.DecodeJSON(req, &in); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if in.TenantSafe == nil {
+		respondWithError(w, ct.ValidationError{Field: "tenant_safe", Message: "must be set"})
+		return
+	}
+	params, _ := ctxhelper.ParamsFromContext(ctx)
+	p, err := c.providerRepo.SetTenantSafe(params.ByName("providers_id"), *in.TenantSafe)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	httphelper.JSON(w, 200, p)
+}
+
 func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	p, err := c.getProvider(ctx)
 	if err != nil {

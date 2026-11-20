@@ -79,3 +79,30 @@ func (r *ProviderRepo) List() (interface{}, error) {
 	}
 	return providers, rows.Err()
 }
+
+// SetTenantSafe changes only the tenant_safe flag of the provider with this
+// id or name. Plugin install and update call it so a provider row follows the
+// plugin manifest after it was first created.
+func (r *ProviderRepo) SetTenantSafe(id string, tenantSafe bool) (*ct.Provider, error) {
+	existing, err := r.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	p, err := scanProvider(tx.QueryRow("provider_update_tenant_safe", existing.(*ct.Provider).ID, tenantSafe))
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := CreateEvent(tx.Exec, &ct.Event{
+		ObjectID:   p.ID,
+		ObjectType: ct.EventTypeProvider,
+	}, p); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	return p, tx.Commit()
+}
