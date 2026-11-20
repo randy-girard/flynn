@@ -257,29 +257,29 @@ var specialUseTLDs = map[string]struct{}{
 func ValidateDomainClaim(hostname string, platform []string) error {
 	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
 	if host == "" {
-		return fmt.Errorf("hostname is required")
+		return fmt.Errorf("is required")
 	}
 	if net.ParseIP(strings.Trim(host, "[]")) != nil {
-		return fmt.Errorf("hostname %s is an IP address", host)
+		return fmt.Errorf("%s is an IP address", host)
 	}
 	if len(host) > 253 {
-		return fmt.Errorf("hostname %s is too long", host)
+		return fmt.Errorf("%s is too long", host)
 	}
 	labels := strings.Split(host, ".")
 	if len(labels) < 2 {
-		return fmt.Errorf("hostname %s must have at least two labels", host)
+		return fmt.Errorf("%s must have at least two labels", host)
 	}
 	for _, l := range labels {
 		if !validDNSLabel(l) {
-			return fmt.Errorf("hostname %s is not a valid DNS name", host)
+			return fmt.Errorf("%s is not a valid DNS name", host)
 		}
 	}
 	tld := labels[len(labels)-1]
 	if _, ok := specialUseTLDs[tld]; ok {
-		return fmt.Errorf("hostname %s is a special-use name", host)
+		return fmt.Errorf("%s is a special-use name", host)
 	}
 	if suffix, _ := publicsuffix.PublicSuffix(host); suffix == host {
-		return fmt.Errorf("hostname %s is a public suffix", host)
+		return fmt.Errorf("%s is a public suffix", host)
 	}
 	for _, p := range platform {
 		p = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(p)), ".")
@@ -287,7 +287,7 @@ func ValidateDomainClaim(hostname string, platform []string) error {
 			continue
 		}
 		if host == p || strings.HasSuffix(host, "."+p) || strings.HasSuffix(p, "."+host) {
-			return fmt.Errorf("hostname %s is reserved for the cluster", host)
+			return fmt.Errorf("%s is reserved for the cluster", host)
 		}
 	}
 	return nil

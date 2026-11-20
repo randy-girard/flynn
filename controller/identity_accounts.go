@@ -630,7 +630,7 @@ func (c *controllerAPI) CheckDomain(ctx context.Context, w http.ResponseWriter, 
 		// Supplied records are an operator and test shortcut. Anyone else
 		// could send their own token and skip DNS.
 		if tok := authz.TokenFromContext(ctx); tok == nil || !tok.ClusterKey {
-			httphelper.ValidationError(w, "records", "only the cluster key may supply TXT records; publish the record and check again")
+			httphelper.ValidationError(w, "records", "may only be supplied by the cluster key; publish the TXT record and check again")
 			return
 		}
 	} else {
