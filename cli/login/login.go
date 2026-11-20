@@ -21,6 +21,8 @@ import (
 	"github.com/randy-girard/flynn/cli/login/internal/oauth"
 	"github.com/randy-girard/flynn/cli/login/tokensource"
 	controller "github.com/randy-girard/flynn/controller/client"
+	v1controller "github.com/randy-girard/flynn/controller/client/v1"
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/term"
 	"golang.org/x/oauth2"
@@ -491,10 +493,24 @@ func Authenticate(clusterName, issuer, controllerURL string, creds Credentials, 
 	if err != nil {
 		return "", fmt.Errorf("error creating controller client: %s", err)
 	}
-	if _, err := cc.Status(); err != nil {
-		return "", fmt.Errorf("error getting controller status: %s", err)
+	if err := checkLogin(cc); err != nil {
+		return "", fmt.Errorf("error checking the new login with the controller: %s", err)
 	}
 	return used, nil
+}
+
+// checkLogin asks the controller who the new token belongs to. GET /whoami
+// is open to every user session, including a non-admin tenant, while
+// GET /.well-known/status is cluster-admin only, so checking status made a
+// tenant's login exit 1 after its token was saved.
+func checkLogin(cc controller.Client) error {
+	v, ok := cc.(*v1controller.Client)
+	if !ok || v == nil {
+		_, err := cc.Status()
+		return err
+	}
+	var me ct.WhoAmI
+	return v.Get("/whoami", &me)
 }
 
 func firstNonEmpty(vals ...string) string {

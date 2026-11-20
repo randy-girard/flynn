@@ -261,8 +261,8 @@ func TestAuthenticatePasswordGrant(t *testing.T) {
 				"refresh_token_expires_in": 86400,
 				"audience":                 r.Form.Get("audience"),
 			})
-		case r.URL.Path == "/.well-known/status":
-			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "healthy"}})
+		case r.URL.Path == "/whoami":
+			_ = json.NewEncoder(w).Encode(map[string]any{"email": "ada@example.com", "account": "user:u1", "cluster_admin": true})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -275,5 +275,77 @@ func TestAuthenticatePasswordGrant(t *testing.T) {
 	}
 	if used != srv.URL {
 		t.Fatalf("issuer %q", used)
+	}
+}
+
+// passwordGrantServer issues a1 for ada@example.com/secret and answers
+// GET /whoami and GET /.well-known/status with the given codes, the way the
+// controller answers a non-admin user token (whoami 200, status 403).
+func passwordGrantServer(t *testing.T, whoamiCode, statusCode int) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "oauth-authorization-server"):
+			_ = json.NewEncoder(w).Encode(oauth.IssuerMetadata{
+				AuthorizationEndpoint: srv.URL + "/oauth/authorize",
+				TokenEndpoint:         srv.URL + "/oauth/token",
+			})
+		case r.URL.Path == "/oauth/token":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":             "a1",
+				"token_type":               "Bearer",
+				"refresh_token":            "r1",
+				"expires_in":               3600,
+				"refresh_token_expires_in": 86400,
+				"audience":                 r.FormValue("audience"),
+			})
+		case r.URL.Path == "/whoami":
+			if r.Header.Get("Authorization") != "Bearer a1" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(whoamiCode)
+			_ = json.NewEncoder(w).Encode(map[string]any{"email": "ada@example.com", "account": "user:u1"})
+		case r.URL.Path == "/.well-known/status":
+			w.WriteHeader(statusCode)
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": "healthy"}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	return srv
+}
+
+func loginTestHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("FLYNNRC", filepath.Join(home, "flynnrc"))
+	if err := os.MkdirAll(filepath.Join(home, ".flynn"), 0700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A non-admin tenant may not read GET /.well-known/status. Login checks the
+// new token with GET /whoami, which every user session may call, so a tenant
+// login succeeds instead of exiting 1 after saving the token.
+func TestAuthenticateNonAdminUserDoesNotNeedStatus(t *testing.T) {
+	loginTestHome(t)
+	srv := passwordGrantServer(t, http.StatusOK, http.StatusForbidden)
+	defer srv.Close()
+	if _, err := Authenticate("prod", srv.URL, srv.URL, Credentials{Email: "ada@example.com", Password: "secret"}, false, srv.Client()); err != nil {
+		t.Fatalf("tenant login: %v", err)
+	}
+}
+
+// A token the controller rejects still fails login.
+func TestAuthenticateFailsWhenControllerRejectsToken(t *testing.T) {
+	loginTestHome(t)
+	srv := passwordGrantServer(t, http.StatusUnauthorized, http.StatusOK)
+	defer srv.Close()
+	_, err := Authenticate("prod", srv.URL, srv.URL, Credentials{Email: "ada@example.com", Password: "secret"}, false, srv.Client())
+	if err == nil || !strings.Contains(err.Error(), "error checking the new login with the controller") {
+		t.Fatalf("want rejected token error, got %v", err)
 	}
 }
