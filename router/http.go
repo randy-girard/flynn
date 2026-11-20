@@ -6,8 +6,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -63,8 +61,10 @@ type HTTPListener struct {
 	preSync  func()
 	postSync func(<-chan struct{})
 
-	// ACME challenge service for automatic TLS certificates
+	// ACME challenge service for automatic TLS certificates, and the
+	// user/build overlay IP services whose instances it must never use.
 	acmeService *cache.ServiceCache
+	acmeDeny    []*cache.ServiceCache
 }
 
 type DiscoverdClient interface {
@@ -81,6 +81,12 @@ func (s *HTTPListener) Close() error {
 	s.stopSync()
 	for _, service := range s.services {
 		service.sc.Close()
+	}
+	if s.acmeService != nil {
+		s.acmeService.Close()
+	}
+	for _, sc := range s.acmeDeny {
+		sc.Close()
 	}
 	for _, listener := range s.listeners {
 		listener.Close()
@@ -509,50 +515,6 @@ func (s *HTTPListener) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	r.ServeHTTP(w, req.WithContext(ctx))
-}
-
-func (s *HTTPListener) serveACMEChallenge(w http.ResponseWriter, req *http.Request) {
-	s.mtx.RLock()
-	acmeSvc := s.acmeService
-	s.mtx.RUnlock()
-	if acmeSvc == nil {
-		sc, err := cache.New(s.discoverd.Service("acme-challenge"))
-		if err != nil {
-			fail(w, 503)
-			return
-		}
-		s.mtx.Lock()
-		if s.acmeService == nil {
-			s.acmeService = sc
-		} else {
-			sc.Close()
-		}
-		acmeSvc = s.acmeService
-		s.mtx.Unlock()
-	}
-
-	if acmeSvc == nil {
-		fail(w, 503)
-		return
-	}
-
-	instances := acmeSvc.Instances()
-	if len(instances) == 0 {
-		fail(w, 503)
-		return
-	}
-
-	// Pick the first available ACME service instance
-	instance := instances[0]
-
-	// Create a reverse proxy to the ACME service using standard library
-	target, err := url.Parse("http://" + instance.Addr)
-	if err != nil {
-		fail(w, 500)
-		return
-	}
-	rp := httputil.NewSingleHostReverseProxy(target)
-	rp.ServeHTTP(w, req)
 }
 
 // A domain served by a listener, associated TLS certs,
