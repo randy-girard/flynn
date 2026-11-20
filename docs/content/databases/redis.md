@@ -79,6 +79,11 @@ copies the leader with `REPLICAOF` and stays read-only until you promote or
 unfollow it. With TLS (the default) the replica talks to the primary
 `tls-port` **16379**, not plaintext 6379. You can only follow a resource that
 belongs to the same app. Another tenant's resource is refused as not found.
+Each follower has its own password. The leader's password is used only for
+replication and is not in the follower's attachment env. After a keep-service
+failover the promoted primary also accepts the old leader's password, so the
+old leader's apps keep working. Followers created before per-follower
+passwords keep their leader's password until an upgrade replaces them.
 
 ```text
 flynn redis:follow

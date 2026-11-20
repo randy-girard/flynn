@@ -26,7 +26,9 @@ not fail over, and a third Flynn host does not add peers. There is no
 
 A follower is another resource (`flynn mysql:follow` or
 `flynn addons:create mysql --follow`). It is an async read-only replica of
-that leader, and it copies the leader's users and passwords. It does not
+that leader. It has its own read-only login (`ro_<id>`), which the plugin
+creates on the leader and replication copies to the follower, so the
+follower's `DATABASE_URL` never carries the leader's password. It does not
 follow another follower. You can only follow a resource of the same app;
 another tenant's resource is refused as not found. `--auto-failover` requires
 `--follow`. After the
@@ -62,8 +64,9 @@ finishes starting in the background.
 ### Followers
 
 A follower is a separate read-only instance, not a second process on the
-leader. It copies the leader's users and passwords and stays caught up
-asynchronously.
+leader. It stays caught up asynchronously and has its own read-only login,
+not the leader's. Deleting the follower drops that login from the leader.
+Followers created before per-follower logins keep the leader's login.
 
 ```text
 flynn addons:create mysql --follow <resource>

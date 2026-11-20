@@ -91,8 +91,15 @@ flynn pg:promote <follower>
 `flynn pg:wait` prints live copy progress (basebackup percent, then WAL catch-up)
 until lag is zero. The dashboard Follow and Upgrade pages poll the same progress.
 
-A follower is a separate resource, not an extra node. It is read-only. It
-cannot follow another follower. Its own `--as` does not replace the leader
+A follower is a separate resource, not an extra node. It is read-only.
+Each follower has its own read-only login, different from the leader's. Apps
+attached to a follower get only that login; it can read but not write, on the
+follower and on the leader (replication copies roles, so it is created on the
+leader). The follower's resource env never contains the leader's credentials.
+Promote rewrites the leader's apps to the promoted host with the leader's
+login. Apps attached to the follower keep the read-only login after promote or
+failover. Followers created before this change keep the leader's login until
+they are replaced. It cannot follow another follower. Its own `--as` does not replace the leader
 URL until promote. Promote makes the follower writable, ends the follow, and
 rewrites the primary attachment `*_URL`. The old leader remains its own
 resource. `flynn pg:unfollow <follower>` stops replication and leaves a
