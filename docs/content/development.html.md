@@ -79,6 +79,9 @@ plugins on a cluster host with `flynn-host plugin:install` after bootstrap.
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
 GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
 `util/commit-validator/validate-gofmt` and fail if changed Go is not formatted.
+GitHub Actions and `script/run-unit-tests` also run
+`util/commit-validator/validate-govet`, which fails on any `go vet` finding in
+`./discoverd/...`.
 
 ## Building
 
@@ -241,7 +244,7 @@ $ flynn-host collect-debug-info --tarball
 ## Tests
 
 There are several layers. CI on pushes and pull requests to `main` (and `develop`, while that
-branch exists) runs **gofmt**, **bats**, and the **Linux unit suite**. Integration tests and Vagrant
+branch exists) runs **gofmt**, **go vet** (discoverd), **bats**, and the **Linux unit suite**. Integration tests and Vagrant
 smoke are local (or a dedicated machine). They are the right gate for scheduler,
 network, datastore, upgrade, and CLI behavior.
 
@@ -255,7 +258,7 @@ CI, `make test-unit` / `script/run-unit-tests`, and
 `script/vagrant/suite.sh` all run this check. It compares against the
 PR base in CI; locally it uses the first of `origin/develop`, `origin/main`,
 or `origin/master` that exists (`util/commit-validator/.validate`), so you do
-not fail on unrelated historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
+not fail on unrelated historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt and go vet still run.
 
 Install the same check as **pre-commit** and **pre-push** hooks so unformatted
 Go never leaves the clone:
@@ -267,6 +270,18 @@ $ make install-git-hooks
 That copies `script/githooks/gofmt-check` into `.git/hooks/` (no `git config`
 changes). Git does not enable committed hooks automatically; run the installer
 once per clone.
+
+### go vet
+
+```
+$ util/commit-validator/validate-govet
+```
+
+CI and `make test-unit` / `script/run-unit-tests` run `go vet ./discoverd/...`
+and fail on any finding. Pass package patterns to vet other packages
+(`util/commit-validator/validate-govet ./router/...`). Copy a
+`discoverd.Instance` with `Copy()` or `Clone()`, not `*inst`: it holds a
+`sync.Once`, and vet's copylocks check rejects the plain copy.
 
 ### bats (shell)
 
@@ -482,7 +497,7 @@ The smoke header in `script/vagrant/suite.sh` lists the rest.
 
 * **[Unit tests](https://github.com/randy-girard/flynn/actions/workflows/unit-tests.yml)**
   — `push` and `pull_request` to `develop` and `main`, on `ubuntu-24.04`.
-  Builds host binaries, `validate-gofmt`, `bats script/test`,
+  Builds host binaries, `validate-gofmt`, `validate-govet`, `bats script/test`,
   `make test-unit-root-native`. The workflow token is `contents: read` and the
   unit job checks out with `persist-credentials: false`, so test code cannot
   push to the repo. Only the `coverage-badge` job, which runs after a green

@@ -74,6 +74,9 @@ jobs:
       - name: Run gofmt check
         run: util/commit-validator/validate-gofmt
 
+      - name: Run go vet check
+        run: util/commit-validator/validate-govet
+
       - name: Run bats script tests
         run: bats script/test
 

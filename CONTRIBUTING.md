@@ -18,6 +18,7 @@ All contributions are pull requests against **`main`** on [randy-girard/flynn](h
 ## Code style
 
 - Go code should match the output of `gofmt -s`
+- `go vet ./discoverd/...` must report nothing (`util/commit-validator/validate-govet`; CI runs it)
 - Shell scripts should follow the [Google Shell Style Guide](https://google.github.io/styleguide/shell.xml)
 - Commit subjects **always** use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>` (for example `feat(cli): …`, `fix(host): …`, `test(router): …`, `docs: …`)
 

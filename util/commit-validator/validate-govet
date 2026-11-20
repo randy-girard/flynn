@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+# Run go vet over the packages that must stay vet-clean. CI and
+# script/run-unit-tests call this; it fails on any vet finding.
+#
+# Usage: util/commit-validator/validate-govet [packages...]
+#   default packages: ./discoverd/...
+#
+set -eo pipefail
+
+cd "$(dirname "${BASH_SOURCE}")/../.."
+
+export GOFLAGS="${GOFLAGS:--mod=vendor -buildvcs=false}"
+
+if [ $# -eq 0 ]; then
+  set -- ./discoverd/...
+fi
+
+echo "==> go vet $*"
+if ! go vet "$@"; then
+  echo >&2
+  echo >&2 "go vet found problems in $*; fix them before committing."
+  exit 1
+fi
+echo 'go vet found no problems.'

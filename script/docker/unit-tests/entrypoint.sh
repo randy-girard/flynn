@@ -30,6 +30,9 @@ sudo -u postgres createuser -s root 2>/dev/null || true
 echo "==> gofmt check (gofmt -s, same as GitHub Actions)"
 util/commit-validator/validate-gofmt
 
+echo "==> go vet check (same as GitHub Actions)"
+util/commit-validator/validate-govet
+
 if [[ "${FLYNN_TEST_SKIP_CHECKS:-}" != "1" ]]; then
   echo "==> bats script tests"
   bats script/test

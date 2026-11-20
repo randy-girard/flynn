@@ -109,3 +109,20 @@ workflow_job() {
     return 1
   fi
 }
+
+@test "unit workflow, run-unit-tests and the unit container run go vet on discoverd" {
+  validator="${ROOT}/util/commit-validator/validate-govet"
+  [[ -x "${validator}" ]]
+  grep -q './discoverd/...' "${validator}"
+  job="$(workflow_job "${ROOT}/.github/workflows/unit-tests.yml" unit)"
+  if ! echo "${job}" | grep -Eq '^[[:space:]]+run:[[:space:]]*util/commit-validator/validate-govet[[:space:]]*$'; then
+    echo "unit job must run util/commit-validator/validate-govet" >&2
+    return 1
+  fi
+  for f in "${ROOT}/script/run-unit-tests" "${ROOT}/script/docker/unit-tests/entrypoint.sh"; do
+    if ! grep -q '^[[:space:]]*util/commit-validator/validate-govet' "${f}"; then
+      echo "${f} must run util/commit-validator/validate-govet" >&2
+      return 1
+    fi
+  done
+}
