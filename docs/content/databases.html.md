@@ -126,8 +126,8 @@ The runtime's disk is the size of the instance's data volume: the ZFS
 refquota set when the volume is created. A raw `--disk` sets it for that
 one resource, and the provider rejects a raw disk unless custom sizes are
 allowed, even when the CLI is bypassed. A follower gets its own runtime's
-disk, or its leader's volume size when that runtime is not published (a
-custom-sized leader). Members added by `mongodb:scale`, `kafka:scale`, and
+disk or its leader's volume size, whichever is larger, so a replica always
+has room for the leader's data. Members added by `mongodb:scale`, `kafka:scale`, and
 `clickhouse:scale` get the resource's size. A volume with no size gets the
 host default, 20 GiB.
 
