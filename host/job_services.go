@@ -18,6 +18,14 @@ func hostRegistersServices(job *host.Job) bool {
 	return netpolicy.ClassifyJob(job) == netpolicy.ClassUser
 }
 
+// validateJobServices rejects a user job whose ports declare a discoverd
+// service its app does not own (CORE-17 / EDGE-01). flynn-host registers
+// those names with its own discoverd credentials, so the controller check
+// alone is not enough. System and plugin jobs keep their names.
+func validateJobServices(job *host.Job) error {
+	return netpolicy.UserJobServiceError(job)
+}
+
 func jobServiceInstance(env map[string]string, ip string, port host.Port) *discoverd.Instance {
 	inst := &discoverd.Instance{
 		Addr:  fmt.Sprintf("%s:%v", ip, port.Port),
@@ -65,6 +73,9 @@ func (c *Container) waitDiscoverdConfigured(log log15.Logger) {
 func (c *Container) registerJobServices(log log15.Logger) error {
 	if !hostRegistersServices(c.job) {
 		return nil
+	}
+	if err := validateJobServices(c.job); err != nil {
+		return err
 	}
 	// Reconnected watches after a flynn-host restart reach StateRunning
 	// before ConfigureDiscoverd. Failing here Stop()s the job; on a

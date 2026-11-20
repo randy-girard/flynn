@@ -620,6 +620,13 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		}
 	}
 
+	if err := validateJobServices(job); err != nil {
+		log.Warn("rejecting user job with a service it does not own", "err", err)
+		httphelper.ValidationError(w, "ports", err.Error())
+		h.addJobRateLimitBucket.Put()
+		return
+	}
+
 	if len(job.Mountspecs) == 0 {
 		log.Warn("rejecting job as no mountspecs set")
 		httphelper.ValidationError(w, "mountspecs", "must be set")

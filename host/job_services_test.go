@@ -73,3 +73,76 @@ func TestRegisterJobServicesWaitsForDiscoverd(t *testing.T) {
 		t.Fatal("did not return after discoverdConfigured")
 	}
 }
+
+func TestRegisterJobServicesRejectsServiceNotOwnedByApp(t *testing.T) {
+	for _, name := range []string{"controller", "blobstore", "acme-challenge", "other-app-web"} {
+		// discoverd is never configured: a rejected name must fail before
+		// any wait or registration.
+		l := &LibcontainerBackend{discoverdConfigured: make(chan struct{})}
+		c := &Container{
+			l: l,
+			job: &host.Job{
+				Metadata: map[string]string{
+					"flynn-controller.app_name": "shop",
+					"flynn-controller.type":     "web",
+				},
+				Config: host.ContainerConfig{
+					Env: map[string]string{"EXTERNAL_IP": "10.0.0.1"},
+					Ports: []host.Port{{
+						Port: 8080, Proto: "tcp",
+						Service: &host.Service{Name: name, Create: true},
+					}},
+				},
+			},
+		}
+		done := make(chan error, 1)
+		go func() { done <- c.registerJobServices(log15.New()) }()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("%s: got %v", name, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: waited for discoverd instead of rejecting", name)
+		}
+	}
+}
+
+func TestUserJobCannotRegisterSystemService(t *testing.T) {
+	for _, name := range []string{"controller", "blobstore", "acme-challenge", "other-app-web"} {
+		job := &host.Job{
+			ID: "host0-" + name,
+			Metadata: map[string]string{
+				"flynn-controller.app_name": "shop",
+				"flynn-controller.type":     "web",
+			},
+			Mountspecs: []*host.Mountspec{{}},
+			Config: host.ContainerConfig{Ports: []host.Port{{
+				Port: 8080, Proto: "tcp",
+				Service: &host.Service{Name: name, Create: true},
+			}}},
+		}
+		if err := validateJobServices(job); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%s: got %v", name, err)
+		}
+	}
+	own := &host.Job{
+		Metadata: map[string]string{"flynn-controller.app_name": "shop", "flynn-controller.type": "web"},
+		Config: host.ContainerConfig{Ports: []host.Port{{
+			Port: 8080, Proto: "tcp", Service: &host.Service{Name: "shop-web", Create: true},
+		}}},
+	}
+	if err := validateJobServices(own); err != nil {
+		t.Fatalf("own service: %v", err)
+	}
+	sys := &host.Job{
+		Partition: "system",
+		Metadata:  map[string]string{"flynn-system-app": "true", "flynn-controller.app_name": "blobstore"},
+		Config: host.ContainerConfig{Ports: []host.Port{{
+			Port: 80, Proto: "tcp", Service: &host.Service{Name: "blobstore", Create: true},
+		}}},
+	}
+	if err := validateJobServices(sys); err != nil {
+		t.Fatalf("system job: %v", err)
+	}
+}
