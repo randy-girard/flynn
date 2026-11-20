@@ -115,7 +115,9 @@ scale-down stops with an error and the drained node keeps running. Only then
 is the node removed from the Keeper voters: if it is the Keeper leader, it
 hands the leadership to another node first, and the node is stopped only after
 a remaining node leads exactly the remaining voters. Its replicas are dropped
-with `SYSTEM DROP REPLICA` once the remaining nodes have a leader again. A
+with `SYSTEM DROP REPLICA` once the remaining nodes have a leader again. The
+removed node's volume is marked retired, so a later scale-up that reuses it
+starts a new node with an empty volume. A
 resource whose nodes predate this behaviour needs `clickhouse:maintenance`
 before a scale-down can move the leadership. A node whose job is lost comes back
 with the same id and volume. Resources created before embedded Keeper cannot
