@@ -1016,3 +1016,36 @@ func (MigrateSuite) TestMigrateResetsDomainVerification(c *C) {
 	c.Assert(db.QueryRow(`SELECT token FROM verified_domains WHERE hostname = 'shop.example.com'`).Scan(&token), IsNil)
 	c.Assert(token, Equals, "tok-shop.example.com")
 }
+
+// TestMigrateScrubsAuditPasswords checks that migration 94 removes the clear
+// text password that PATCH /users/:id stored in user.update rows before
+// CORE-21, and keeps only whether a password was set.
+func (MigrateSuite) TestMigrateScrubsAuditPasswords(c *C) {
+	db := setupTestDB(c, "controllertest_audit_scrub")
+	var before, rest postgres.Migrations
+	for _, m := range *migrations {
+		if m.ID < 94 {
+			before = append(before, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	c.Assert(before.Migrate(db), IsNil)
+	insert := func(action, data string) {
+		c.Assert(db.Exec(`INSERT INTO core_audit (actor, action, data) VALUES ('cluster-key', $1, $2::jsonb)`, action, data), IsNil)
+	}
+	insert("user.update", `{"disabled":null,"email":null,"password":"core21-old-clear-pw"}`)
+	insert("user.update", `{"disabled":true,"email":null,"password":null}`)
+	insert("user.create", `{"handle":"core21"}`)
+	c.Assert(rest.Migrate(db), IsNil)
+
+	var n int
+	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM core_audit WHERE data::text LIKE '%core21-old-clear-pw%' OR data ? 'password'`).Scan(&n), IsNil)
+	c.Assert(n, Equals, 0)
+	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM core_audit WHERE action = 'user.update' AND data->>'password_changed' = 'true'`).Scan(&n), IsNil)
+	c.Assert(n, Equals, 1)
+	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM core_audit WHERE action = 'user.update' AND data->>'disabled' = 'true' AND NOT data ? 'password_changed'`).Scan(&n), IsNil)
+	c.Assert(n, Equals, 1)
+	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM core_audit WHERE action = 'user.create' AND data->>'handle' = 'core21'`).Scan(&n), IsNil)
+	c.Assert(n, Equals, 1)
+}

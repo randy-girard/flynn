@@ -461,8 +461,32 @@ func (c *controllerAPI) PatchUser(ctx context.Context, w http.ResponseWriter, re
 		return
 	}
 	u.PasswordHash = ""
-	_ = c.tenancy.Audit(c.actor(ctx), "user.update", "user:"+u.ID, "", body)
+	_ = c.tenancy.Audit(c.actor(ctx), "user.update", "user:"+u.ID, "", userUpdateAudit(&body))
 	httphelper.JSON(w, 200, u)
+}
+
+// userUpdateAuditData is the user.update core_audit row. It records that the
+// password changed, never the password.
+type userUpdateAuditData struct {
+	Disabled        *bool   `json:"disabled"`
+	ClusterAdmin    *bool   `json:"cluster_admin"`
+	Handle          *string `json:"handle"`
+	Email           *string `json:"email"`
+	EmailVerified   *bool   `json:"email_verified"`
+	Suspended       *bool   `json:"suspended"`
+	PasswordChanged bool    `json:"password_changed,omitempty"`
+}
+
+func userUpdateAudit(p *ct.UserPatch) *userUpdateAuditData {
+	return &userUpdateAuditData{
+		Disabled:        p.Disabled,
+		ClusterAdmin:    p.ClusterAdmin,
+		Handle:          p.Handle,
+		Email:           p.Email,
+		EmailVerified:   p.EmailVerified,
+		Suspended:       p.Suspended,
+		PasswordChanged: p.Password != nil,
+	}
 }
 
 func (c *controllerAPI) DeleteUser(ctx context.Context, w http.ResponseWriter, _ *http.Request) {

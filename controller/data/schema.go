@@ -1563,6 +1563,15 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 	migrations.Add(93,
 		`UPDATE verified_domains SET verified_at = NULL WHERE verified_at IS NOT NULL`,
 	)
+
+	// Before 94 PATCH /users/:id stored its whole body, new password
+	// included, in core_audit. Keep only whether a password was set. Backups
+	// and copies taken before this migration still hold the old rows.
+	migrations.Add(94,
+		`UPDATE core_audit SET data = (data - 'password') || '{"password_changed": true}'::jsonb
+		WHERE action = 'user.update' AND jsonb_typeof(data->'password') = 'string'`,
+		`UPDATE core_audit SET data = data - 'password' WHERE action = 'user.update' AND data ? 'password'`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

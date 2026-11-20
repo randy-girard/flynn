@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/controller/redact"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
 	"github.com/randy-girard/flynn/pkg/postgres"
@@ -484,8 +485,11 @@ func (r *TenancyRepo) VerifiedHostnames(owner string) ([]string, error) {
 	return out, rows.Err()
 }
 
+// Audit writes a core_audit row. data passes through redact.Value first, so
+// a secret-named field (password, key, token, secret, ...) is stored as
+// "[redacted]" even if a handler hands over a request body.
 func (r *TenancyRepo) Audit(actor, action, account, appID string, data interface{}) error {
-	raw, err := json.Marshal(data)
+	raw, err := redact.Value(data)
 	if err != nil {
 		return err
 	}
