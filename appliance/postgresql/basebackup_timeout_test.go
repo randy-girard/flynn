@@ -2,11 +2,13 @@ package postgresql
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/inconshreveable/log15"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
@@ -185,5 +187,24 @@ func TestBasebackupSuperseded(t *testing.T) {
 	}
 	if basebackupSuperseded(nil, &state.Config{Role: state.RolePrimary}) {
 		t.Error("no basebackup in flight is never superseded")
+	}
+}
+
+// TestRunCmdLogRedactsPassword: the "running command" debug line logged the
+// pg_basebackup conninfo, replication password included, into job logs.
+func TestRunCmdLogRedactsPassword(t *testing.T) {
+	var buf strings.Builder
+	p := NewProcess(Config{ID: "sync-1", DataDir: t.TempDir(), Port: "6513"})
+	p.log = log15.New()
+	p.log.SetHandler(log15.StreamHandler(&buf, log15.LogfmtFormat()))
+	cmd := exec.Command("true", "--dbname", "host=10.0.0.1 port=5432 user=flynn password=s3cr3t-value application_name=x")
+	if err := p.runCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "s3cr3t-value") {
+		t.Fatalf("runCmd logged the password: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "running command") {
+		t.Fatalf("expected the command to be logged: %s", buf.String())
 	}
 }

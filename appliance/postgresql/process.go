@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -1954,7 +1955,7 @@ func (p *Process) runCmd(cmd *exec.Cmd) error {
 // returns an error, which is then returned. abort is polled every
 // checkInterval.
 func (p *Process) runCmdUntil(cmd *exec.Cmd, abort func() error) error {
-	p.log.Debug("running command", "fn", "runCmd", "cmd", cmd.Args)
+	p.log.Debug("running command", "fn", "runCmd", "cmd", redactCmdArgs(cmd.Args))
 	cmd.Stdout = os.Stdout
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
@@ -2000,6 +2001,17 @@ func (p *Process) runCmdUntil(cmd *exec.Cmd, abort func() error) error {
 		}
 	}
 }
+
+// redactCmdArgs hides libpq passwords in a logged command line.
+func redactCmdArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = conninfoPasswordRe.ReplaceAllString(a, "password=REDACTED")
+	}
+	return out
+}
+
+var conninfoPasswordRe = regexp.MustCompile(`password=\S+`)
 
 // writeStandbyUpstream rewrites primary_conninfo for a standby whose primary
 // moved. The downstream name stays so synchronous_standby_names is not cleared.
