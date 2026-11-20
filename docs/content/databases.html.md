@@ -122,8 +122,19 @@ creates, updates, removals, and the custom-size switch use that same file.
 `flynn addons:create` reads the controller catalog. On a cluster with no
 database plugins installed, no database runtimes are published.
 
+The runtime's disk is the size of the instance's data volume: the ZFS
+refquota set when the volume is created. A raw `--disk` sets it for that
+one resource, and the provider rejects a raw disk unless custom sizes are
+allowed, even when the CLI is bypassed. A follower gets its own runtime's
+disk, or its leader's volume size when that runtime is not published (a
+custom-sized leader). Members added by `mongodb:scale`, `kafka:scale`, and
+`clickhouse:scale` get the resource's size. A volume with no size gets the
+host default, 20 GiB.
+
 Changing a definition does not resize instances already created from it.
 There is no in-place resize; provision a new resource to get a new size.
+Volumes that already exist keep their size, including instances created
+before the plugins applied the runtime's disk (those have 20 GiB).
 
 Tenants cannot set raw `--cpu`, `--memory`, or `--disk`, and they cannot
 request a runtime name that is not published. A cluster admin allows raw
