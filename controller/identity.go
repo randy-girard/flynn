@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -95,6 +96,9 @@ func (c *controllerAPI) expandToken(tok *authorizer.Token) error {
 		tok.Scopes = nil
 		return nil
 	}
+	// Admin comes from the user row only. A personal access token row or a
+	// login token signed before a demotion must not keep cluster:admin.
+	tok.Scopes = withoutAdminScopes(tok.Scopes)
 	if user.ClusterAdmin {
 		tok.Scopes = append(tok.Scopes, "cluster:admin")
 		return nil
@@ -179,13 +183,62 @@ func (c *controllerAPI) authenticatePAT(r *http.Request) (*authorizer.Token, err
 	if err != nil {
 		return nil, authorizer.ErrInvalid
 	}
+	// A row written before the allowlist may carry cluster:admin or a service
+	// scope. Only allowlisted scopes reach the token.
 	var scopes []string
-	for _, s := range strings.FieldsFunc(p.Scopes, func(r rune) bool { return r == ' ' || r == ',' }) {
-		if s != "" {
+	for _, s := range splitPATScopes(p.Scopes) {
+		if patScopeAllowed(s) {
 			scopes = append(scopes, s)
 		}
 	}
 	return &authorizer.Token{ID: p.UserID, User: p.Email, UserID: p.UserID, Scopes: scopes}, nil
+}
+
+// patAllowedScopes are the scopes a personal access token may store. A PAT
+// speaks for its user: cluster admin comes from users.cluster_admin and app
+// access from the user's grants in expandToken, never from the token row.
+// cluster:admin, *, the service scopes (account:quota, acme:issue) and the
+// compile scopes are refused.
+var patAllowedScopes = map[string]struct{}{"user": {}}
+
+func patScopeAllowed(s string) bool {
+	_, ok := patAllowedScopes[s]
+	return ok
+}
+
+func splitPATScopes(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == ',' })
+}
+
+// normalizePATScopes checks requested PAT scopes against the allowlist and
+// returns them space-separated without duplicates.
+func normalizePATScopes(s string) (string, error) {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, scope := range splitPATScopes(s) {
+		if !patScopeAllowed(scope) {
+			return "", fmt.Errorf("may not include %q; a personal access token allows only: user", scope)
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		out = append(out, scope)
+	}
+	return strings.Join(out, " "), nil
+}
+
+// withoutAdminScopes drops cluster:admin and * so expandToken can derive
+// admin from the user row.
+func withoutAdminScopes(scopes []string) []string {
+	out := scopes[:0:0]
+	for _, s := range scopes {
+		if s == "cluster:admin" || s == "*" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func (c *controllerAPI) GetTenancy(ctx context.Context, w http.ResponseWriter, _ *http.Request) {
@@ -505,6 +558,12 @@ func (c *controllerAPI) issuePAT(ctx context.Context, w http.ResponseWriter, use
 	if strings.TrimSpace(body.Name) == "" {
 		body.Name = "token"
 	}
+	scopes, err := normalizePATScopes(body.Scopes)
+	if err != nil {
+		httphelper.ValidationError(w, "scopes", err.Error())
+		return
+	}
+	body.Scopes = scopes
 	material := "flynn_pat_" + random.Hex(32)
 	sum := sha256.Sum256([]byte(material))
 	rec, err := c.tenancy.CreatePAT(userID, random.UUID(), body.Name, body.Scopes, hex.EncodeToString(sum[:]), body.ExpiresAt)

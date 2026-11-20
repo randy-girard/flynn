@@ -33,16 +33,17 @@ command. token:help is the same as token --help.
 	register("token:create", runTokenCreate, `
 usage: flynn token:create [--scope <scope>] [--expires <time>] [<name>]
 
-Mint a personal access token. The token is printed once.
+Mint a personal access token. The token is printed once. It acts as you:
+cluster admin and app access come from your user, not from the token.
 
 Options:
-	--scope=<scope>    Space-separated scopes stored on the token
+	--scope=<scope>    Scope stored on the token. Only "user" is accepted
 	--expires=<time>   RFC3339 expiry
 
 Examples:
 
 	$ flynn token:create laptop
-	$ flynn token:create --scope "app:read app:deploy" ci
+	$ flynn token:create --expires 2027-01-01T00:00:00Z ci
 `)
 	register("token:list", runTokenList, `
 usage: flynn token:list

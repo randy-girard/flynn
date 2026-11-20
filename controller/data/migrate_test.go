@@ -944,3 +944,44 @@ func (MigrateSuite) TestWorkloadPlacementDefaultsToMixed(c *C) {
 	c.Assert(db.QueryRow(`SELECT workload_placement FROM cluster_settings WHERE id = 1`).Scan(&mode), IsNil)
 	c.Assert(mode, Equals, "split")
 }
+
+// TestMigrateClearsPATScopes checks that migration 92 leaves personal access
+// tokens with only the user scope. A row minted with cluster:admin or a
+// service scope before the allowlist must not keep it.
+func (MigrateSuite) TestMigrateClearsPATScopes(c *C) {
+	db := setupTestDB(c, "controllertest_pat_scopes")
+	var before, rest postgres.Migrations
+	for _, m := range *migrations {
+		if m.ID < 92 {
+			before = append(before, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	c.Assert(before.Migrate(db), IsNil)
+	userID := random.UUID()
+	c.Assert(db.Exec(`INSERT INTO users (id, handle, email, password_hash) VALUES ($1, 'core16-mig', 'core16-mig@flynn.test', 'x')`, userID), IsNil)
+	rows := map[string]string{
+		"cluster:admin":                    "",
+		"*":                                "",
+		"account:quota acme:issue":         "",
+		"user cluster:admin":               "user",
+		"cluster:admin,user":               "user",
+		"user":                             "user",
+		"":                                 "",
+		"app:read app:deploy":              "",
+		"gitreceive:build build:artifacts": "",
+	}
+	ids := map[string]string{}
+	for scopes := range rows {
+		id := random.UUID()
+		ids[id] = scopes
+		c.Assert(db.Exec(`INSERT INTO personal_access_tokens (id, user_id, name, scopes, token_hash) VALUES ($1, $2, 'mig', $3, $4)`, id, userID, scopes, random.Hex(16)), IsNil)
+	}
+	c.Assert(rest.Migrate(db), IsNil)
+	for id, scopes := range ids {
+		var got string
+		c.Assert(db.QueryRow(`SELECT scopes FROM personal_access_tokens WHERE id = $1`, id).Scan(&got), IsNil)
+		c.Assert(got, Equals, rows[scopes], Commentf("scopes=%q", scopes))
+	}
+}

@@ -93,6 +93,19 @@ a randomly generated bearer token is used for authentication. Cluster
 administrator access is the install key (`ClusterKey`, on hosts and system
 jobs), a user JWT with scope `cluster:admin`, or scope `*`. A JWT with empty scopes and
 empty app grants is not an administrator; it has no controller access.
+For a token that names a controller user (a `flynn login` token, a dashboard
+session token, or a personal access token), admin comes only from that
+user's `cluster_admin` flag. The controller drops `cluster:admin` and `*` from
+the token and adds `cluster:admin` back when the user is an admin, so a
+demoted admin loses admin at once, before the login token expires.
+
+Personal access tokens (`POST /tokens`, `flynn token:create`) accept only the
+scope `user` (or none). `cluster:admin`, `*`, `account:quota`, `acme:issue`,
+`build:artifacts`, `gitreceive:build`, and any other scope get `400`. A token
+acts as its user: an admin's token is admin while the user is an admin, and a
+tenant's token reaches the tenant's apps. On authentication a stored row keeps
+only allowlisted scopes, and controller migration 92 clears every other scope
+from existing rows.
 The TLS certificate used for communication is generated during installation
 (self-signed). Operators should not pass `--insecure` or skip-verify to talk
 to the controller, git, or dashboard:

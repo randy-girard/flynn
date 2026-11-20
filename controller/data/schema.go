@@ -1546,6 +1546,15 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 		`ALTER TABLE cluster_settings ADD COLUMN workload_placement text NOT NULL DEFAULT 'mixed'`,
 		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_workload_placement_check CHECK (workload_placement IN ('mixed', 'split'))`,
 	)
+
+	// Personal access tokens keep only the user scope. Before 92 a user could
+	// mint a token with cluster:admin, *, or a service scope and the
+	// controller trusted it. Admin now comes from users.cluster_admin.
+	migrations.Add(92,
+		`UPDATE personal_access_tokens
+		SET scopes = CASE WHEN 'user' = ANY (regexp_split_to_array(scopes, '[ ,]+')) THEN 'user' ELSE '' END
+		WHERE scopes <> '' AND scopes <> 'user'`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {
