@@ -194,7 +194,7 @@ The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
 cluster key. `flynn-host otel` sends it (HTTP Basic, empty username).
 Collector `--auth` on `otel:add` is for the OTLP endpoint only.
 
-The discovery plugin serves the `/clusters` API on the cluster. `POST /clusters` and `GET /.well-known/cluster` require `CONTROLLER_KEY` and fail closed when it is unset. They do not publish the join token on an unauthenticated request. The install ready hook writes `/etc/flynn/discovery-token` mode 0600 and does not print the token. Instance register/list require the cluster token as `Authorization: Bearer`. `flynn-host init --init-discovery` sends `CONTROLLER_KEY` on `POST /clusters`. `flynn-host init --discovery` and `flynn-host bootstrap --discovery` send that token as the bearer.
+The discovery plugin serves the `/clusters` API on the cluster. `POST /clusters` and `GET /.well-known/cluster` require `CONTROLLER_KEY` and fail closed when it is unset. They do not publish the join token on an unauthenticated request. The install ready hook writes `/etc/flynn/discovery-token` mode 0600 and does not print the token. Instance register/list require the cluster token as `Authorization: Bearer`. A public caller must register its own IP as the instance URL host; a hostname is refused. `flynn-host init --init-discovery` sends `CONTROLLER_KEY` on `POST /clusters`. `flynn-host init --discovery` and `flynn-host bootstrap --discovery` send that token as the bearer.
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
