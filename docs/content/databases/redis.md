@@ -118,6 +118,9 @@ watch promotes a follower whose link dropped no more than 30 seconds before the
 primary job stopped; a follower that never finished its first sync, or lost
 its link long before, is not promoted. Promotion restarts the follower's job
 as a writable primary and the fenced old primary rejoins as its follower.
+The rejoined old primary registers in discoverd as `<old-name>-follower`, so
+`leader.<old-name>.discoverd` stays on the promoted primary when either job
+restarts.
 Followers of a primary with no running job, and follower jobs younger than two
 minutes, are not replaced as broken. The replica avoids the primary's host when the
 controller's host stats show another host with room for the runtime; a user
