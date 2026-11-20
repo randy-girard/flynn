@@ -502,7 +502,9 @@ compiled-in list.
   required `exp` and `plugin` must all match, so a token handed to one plugin
   is refused by every other. JWKS keys are cached for five minutes (3 second
   fetch timeout). Write routes use `pluginui.RequireWrite` / `CanWrite`, which
-  deny a session with no permissions. The dashboard has always minted all of
+  deny a session with no permissions. A datastore dump
+  (`/dashboard/api/dump`) is POST only and needs `app:resources:write`; GET
+  gets 405, so a link or prefetch cannot start one. The dashboard has always minted all of
   these claims, so a plugin that enforces them works with any dashboard
   version and a new dashboard works with older plugins; the order of
   dashboard and plugin updates does not matter.
