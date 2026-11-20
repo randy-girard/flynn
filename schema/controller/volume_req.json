@@ -14,6 +14,11 @@
     "delete_on_stop": {
       "type": "boolean",
       "description": "delete the volume when the job stops"
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "volume capacity in bytes (ZFS refquota); 0 or unset uses the host default (20 GiB)"
     }
   }
 }
