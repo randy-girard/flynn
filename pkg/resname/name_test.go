@@ -677,3 +677,35 @@ func TestAttachmentColorsFrozen(t *testing.T) {
 		t.Fatalf("attachment palette changed (%d colors): digest %s != %s; update this digest in flynn/pkg/resname and every engine plugin", len(attachmentColors), got, attachmentColorsDigest)
 	}
 }
+
+// NEW-31: a tenant that attached a redis follower gets FLYNN_REDIS_LEADER=<the
+// primary>. After a failover the follower's resource no longer says so, so
+// destroying it left the key, and the controller's delete guard then refused
+// the old primary's app forever ("new31-app still references its data").
+func TestUnsetAttachmentDropsAttachmentKeysNamingTheResource(t *testing.T) {
+	release := map[string]string{
+		"FLYNN_REDIS_LEADER":        "redis-atoll-46761",
+		"FLYNN_REDIS_ROLE":          "follower",
+		"FLYNN_REDIS_CYAN_URL":      "redis://:p@leader.redis-atoll-46761.discoverd:6379",
+		"REDIS_URL":                 "redis://:p@leader.redis-atoll-46761.discoverd:6379",
+		"CACHE_NAME":                "redis-atoll-46761",
+		"FLYNN_REDIS_AUTO_FAILOVER": "true",
+	}
+	resource := map[string]string{
+		"FLYNN_REDIS":          "redis-atoll-46761",
+		"FLYNN_REDIS_ROLE":     "deposed",
+		"FLYNN_REDIS_LEADER":   "redis-quartz-58649",
+		"FLYNN_REDIS_CYAN_URL": "redis://:p@leader.redis-atoll-46761.discoverd:6379",
+		"REDIS_URL":            "redis://:p@leader.redis-atoll-46761.discoverd:6379",
+	}
+	got := UnsetAttachment(release, resource)
+	if v, ok := got["FLYNN_REDIS_LEADER"]; !ok || v != nil {
+		t.Fatalf("an attachment key naming the removed resource must be unset: %#v", got)
+	}
+	if _, ok := got["CACHE_NAME"]; ok {
+		t.Fatalf("a user key is not an attachment key and must stay: %#v", got)
+	}
+	if _, ok := got["FLYNN_REDIS_AUTO_FAILOVER"]; ok {
+		t.Fatalf("keys that do not name the resource must stay: %#v", got)
+	}
+}

@@ -444,6 +444,17 @@ func UnsetAttachment(release, resource map[string]string) map[string]*string {
 		}
 	}
 	name, _ := Identity(resource)
+	// An attachment key copied from another resource (a follower's
+	// FLYNN_REDIS_LEADER) can still name this one after a failover rewrote
+	// that resource's env. Left behind, it keeps the delete guard refusing
+	// this resource's app.
+	if name != "" {
+		for k, v := range release {
+			if isAttachmentEnvKey(k) && strings.EqualFold(strings.TrimSpace(v), name) {
+				env[k] = nil
+			}
+		}
+	}
 	if prefix := EnvPrefix(name); prefix != "" {
 		p := prefix + "_"
 		for k := range release {
