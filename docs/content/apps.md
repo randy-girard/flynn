@@ -258,7 +258,12 @@ controller account. You can connect only a repo in an installation a cluster
 admin made available to your account; the dashboard lists only those. A cluster
 admin connecting an app through the dashboard claims an unclaimed installation
 for that app's account, and `PUT /github/installations/<id>/owner` (controller
-key) sets or clears it. Deploys re-check the owner.
+key) sets or clears it. Deploys re-check the owner. `GET /github/installations`
+and `GET /github/installations/<id>/repos` show a non-admin only installations
+owned by their personal account or by the account of an app they can
+`github:write`; another account's installation is a 404. The controller tells
+the plugin who is calling with a signed identity (see
+[Plugins](plugins.md#caller-identity-on-controller-proxied-calls)).
 
 The plugin's cluster routes (`/github/app`, installations, export, import)
 accept only the controller key. The per-app `gitreceive:build` token a push
