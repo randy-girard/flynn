@@ -106,7 +106,9 @@ default and the same path on hosted and self-hosted clusters as
 back to `manual`. On one or two hosts failover is unavailable. A down node
 keeps its volume and is not given a new id. Reconcile does not drop a Keeper
 voter while live members are below the formation or without a Keeper majority.
-Scaling down drains the highest node ids, then runs `SYSTEM SYNC DATABASE
+Scaling down first moves the instance's `CLICKHOUSE_URL` host
+(`leader.<resource app>.discoverd`) to a node that stays, drains the highest
+node ids, then runs `SYSTEM SYNC DATABASE
 REPLICA` and `SYSTEM SYNC REPLICA` on the remaining nodes so they fetch every
 part the drained node holds. If they do not catch up within 10 minutes the
 scale-down stops with an error and the drained node keeps running. Only then
