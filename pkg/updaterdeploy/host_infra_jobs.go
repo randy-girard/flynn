@@ -48,6 +48,12 @@ var (
 	hostInfraSchedulerGrace      = 20 * time.Second
 	hostInfraFormationRetryDelay = 2 * time.Second
 	hostInfraStopRetryWait       = 200 * time.Millisecond
+	// hostInfraFormationBudget is how long a host-infra formation write is
+	// retried. Replacing discoverd on every host makes the controller
+	// database fail over, and PutFormation returned SQLSTATE 25006
+	// (read-only transaction) for about a minute on the dev cluster, longer
+	// than three tries.
+	hostInfraFormationBudget = 3 * time.Minute
 )
 
 // hostInfraStopBudget is how long a transient StopJob may be retried.
@@ -669,7 +675,8 @@ func (r *hostInfraRollout) oldFormationTags() map[string]map[string]string {
 
 func (r *hostInfraRollout) putFormation(releaseID string, processes map[string]int, tags map[string]map[string]string, log log15.Logger) error {
 	var err error
-	for attempt := 1; attempt <= 3; attempt++ {
+	deadline := time.Now().Add(hostInfraFormationBudget)
+	for attempt := 1; ; attempt++ {
 		err = r.client.PutFormation(&ct.Formation{
 			AppID:     r.appID,
 			ReleaseID: releaseID,
@@ -678,6 +685,9 @@ func (r *hostInfraRollout) putFormation(releaseID string, processes map[string]i
 		})
 		if err == nil {
 			return nil
+		}
+		if attempt >= 3 && time.Now().Add(hostInfraFormationRetryDelay).After(deadline) {
+			break
 		}
 		if log != nil {
 			log.Warn("error updating host-infra formation, retrying", "app", r.appID, "release", releaseID, "attempt", attempt, "err", err)
