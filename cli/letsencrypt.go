@@ -71,10 +71,7 @@ func runLetsEncryptList(_ *docopt.Args, client controller.Client) error {
 	w := tabWriter()
 	defer w.Flush()
 	fmt.Fprintln(w, "DOMAIN\tHTTPS\tAPP\tROUTE")
-	for _, rt := range routes {
-		if rt == nil || rt.Type != "http" {
-			continue
-		}
+	for _, rt := range letsEncryptHTTPRoutes(routes, letsEncryptApp(), appByID) {
 		https := rt.ManagedCertificateDomain != nil && *rt.ManagedCertificateDomain != ""
 		appName := ""
 		if strings.HasPrefix(rt.ParentRef, ct.RouteParentRefPrefix) {
@@ -202,6 +199,39 @@ func letsEncryptPluginInstalled(apps []*ct.App) bool {
 	return false
 }
 
+// letsEncryptApp is the app the command acts for: -a, FLYNN_APP, or the
+// git remote. Empty when none is set; the command then sees every route the
+// caller's own token may list.
+func letsEncryptApp() string {
+	name, err := app()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(name)
+}
+
+// letsEncryptHTTPRoutes keeps the HTTP routes of owner (a name or id). An
+// empty owner keeps every HTTP route.
+func letsEncryptHTTPRoutes(routes []*router.Route, owner string, appByID map[string]*ct.App) []*router.Route {
+	var out []*router.Route
+	for _, rt := range routes {
+		if rt == nil || rt.Type != "http" {
+			continue
+		}
+		if owner != "" {
+			if !strings.HasPrefix(rt.ParentRef, ct.RouteParentRefPrefix) {
+				continue
+			}
+			a := appByID[strings.TrimPrefix(rt.ParentRef, ct.RouteParentRefPrefix)]
+			if a == nil || (a.ID != owner && a.Name != owner) {
+				continue
+			}
+		}
+		out = append(out, rt)
+	}
+	return out
+}
+
 func findHTTPRoute(client controller.Client, target string) (*router.Route, *ct.App, error) {
 	apps, err := client.AppList()
 	if err != nil {
@@ -209,23 +239,31 @@ func findHTTPRoute(client controller.Client, target string) (*router.Route, *ct.
 	}
 	appByID := make(map[string]*ct.App, len(apps))
 	for _, a := range apps {
-		appByID[a.ID] = a
+		if a != nil {
+			appByID[a.ID] = a
+		}
 	}
 	routes, err := client.RouteList()
 	if err != nil {
 		return nil, nil, err
 	}
+	return matchLetsEncryptRoute(routes, target, letsEncryptApp(), appByID)
+}
+
+// matchLetsEncryptRoute finds target (hostname, route id, or http/<id>)
+// among owner's HTTP routes. Another app's route is not found.
+func matchLetsEncryptRoute(routes []*router.Route, target, owner string, appByID map[string]*ct.App) (*router.Route, *ct.App, error) {
 	var matches []*router.Route
-	for _, rt := range routes {
-		if rt.Type != "http" {
-			continue
-		}
+	for _, rt := range letsEncryptHTTPRoutes(routes, owner, appByID) {
 		id := fmt.Sprintf("%s/%s", rt.Type, rt.ID)
 		if strings.EqualFold(rt.Domain, target) || rt.ID == target || id == target {
 			matches = append(matches, rt)
 		}
 	}
 	if len(matches) == 0 {
+		if owner != "" {
+			return nil, nil, fmt.Errorf("HTTP route not found for %s on app %s", target, owner)
+		}
 		return nil, nil, fmt.Errorf("HTTP route not found for %s", target)
 	}
 	if len(matches) > 1 && !strings.Contains(target, "/") {

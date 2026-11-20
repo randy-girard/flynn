@@ -78,3 +78,40 @@ func matchLetsEncryptHTTP(routes []*router.Route, target string) []*router.Route
 	}
 	return matches
 }
+
+// TestLetsEncryptRoutesScopedToApp: with -a (or the git remote app) the
+// commands only see that app's HTTP routes, matched by name or id.
+func TestLetsEncryptRoutesScopedToApp(t *testing.T) {
+	appByID := map[string]*ct.App{
+		"id-a": {ID: "id-a", Name: "app-a"},
+		"id-b": {ID: "id-b", Name: "app-b"},
+	}
+	routes := []*router.Route{
+		{Type: "http", ID: "ra", Domain: "www.example.com", ParentRef: ct.RouteParentRefPrefix + "id-a"},
+		{Type: "http", ID: "rb", Domain: "www.example.com", ParentRef: ct.RouteParentRefPrefix + "id-b"},
+		{Type: "tcp", ID: "rt", ParentRef: ct.RouteParentRefPrefix + "id-a"},
+	}
+	for _, owner := range []string{"app-a", "id-a"} {
+		got := letsEncryptHTTPRoutes(routes, owner, appByID)
+		if len(got) != 1 || got[0].ID != "ra" {
+			t.Fatalf("owner %q: got %+v", owner, got)
+		}
+	}
+	if got := letsEncryptHTTPRoutes(routes, "", appByID); len(got) != 2 {
+		t.Fatalf("no app: want both HTTP routes, got %+v", got)
+	}
+	if got := letsEncryptHTTPRoutes(routes, "app-c", appByID); len(got) != 0 {
+		t.Fatalf("unknown app: got %+v", got)
+	}
+
+	rt, app, err := matchLetsEncryptRoute(routes, "www.example.com", "app-b", appByID)
+	if err != nil || rt.ID != "rb" || app.Name != "app-b" {
+		t.Fatalf("app-b: %v %+v %+v", err, rt, app)
+	}
+	if _, _, err := matchLetsEncryptRoute(routes, "http/rb", "app-a", appByID); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("another app's route id must be not found, got %v", err)
+	}
+	if _, _, err := matchLetsEncryptRoute(routes, "www.example.com", "", appByID); err == nil || !strings.Contains(err.Error(), "several") {
+		t.Fatalf("no app with a shared hostname must be ambiguous, got %v", err)
+	}
+}
