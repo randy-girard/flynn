@@ -1,9 +1,11 @@
 package plugin
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/dbruntime"
 )
 
 // addons:create parses argv with CreateUsage. Options that take a value
@@ -48,5 +50,32 @@ func TestCreateUsageOmittedOptionsEmpty(t *testing.T) {
 	}
 	if args.String["--runtime"] != "" || args.String["--disk"] != "" || args.Bool["--unattached"] {
 		t.Fatalf("args %#v %#v", args.String, args.Bool)
+	}
+}
+
+// NEW-20: "addons:create redis --follow <primary> --auto-failover" must send
+// both to the provider. Before CreateUsage declared value options, docopt
+// dropped the --follow value and the plugin answered "auto-failover requires
+// a follower (--follow)".
+func TestCreateUsageRedisFollowAutoFailoverReachesProvider(t *testing.T) {
+	spec := OfficialAddon("redis")
+	args, err := docopt.Parse(spec.CreateUsage(), []string{"addons:create", "redis", "--follow", "redis-swamp-26938", "--auto-failover"}, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := dbruntime.Catalog{}
+	if err := cat.EnsureEngine(dbruntime.EngineRedis); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := spec.ProvisionConfig(CreateInput{Follow: args.String["--follow"], AutoFailover: args.Bool["--auto-failover"]}, cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["follow"] != "redis-swamp-26938" || body["auto_failover"] != true {
+		t.Fatalf("provider config %s", raw)
 	}
 }
