@@ -589,7 +589,13 @@ lines, including the stored copies, when the caller does not have `app:env:read`
 8 characters are left as-is. Callers with `app:env:read` (including
 View, Deploy, Manage, and Admin), cluster-admin tokens, and the cluster
 key receive the log text unchanged. A release minted for one app cannot be attached to
-another. One-off jobs (`POST /apps/:id/jobs`) may still *run* another
+another. `POST /apps/:id/deploy` refuses a release minted for another app
+for every caller, with the same `could not find release` error as an
+unknown id. `PUT /apps/:id/formations/:release`, `PUT
+/apps/:id/scale/:release`, `DELETE /apps/:id/formations/:release`, and
+`DELETE /apps/:id/releases/:release` answer 404 for another app's release
+unless the caller is cluster-admin (operators may still place a formation
+across apps). The app's current release is always accepted. One-off jobs (`POST /apps/:id/jobs`) may still *run* another
 app's release when the caller is cluster-admin, or when that release is
 the image of a resource attached to this app (`flynn redis:cli` and the
 other plugin consoles).

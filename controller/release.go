@@ -152,7 +152,7 @@ func (c *controllerAPI) GetAppRelease(ctx context.Context, w http.ResponseWriter
 
 func (c *controllerAPI) DeleteRelease(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	app := c.getApp(ctx)
-	release, err := c.getRelease(ctx)
+	release, err := c.appReleaseFromPath(ctx, app)
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -186,6 +186,35 @@ func mayCreateReleaseForApp(tok *authorizer.Token, app *ct.App) bool {
 		return false
 	}
 	return authz.CanCreateReleaseForApp(tok, app.ID)
+}
+
+// appReleaseFromPath loads :releases_id for the formation, scale and
+// release-delete routes and refuses a release minted for another app with
+// the same ErrNotFound (404) as an unknown id, so the caller learns nothing
+// about the other app. The app's current release is always usable (pre
+// app_id releases may still be shared that way). Cluster admins keep
+// cross-app formations (operator repair, flynn release:delete tests).
+func (c *controllerAPI) appReleaseFromPath(ctx context.Context, app *ct.App) (*ct.Release, error) {
+	release, err := c.getRelease(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if releaseUsableByApp(release, app) {
+		return release, nil
+	}
+	if tok := authz.TokenFromContext(ctx); tok != nil && tok.HasClusterAdmin() {
+		return release, nil
+	}
+	return nil, ErrNotFound
+}
+
+// releaseUsableByApp is true when the release was minted for app or is the
+// app's current release.
+func releaseUsableByApp(release *ct.Release, app *ct.App) bool {
+	if release == nil || app == nil {
+		return false
+	}
+	return release.AppID == app.ID || (app.ReleaseID != "" && app.ReleaseID == release.ID)
 }
 
 // releaseBelongsToApp is true when the release is unscoped (legacy / admin

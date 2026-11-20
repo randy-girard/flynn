@@ -20,7 +20,7 @@ import (
 
 func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	app := c.getApp(ctx)
-	release, err := c.getRelease(ctx)
+	release, err := c.appReleaseFromPath(ctx, app)
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -90,7 +90,7 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 
 func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	app := c.getApp(ctx)
-	release, err := c.getRelease(ctx)
+	release, err := c.appReleaseFromPath(ctx, app)
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -189,7 +189,7 @@ func (c *controllerAPI) GetFormation(ctx context.Context, w http.ResponseWriter,
 
 func (c *controllerAPI) DeleteFormation(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	app := c.getApp(ctx)
-	release, err := c.getRelease(ctx)
+	release, err := c.appReleaseFromPath(ctx, app)
 	if err != nil {
 		respondWithError(w, err)
 		return

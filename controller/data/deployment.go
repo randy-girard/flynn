@@ -73,6 +73,13 @@ func (r *DeploymentRepo) addExpanded(appID, releaseID string, retried bool) (*ct
 	}
 
 	release, err := r.releaseRepo.TxGet(tx, releaseID)
+	// A release minted for another app is refused with the same error as an
+	// unknown id, for every caller: deploying it would run that app's image
+	// with its env (and any privileged process fields) under this app.
+	// The app's current release stays deployable (pre app_id shared releases).
+	if err == nil && release.AppID != app.ID && app.ReleaseID != release.ID {
+		err = ErrNotFound
+	}
 	if err != nil {
 		if err == ErrNotFound {
 			err = ct.ValidationError{
