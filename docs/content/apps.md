@@ -504,7 +504,13 @@ flynn route:add http --service myapp-admin-web admin.example.com
 `--service` must name a discoverd service this app owns. Flynn registers
 buildpack `web` / `*-web` process types as `$APPNAME-$TYPE` and docker
 container deploys as `$APPNAME-web`. A custom `service` (or port service
-name) on the app's current release is also allowed. Cluster administrators
+name) on the app's current release is also allowed. A release may only
+declare service names the app owns: `$APPNAME` or `$APPNAME-*`, not a
+platform service (`controller`, `blobstore`, `acme-challenge`, ...) or a name
+another app owns. The controller rejects any other name with a validation
+error, and flynn-host refuses to start a user job that declares one. If you
+rename an app, update custom service names on its release to the new prefix
+before the next deploy. Cluster administrators
 may still create routes for platform apps (dashboard, www, discovery,
 controller). TCP routes use the same ownership rule.
 

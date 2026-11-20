@@ -65,14 +65,14 @@ const (
 
 func (s *BlobstoreSuite) TestBlobstoreBackendMinio(t *c.C) {
 	setup := func(x *Cluster) {
-		app, release := s.createAppWithClient(t, x.controller)
+		app, release := s.createNamedAppWithClient(t, x.controller, "blobstore-minio")
 		err := x.controller.ScaleAppRelease(app.ID, release.ID, ct.ScaleOptions{
 			Processes: map[string]int{"minio": 1},
 		})
 		t.Assert(err, c.IsNil)
 	}
 
-	s.testBlobstoreBackend(t, "minio", ".+minio.discoverd.+", setup, fmt.Sprintf(`BACKEND_MINIO="backend=minio insecure=true endpoint=minio.discoverd:9000 bucket=flynnblobstore access_key_id=%s secret_access_key=%s"`, minioAccessKey, minioSecretKey))
+	s.testBlobstoreBackend(t, "minio", ".+minio.discoverd.+", setup, fmt.Sprintf(`BACKEND_MINIO="backend=minio insecure=true endpoint=blobstore-minio-minio.discoverd:9000 bucket=flynnblobstore access_key_id=%s secret_access_key=%s"`, minioAccessKey, minioSecretKey))
 }
 
 func (s *BlobstoreSuite) testBlobstoreBackend(t *c.C, name, redirectPattern string, setup func(*Cluster), env ...string) {

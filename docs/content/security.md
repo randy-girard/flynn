@@ -516,7 +516,25 @@ HTTP routes (`example.com/api`) can only be created with
 point a route at a discoverd service this app owns (`$APP-web` /
 `$APP-$TYPE`, or a `service` declared on the current release). Routing to
 system services (`controller`, `blobstore`, `postgres-api`, dashboard, www,
-discovery) requires the cluster controller key. `GET` route and route list
+discovery) requires the cluster controller key.
+
+A release for a user app may only declare discoverd service names the app
+owns: the app name itself or `$APP-*`, in a port's `service.name` and in the
+process type's `service`. Platform names are refused even when the app name
+is a prefix (`controller`, `controller-scheduler`, `blobstore`,
+`acme-challenge`, `postgres`, `postgres-api`, `router-api`, `status-web`,
+`flynn-host`, `flynn-net-*`, isolated datastore and appliance names), and so
+is a name a more specific existing app owns (`shop` may not declare
+`shop-admin-web` while an app `shop-admin` exists). The controller checks this
+on `POST /releases`, gRPC `CreateRelease`, and `PUT /apps/:id/release`, for
+every caller including the cluster key. flynn-host enforces the same prefix
+rule when it accepts a user job and again before it registers the job's
+ports, because it registers them with its own discoverd credentials. System
+and plugin apps keep their names. Without this check a tenant job could
+register as `controller` or `blobstore` and receive requests that carry the
+cluster key, or as `acme-challenge` and answer HTTP-01 challenges for any
+host name. The router also skips any `acme-challenge` instance whose IP is a
+user or build job IP (`flynn-net-user`, `flynn-net-build`). `GET` route and route list
 responses include the public certificate and omit `certificate.key` and
 `tls_key` unless the caller is the cluster key or has `cluster:admin`.
 The same omission applies to route events. `POST` and `PUT` still accept

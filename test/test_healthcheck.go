@@ -22,6 +22,8 @@ func (s *HealthcheckSuite) createAppWithService(t *c.C, process string, service 
 	app, release := s.createApp(t)
 
 	release.ID = ""
+	// A user app may only register "<app>" or "<app>-*" (CORE-17).
+	service.Name = app.Name + "-" + service.Name
 	proctype := release.Processes[process]
 	proctype.Ports = []ct.Port{{
 		Proto:   "tcp",
@@ -42,7 +44,7 @@ func (s *HealthcheckSuite) TestChecker(t *c.C) {
 		Check:  &host.HealthCheck{Type: "tcp"},
 	})
 	t.Assert(flynn(t, "/", "-a", app.Name, "scale", "ping=1"), Succeeds)
-	_, err := s.discoverdClient(t).Instances("ping-checker", 10*time.Second)
+	_, err := s.discoverdClient(t).Instances(app.Name+"-ping-checker", 10*time.Second)
 	t.Assert(err, c.IsNil)
 }
 
@@ -54,7 +56,7 @@ func (s *HealthcheckSuite) TestWithoutChecker(t *c.C) {
 	})
 	t.Assert(flynn(t, "/", "-a", app.Name, "scale", "ping=1"), Succeeds)
 	// make sure app is registered and unregistered when the process terminates
-	_, err := s.discoverdClient(t).Instances("ping-without-checker", 3*time.Second)
+	_, err := s.discoverdClient(t).Instances(app.Name+"-ping-without-checker", 3*time.Second)
 	t.Assert(err, c.IsNil)
 
 	events := make(chan *discoverd.Event)
@@ -87,7 +89,7 @@ func (s *HealthcheckSuite) TestFailure(t *c.C) {
 	})
 	t.Assert(flynn(t, "/", "-a", app.Name, "scale", "printer=1"), Succeeds)
 	// confirm that it's never registered
-	_, err := s.discoverdClient(t).Instances("healthcheck-failure", 5*time.Second)
+	_, err := s.discoverdClient(t).Instances(app.Name+"-healthcheck-failure", 5*time.Second)
 	t.Assert(err, c.NotNil)
 }
 

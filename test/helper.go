@@ -495,7 +495,14 @@ func (h *Helper) createApp(t *c.C) (*ct.App, *ct.Release) {
 }
 
 func (h *Helper) createAppWithClient(t *c.C, client controller.Client) (*ct.App, *ct.Release) {
-	app := &ct.App{}
+	return h.createNamedAppWithClient(t, client, "")
+}
+
+// createNamedAppWithClient creates the test-apps app. Its discoverd services
+// are "<app>-echo", "<app>-blocker" and "<app>-minio": a user app may only
+// register names it owns (CORE-17).
+func (h *Helper) createNamedAppWithClient(t *c.C, client controller.Client, name string) (*ct.App, *ct.Release) {
+	app := &ct.App{Name: name}
 	t.Assert(client.CreateApp(app), c.IsNil)
 	debugf(t, "created app %s (%s)", app.Name, app.ID)
 
@@ -504,11 +511,11 @@ func (h *Helper) createAppWithClient(t *c.C, client controller.Client) (*ct.App,
 		Processes: map[string]ct.ProcessType{
 			"echoer": {
 				Args:    []string{"/bin/echoer"},
-				Service: "echo-service",
+				Service: app.Name + "-echo",
 				Ports: []ct.Port{{
 					Proto: "tcp",
 					Service: &host.Service{
-						Name:   "echo-service",
+						Name:   app.Name + "-echo",
 						Create: true,
 					},
 				}},
@@ -543,7 +550,7 @@ func (h *Helper) createAppWithClient(t *c.C, client controller.Client) (*ct.App,
 				Ports: []ct.Port{{
 					Proto: "tcp",
 					Service: &host.Service{
-						Name:   "test-http-blocker",
+						Name:   app.Name + "-blocker",
 						Create: true,
 					},
 				}},
@@ -558,12 +565,12 @@ func (h *Helper) createAppWithClient(t *c.C, client controller.Client) (*ct.App,
 					Proto: "tcp",
 					Port:  9000,
 					Service: &host.Service{
-						Name:   "minio",
+						Name:   app.Name + "-minio",
 						Create: true,
 						Check:  &host.HealthCheck{Type: "http", Status: 403},
 					},
 				}},
-				Service: "minio",
+				Service: app.Name + "-minio",
 				Volumes: []ct.VolumeReq{{Path: "/data"}},
 			},
 		},

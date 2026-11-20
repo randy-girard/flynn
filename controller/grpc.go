@@ -770,6 +770,9 @@ func (g *grpcAPI) CreateRelease(ctx context.Context, req *api.CreateReleaseReque
 		if err != nil {
 			return nil, api.NewError(err, "%s", err.Error())
 		}
+		if err := g.releaseServiceError(a.(*ct.App), ctRelease); err != nil {
+			return nil, api.NewError(err, "%s", err.Error())
+		}
 		if err := g.enforceClusterPolicy(a.(*ct.App), ctRelease); err != nil {
 			return nil, api.NewError(err, "%s", err.Error())
 		}

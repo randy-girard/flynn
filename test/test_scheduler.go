@@ -520,7 +520,7 @@ func (s *SchedulerSuite) TestTCPApp(t *c.C) {
 
 	t.Assert(flynn(t, "/", "-a", app.Name, "scale", "echoer=1"), Succeeds)
 
-	newRoute := flynn(t, "/", "-a", app.Name, "route:add", "tcp", "-s", "echo-service")
+	newRoute := flynn(t, "/", "-a", app.Name, "route:add", "tcp", "-s", app.Name+"-echo")
 	t.Assert(newRoute, Succeeds)
 	t.Assert(newRoute.Output, Matches, `.+ on port \d+`)
 	port := ""
@@ -775,7 +775,7 @@ func (s *SchedulerSuite) TestGracefulShutdown(t *c.C) {
 		return nil
 	})
 	t.Assert(err, c.IsNil)
-	jobs, err := x.discoverd.Instances("test-http-blocker", 10*time.Second)
+	jobs, err := x.discoverd.Instances(app.Name+"-blocker", 10*time.Second)
 	t.Assert(err, c.IsNil)
 	t.Assert(jobs, c.HasLen, 1)
 	proxy, err := s.clusterProxy(x, jobs[0].Addr)
@@ -814,7 +814,7 @@ func (s *SchedulerSuite) TestGracefulShutdown(t *c.C) {
 	debug(t, "adding HTTP route with backend drain enabled")
 	route := &router.HTTPRoute{
 		Domain:        random.String(32) + ".com",
-		Service:       "test-http-blocker",
+		Service:       app.Name + "-blocker",
 		DrainBackends: true,
 	}
 	t.Assert(client.CreateRoute(app.ID, route.ToRoute()), c.IsNil)

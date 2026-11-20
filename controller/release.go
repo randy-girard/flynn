@@ -62,6 +62,10 @@ func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter
 		respondWithError(w, err)
 		return
 	}
+	if err := c.releaseServiceError(app, release); err != nil {
+		respondWithError(w, err)
+		return
+	}
 	if err := c.enforceClusterPolicy(app, release); err != nil {
 		respondWithError(w, err)
 		return
@@ -120,6 +124,10 @@ func (c *controllerAPI) SetAppRelease(ctx context.Context, w http.ResponseWriter
 	app := c.getApp(ctx)
 	if !releaseBelongsToApp(release, app) {
 		httphelper.Forbidden(w, "release does not belong to this app")
+		return
+	}
+	if err := c.releaseServiceError(app, release); err != nil {
+		respondWithError(w, err)
 		return
 	}
 	if stripped := sanitizeReleaseProcesses(app, release); stripped {

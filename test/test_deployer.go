@@ -61,6 +61,8 @@ func (s *DeployerSuite) createDeployment(t *c.C, process, strategy, service stri
 
 func (s *DeployerSuite) createDeploymentWithApp(t *c.C, app *ct.App, release *ct.Release, service string, scale int) *testDeploy {
 	if service != "" {
+		// service is the suffix of the app's own discoverd name
+		service = app.Name + "-" + service
 		debugf(t, "waiting for %d %s services", scale, service)
 		events := make(chan *discoverd.Event)
 		stream, err := s.discoverdClient(t).Service(service).Watch(events)
@@ -292,7 +294,7 @@ func (s *DeployerSuite) TestAllAtOnceStrategy(t *c.C) {
 }
 
 func (s *DeployerSuite) TestServiceEvents(t *c.C) {
-	d := s.createDeployment(t, "echoer", "all-at-once", "echo-service", 2)
+	d := s.createDeployment(t, "echoer", "all-at-once", "echo", 2)
 	defer d.cleanup()
 	releaseID := d.deployment.NewReleaseID
 	oldReleaseID := d.deployment.OldReleaseID
@@ -355,12 +357,12 @@ func (s *DeployerSuite) TestRollbackNoService(t *c.C) {
 	client := s.controllerClient(t)
 	release.ID = ""
 	printer := release.Processes["printer"]
-	printer.Service = "printer"
+	printer.Service = app.Name + "-printer"
 	printer.Ports = []ct.Port{{
 		Port:  12345,
 		Proto: "tcp",
 		Service: &host.Service{
-			Name:   "printer",
+			Name:   app.Name + "-printer",
 			Create: true,
 			Check: &host.HealthCheck{
 				Type:         "tcp",

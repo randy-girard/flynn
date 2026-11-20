@@ -410,18 +410,32 @@ func (s *S) TestCreateRouteServiceOwnership(c *C) {
 	tcp := (&router.TCPRoute{Service: app.Name + "-web"}).ToRoute()
 	c.Assert(scoped.CreateRoute(app.ID, tcp), IsNil)
 
-	rel := s.createTestRelease(c, app.ID, &ct.Release{
+	// CORE-17: a release may no longer declare a service outside the app's
+	// own names, so routes cannot borrow one through the release either.
+	art := s.createTestArtifact(c, &ct.Artifact{})
+	err := s.c.CreateRelease(app.ID, &ct.Release{
+		ArtifactIDs: []string{art.ID},
 		Processes: map[string]ct.ProcessType{
 			"web": {Service: "sec007-declared"},
 			"api": {Ports: []ct.Port{{Service: &host.Service{Name: "sec007-from-port"}}}},
 		},
 	})
+	c.Assert(httphelper.IsValidationError(err), Equals, true, Commentf("%v", err))
+	err = scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-declared.example.com", Service: "sec007-declared"}).ToRoute())
+	c.Assert(httphelper.IsForbidden(err), Equals, true, Commentf("%v", err))
+
+	rel := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{
+			"web": {Service: "sec007-shop-declared"},
+			"api": {Ports: []ct.Port{{Service: &host.Service{Name: "sec007-shop-from-port"}}}},
+		},
+	})
 	c.Assert(s.c.SetAppRelease(app.ID, rel.ID), IsNil)
-	app, err := s.c.GetApp(app.ID)
+	app, err = s.c.GetApp(app.ID)
 	c.Assert(err, IsNil)
 
-	c.Assert(scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-declared.example.com", Service: "sec007-declared"}).ToRoute()), IsNil)
-	c.Assert(scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-port.example.com", Service: "sec007-from-port"}).ToRoute()), IsNil)
+	c.Assert(scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-declared.example.com", Service: "sec007-shop-declared"}).ToRoute()), IsNil)
+	c.Assert(scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-port.example.com", Service: "sec007-shop-from-port"}).ToRoute()), IsNil)
 
 	for _, svc := range []string{"controller", "blobstore", "postgres-api", "dashboard-web", "controller-web"} {
 		err := scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-" + svc + ".example.com", Service: svc}).ToRoute())
@@ -433,23 +447,24 @@ func (s *S) TestCreateRouteServiceOwnership(c *C) {
 	c.Assert(err, NotNil)
 	c.Assert(httphelper.IsForbidden(err), Equals, true)
 
+	// A release stored before CORE-17 may still declare a system service;
+	// the route check must keep refusing it.
 	sys := s.createTestApp(c, &ct.App{Name: "sec007-www", Meta: map[string]string{"flynn-system-app": "true"}})
-	hijack := s.createTestRelease(c, app.ID, &ct.Release{
-		Processes: map[string]ct.ProcessType{"web": {Service: sys.Name}},
-	})
-	c.Assert(s.c.SetAppRelease(app.ID, hijack.ID), IsNil)
-	err = scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-hijack.example.com", Service: sys.Name}).ToRoute())
-	c.Assert(err, NotNil)
-	c.Assert(httphelper.IsForbidden(err), Equals, true)
-	c.Assert(err.Error(), Matches, ".*system app service.*")
-
-	ctrlRel := s.createTestRelease(c, app.ID, &ct.Release{
-		Processes: map[string]ct.ProcessType{"web": {Service: "controller"}},
-	})
-	c.Assert(s.c.SetAppRelease(app.ID, ctrlRel.ID), IsNil)
-	err = scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-ctrl.example.com", Service: "controller"}).ToRoute())
-	c.Assert(err, NotNil)
-	c.Assert(httphelper.IsForbidden(err), Equals, true)
+	for _, svc := range []string{sys.Name, "controller"} {
+		stored := &ct.Release{
+			AppID:       app.ID,
+			ArtifactIDs: []string{art.ID},
+			Processes:   map[string]ct.ProcessType{"web": {Service: svc}},
+		}
+		c.Assert(s.api.releaseRepo.Add(stored), IsNil)
+		c.Assert(s.api.appRepo.SetRelease(app, stored.ID), IsNil)
+		err = scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-hijack-" + svc + ".example.com", Service: svc}).ToRoute())
+		c.Assert(err, NotNil)
+		c.Assert(httphelper.IsForbidden(err), Equals, true, Commentf("%s: %v", svc, err))
+		if svc == sys.Name {
+			c.Assert(err.Error(), Matches, ".*system app service.*")
+		}
+	}
 }
 
 func (s *S) TestCreateRouteSystemAppsStillWorkForAdmin(c *C) {

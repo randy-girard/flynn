@@ -979,12 +979,12 @@ func (s *GRPCSuite) TestStreamScales(c *C) {
 	testApp1 := s.createTestApp(c, &api.App{DisplayName: "test1"})
 	testApp2 := s.createTestApp(c, &api.App{DisplayName: "test2"})
 	testApp3 := s.createTestApp(c, &api.App{DisplayName: "test3"})
-	testRelease1 := s.createTestRelease(c, testApp1.Name, &api.Release{Labels: map[string]string{"i": "1"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
-	testRelease2 := s.createTestRelease(c, testApp2.Name, &api.Release{Labels: map[string]string{"i": "2"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
-	testRelease3 := s.createTestRelease(c, testApp2.Name, &api.Release{Labels: map[string]string{"i": "3"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
-	testRelease4 := s.createTestRelease(c, testApp1.Name, &api.Release{Labels: map[string]string{"i": "4"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
-	testRelease5 := s.createTestRelease(c, testApp3.Name, &api.Release{Labels: map[string]string{"i": "5"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
-	testRelease6 := s.createTestRelease(c, testApp3.Name, &api.Release{Labels: map[string]string{"i": "6"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
+	testRelease1 := s.createTestRelease(c, testApp1.Name, &api.Release{Labels: map[string]string{"i": "1"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp1.Name + "-dev"}}})
+	testRelease2 := s.createTestRelease(c, testApp2.Name, &api.Release{Labels: map[string]string{"i": "2"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp2.Name + "-dev"}}})
+	testRelease3 := s.createTestRelease(c, testApp2.Name, &api.Release{Labels: map[string]string{"i": "3"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp2.Name + "-dev"}}})
+	testRelease4 := s.createTestRelease(c, testApp1.Name, &api.Release{Labels: map[string]string{"i": "4"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp1.Name + "-dev"}}})
+	testRelease5 := s.createTestRelease(c, testApp3.Name, &api.Release{Labels: map[string]string{"i": "5"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp3.Name + "-dev"}}})
+	testRelease6 := s.createTestRelease(c, testApp3.Name, &api.Release{Labels: map[string]string{"i": "6"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp3.Name + "-dev"}}})
 	testScale1 := s.createTestScaleRequest(c, &api.CreateScaleRequest{Parent: testRelease1.Name, Processes: map[string]int32{"devnull": 1}})
 	testScale2 := s.createTestScaleRequest(c, &api.CreateScaleRequest{Parent: testRelease2.Name, Processes: map[string]int32{"devnull": 1}})
 	testScale3 := s.createTestScaleRequest(c, &api.CreateScaleRequest{Parent: testRelease3.Name, Processes: map[string]int32{"devnull": 2}})
@@ -1185,7 +1185,7 @@ func (s *GRPCSuite) TestStreamScales(c *C) {
 
 func (s *GRPCSuite) TestStreamScalesUnaryPagination(c *C) {
 	testApp1 := s.createTestApp(c, &api.App{DisplayName: "test1"})
-	testRelease1 := s.createTestRelease(c, testApp1.Name, &api.Release{Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
+	testRelease1 := s.createTestRelease(c, testApp1.Name, &api.Release{Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp1.Name + "-dev"}}})
 	testScale1 := s.createTestScaleRequest(c, &api.CreateScaleRequest{Parent: testRelease1.Name, Processes: map[string]int32{"devnull": 1}})
 	testScale2 := s.createTestScaleRequest(c, &api.CreateScaleRequest{Parent: testRelease1.Name, Processes: map[string]int32{"devnull": 2}})
 	testScale3 := s.createTestScaleRequest(c, &api.CreateScaleRequest{Parent: testRelease1.Name, Processes: map[string]int32{"devnull": 3}})
@@ -1238,7 +1238,7 @@ func (s *GRPCSuite) TestStreamScalesPaginationWithStreamUpdates(c *C) {
 
 func (s *GRPCSuite) TestStreamScalesForApp(c *C) {
 	testApp1 := s.createTestApp(c, &api.App{DisplayName: "test1"})
-	testRelease1 := s.createTestRelease(c, testApp1.Name, &api.Release{Labels: map[string]string{"i": "1"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: "dev"}}})
+	testRelease1 := s.createTestRelease(c, testApp1.Name, &api.Release{Labels: map[string]string{"i": "1"}, Processes: map[string]*api.ProcessType{"devnull": {Args: []string{"tail", "-f", "/dev/null"}, Service: testApp1.Name + "-dev"}}})
 
 	// stream scales for the app
 	stream, cancel := s.streamScalesWithCancel(c, &api.StreamScalesRequest{NameFilters: []string{testApp1.Name}, StreamUpdates: true, StreamCreates: true})
