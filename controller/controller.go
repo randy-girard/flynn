@@ -316,6 +316,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.POST("/releases", httphelper.WrapHandler(api.CreateRelease))
 
 	httpRouter.GET("/resources", httphelper.WrapHandler(api.GetResources))
+	httpRouter.GET("/plugin-catalog", httphelper.WrapHandler(api.GetPluginCatalog))
 	httpRouter.PUT("/providers/:providers_id", httphelper.WrapHandler(api.UpdateProvider))
 	httpRouter.POST("/providers/:providers_id/resources", httphelper.WrapHandler(api.ProvisionResource))
 	httpRouter.GET("/providers/:providers_id/resources", httphelper.WrapHandler(api.GetProviderResources))

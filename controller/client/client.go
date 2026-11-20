@@ -127,6 +127,7 @@ type Client interface {
 	GetACMEConfigInternal() (*ct.ACMEConfig, error)
 	UpdateACMEConfig(config *ct.ACMEConfig) error
 	ListDBRuntimes() (*dbruntime.Catalog, error)
+	GetPluginCatalog(out interface{}) error
 	CreateDBRuntime(runtime *dbruntime.Runtime) error
 	ReplaceDBRuntimes(catalog *dbruntime.Catalog) error
 	UpdateDBRuntime(engine, name string, runtime *dbruntime.Runtime) error

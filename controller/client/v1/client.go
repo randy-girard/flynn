@@ -1455,6 +1455,13 @@ func (c *Client) UpdateACMEConfig(config *ct.ACMEConfig) error {
 	return c.Put("/acme/config", config, config)
 }
 
+// GetPluginCatalog decodes GET /plugin-catalog (a *plugin.Catalog) into out:
+// the plugin commands and add-on types the caller may use. This package
+// cannot import pkg/plugin, which imports it.
+func (c *Client) GetPluginCatalog(out interface{}) error {
+	return c.Get("/plugin-catalog", out)
+}
+
 func (c *Client) ListDBRuntimes() (*dbruntime.Catalog, error) {
 	cat := &dbruntime.Catalog{}
 	return cat, c.Get("/db-runtimes", cat)

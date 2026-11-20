@@ -286,19 +286,12 @@ func (c *controllerAPI) quotaAllows(account string, apps, procs, memoryMB, resou
 }
 
 func (c *controllerAPI) hostedTenantSafe(ctx context.Context, p *ct.Provider) error {
-	if c == nil || c.tenancy == nil || p == nil || p.TenantSafe {
+	if p == nil || p.TenantSafe {
 		return nil
 	}
-	settings, err := c.tenancy.GetSettings()
-	if err != nil {
+	restricted, err := c.hostedTenantRestricted(ctx)
+	if err != nil || !restricted {
 		return err
-	}
-	if settings.Mode != tenancy.ModeHosted {
-		return nil
-	}
-	tok := authz.TokenFromContext(ctx)
-	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
-		return nil
 	}
 	return ct.ValidationError{Field: "provider", Message: "provider is not tenant_safe; hosted tenants cannot provision it"}
 }

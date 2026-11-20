@@ -584,6 +584,14 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			return rkUserSession, "", ""
 		}
 		return rkCluster, "", ""
+	case "plugin-catalog":
+		// GET /plugin-catalog is the plugin commands and add-on types a
+		// user may use (no secrets). The handler hides providers a hosted
+		// tenant cannot provision.
+		if len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead) {
+			return rkUserSession, "", ""
+		}
+		return rkCluster, "", ""
 	case "releases":
 		if m == http.MethodPost {
 			return rkCreateRelease, "", ""

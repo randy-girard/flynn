@@ -2,9 +2,12 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
+	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 )
 
 // catalogSource is the controller surface LoadCatalog needs. The full
@@ -91,10 +94,85 @@ func (c *Catalog) HasProvider(name string) bool {
 	return false
 }
 
-// LoadCatalog lists plugin apps and providers on the cluster for the laptop
-// flynn CLI (UserVisible plugins).
+// userCatalogSource is GET /plugin-catalog. The controller client decodes
+// into out; it cannot import this package.
+type userCatalogSource interface {
+	GetPluginCatalog(out interface{}) error
+}
+
+// LoadCatalog is the plugin commands and add-on types the caller may use on
+// the laptop flynn CLI (UserVisible plugins). It asks the controller for
+// GET /plugin-catalog: a tenant's GET /apps lists only its own apps, never
+// plugin apps, so a catalog built from it is empty. A controller that has no
+// such route (404, or 403 for a user token) gets the old app-list catalog.
 func LoadCatalog(client catalogSource) (*Catalog, error) {
+	if src, ok := client.(userCatalogSource); ok {
+		var cat Catalog
+		err := src.GetPluginCatalog(&cat)
+		if err == nil {
+			return &cat, nil
+		}
+		if !catalogRouteMissing(err) {
+			return nil, err
+		}
+	}
 	return loadCatalog(client, false)
+}
+
+func catalogRouteMissing(err error) bool {
+	if errors.Is(err, controller.ErrNotFound) {
+		return true
+	}
+	var jsonErr httphelper.JSONError
+	if errors.As(err, &jsonErr) {
+		switch jsonErr.Code {
+		case httphelper.NotFoundErrorCode, httphelper.ForbiddenErrorCode:
+			return true
+		}
+	}
+	return false
+}
+
+// UserCatalog is the GET /plugin-catalog body: the catalog LoadCatalog used
+// to build from every app and provider, less what allow refuses. A provider
+// allow refuses drops out with the add-on type and the CLI of the plugin app
+// that serves it, so a tenant is not shown a type addons:create would
+// refuse. A nil allow keeps every provider.
+func UserCatalog(apps []*ct.App, providers []*ct.Provider, allow func(*ct.Provider) bool) *Catalog {
+	if allow == nil {
+		return catalogFromOpts(apps, providers, false)
+	}
+	refused := map[string]struct{}{}
+	var allowed []*ct.Provider
+	for _, p := range providers {
+		if p == nil {
+			continue
+		}
+		if !allow(p) {
+			refused[strings.ToLower(p.Name)] = struct{}{}
+			continue
+		}
+		allowed = append(allowed, p)
+	}
+	var kept []*ct.App
+	for _, app := range apps {
+		if app == nil || !app.Plugin() {
+			continue
+		}
+		if _, ok := refused[strings.ToLower(appProvider(app))]; ok {
+			continue
+		}
+		kept = append(kept, app)
+	}
+	return catalogFromOpts(kept, allowed, false)
+}
+
+// appProvider is the resource provider a plugin app serves, or "".
+func appProvider(app *ct.App) string {
+	if spec := AddonFromApp(app); spec != nil && spec.Backend == BackendResource && spec.Provider != "" {
+		return spec.Provider
+	}
+	return RecordFromApp(app).Provider
 }
 
 // LoadHostCatalog lists every plugin CLI, including kind: app system plugins
