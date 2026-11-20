@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
@@ -56,6 +57,13 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 							return
 						}
 					}
+				}
+			}
+
+			if a, ok := thing.(*ct.Artifact); ok && resource == "artifacts" {
+				if msg := buildArtifactURLError(authz.TokenFromContext(ctx), a); msg != "" {
+					httphelper.Forbidden(rw, msg)
+					return
 				}
 			}
 

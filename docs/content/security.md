@@ -277,7 +277,23 @@ only for that app's `-cache.tgz` or `-docker-cache.tgz` object, as named in the
 token. The slugbuilder script does the cache download and upload as root and
 unsets both URLs before any buildpack runs, so buildpack code never sees them. A scoped
 `build:artifacts` token (the same one create-artifact uses for the
-controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only. Neither a cache
+controller) may GET/HEAD/PUT only its own app's objects:
+`/slugs/apps/<app-id>/layers/`, `/slugs/apps/<app-id>/images/`, and
+`/tarreceive/apps/<app-id>/images/`. Another app's prefix and the older
+shared `/slugs/layers/`, `/slugs/images/`, and `/tarreceive/` directories
+are cluster-key only, so a compile for one app cannot read or replace
+another app's slug. The scheduler sets `FLYNN_APP_ID` on the compile so the
+builders know which prefix to use. Layer and image objects are named by the
+hash of their content, so a scoped token cannot PUT over one that already
+exists: the blobstore answers `409` without writing, and the builders treat
+that as already uploaded. tarreceive likewise keeps a layer whose config is
+already stored instead of rebuilding it. When a build token registers an
+artifact (`POST /artifacts`), the controller checks every URL a host would
+fetch for it (the manifest URI, the layer URL template, each layer's URL,
+and any `layer_url.*` override). Each must be a plain
+`http://blobstore.discoverd` URL in the app's own prefix or the shared
+tarreceive layer store, because hosts fetch layers with the cluster key.
+The cluster key is not limited. Neither a cache
 token nor a build token may send `Blobstore-Copy-From` (the copy source is not
 authorized separately, so it would read any object); such a PUT is `403`. Only
 the cluster key or a cluster-admin token may copy.
