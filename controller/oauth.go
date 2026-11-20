@@ -137,7 +137,10 @@ func (c *controllerAPI) OAuthAuthorize(_ context.Context, w http.ResponseWriter,
 		c.writeAuthorizeLoginForm(w, q, "")
 		return
 	}
-	c.completeAuthorize(w, req, q, u)
+	// An existing session never issues a code by itself: a crafted link
+	// must not mint one without the user seeing which account and where.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, authorizeConsentHTML(q, u.Email))
 }
 
 func (c *controllerAPI) oauthAuthorizeLogin(w http.ResponseWriter, req *http.Request) {
@@ -148,6 +151,10 @@ func (c *controllerAPI) oauthAuthorizeLogin(w http.ResponseWriter, req *http.Req
 	q := req.Form
 	if err := validateAuthorizeQuery(q); err != nil {
 		httphelper.ValidationError(w, "oauth", err.Error())
+		return
+	}
+	if q.Get("consent") != "" {
+		c.oauthAuthorizeConsent(w, req, q)
 		return
 	}
 	identifier := firstNonEmpty(q.Get("login"), q.Get("email"), q.Get("username"))
@@ -172,6 +179,44 @@ func (c *controllerAPI) oauthAuthorizeLogin(w http.ResponseWriter, req *http.Req
 		Expires:  time.Now().Add(oauthSessionTTL),
 	})
 	c.completeAuthorize(w, req, q, u)
+}
+
+// oauthAuthorizeConsent issues a code for the session user after they
+// pressed Continue on the consent page. The session cookie is SameSite=Lax,
+// so a cross-site POST does not carry it; Sec-Fetch-Site and Origin are
+// checked as well for browsers that send them.
+func (c *controllerAPI) oauthAuthorizeConsent(w http.ResponseWriter, req *http.Request, q url.Values) {
+	if oauthCrossSiteRequest(req) {
+		httphelper.JSON(w, http.StatusForbidden, map[string]string{"error": "access_denied", "error_description": "cross-site authorize request"})
+		return
+	}
+	userID := c.oauthSessionUser(req)
+	if userID == "" {
+		c.writeAuthorizeLoginForm(w, q, "")
+		return
+	}
+	u, err := c.tenancy.GetUser(userID)
+	if err != nil || u == nil || u.Disabled || u.Suspended {
+		c.writeAuthorizeLoginForm(w, q, "")
+		return
+	}
+	c.completeAuthorize(w, req, q, u)
+}
+
+func oauthCrossSiteRequest(req *http.Request) bool {
+	switch strings.ToLower(req.Header.Get("Sec-Fetch-Site")) {
+	case "cross-site", "same-site":
+		return true
+	}
+	origin := req.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		return origin == "null"
+	}
+	o, err := url.Parse(origin)
+	if err != nil {
+		return true
+	}
+	return !strings.EqualFold(o.Host, req.Host)
 }
 
 func (c *controllerAPI) completeAuthorize(w http.ResponseWriter, req *http.Request, q url.Values, u *ct.User) {
@@ -231,7 +276,32 @@ func validateAuthorizeQuery(q url.Values) error {
 	if strings.TrimSpace(q.Get("redirect_uri")) == "" {
 		return fmt.Errorf("redirect_uri required")
 	}
+	if q.Get("client_id") != oauthClientID {
+		return fmt.Errorf("unknown or missing client_id")
+	}
+	if !oauthRedirectURIAllowed(q.Get("redirect_uri")) {
+		return fmt.Errorf("redirect_uri must be the out-of-band URN or an http loopback address")
+	}
 	return nil
+}
+
+// oauthRedirectURIAllowed accepts only what the flynn CLI (the one
+// registered client) uses: the out-of-band URN, or http on a loopback
+// address (127.0.0.1, ::1, localhost) with no userinfo or fragment. Any
+// other host would receive the authorization code.
+func oauthRedirectURIAllowed(redirectURI string) bool {
+	if isOAuthOutOfBandRedirect(redirectURI) {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(redirectURI))
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "127.0.0.1", "::1", "localhost":
+		return true
+	}
+	return false
 }
 
 func (c *controllerAPI) writeAuthorizeLoginForm(w http.ResponseWriter, q url.Values, errMsg string) {
@@ -492,6 +562,9 @@ func oauthHTTPRedirectLocation(redirectURI, code, state string) (string, error) 
 	}
 	if base.Host == "" {
 		return "", fmt.Errorf("missing host")
+	}
+	if !oauthRedirectURIAllowed(redirectURI) {
+		return "", fmt.Errorf("redirect_uri host not allowed")
 	}
 	q := base.Query()
 	q.Set("code", code)

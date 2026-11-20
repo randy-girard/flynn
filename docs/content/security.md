@@ -177,6 +177,23 @@ the GitHub webhook, and `GET /ca-cert` are unlimited because they run
 before authentication. There is no per-IP limit: external clients arrive
 through the router. Hosted and self-hosted clusters use the same limits.
 
+## Browser login (OAuth authorize)
+
+`GET /oauth/authorize` on `auth.<domain>` (used by `flynn login --oauth`)
+only serves the registered client `flynn-cli`. `redirect_uri` must be the
+out-of-band URN `urn:ietf:wg:oauth:2.0:oob` or plain `http` on a loopback
+address (`127.0.0.1`, `[::1]`, `localhost`, any port and path) with no
+userinfo or fragment. Anything else, including `https://` hosts and
+look-alikes such as `http://127.0.0.1.example.com/`, is HTTP 400 with no
+redirect and no code. A login session cookie (`flynn_oauth_session`,
+SameSite=Lax, 12 hours) no longer issues a code by itself: the page shows
+the signed-in email and the redirect target, and the code is issued only
+after the user presses Continue. That POST is refused (HTTP 403) when the
+browser marks it cross-site or same-site (`Sec-Fetch-Site`) or when
+`Origin` is another host, so an app on another subdomain of the cluster
+domain cannot submit it. The dashboard's own `/oauth/authorize` applies
+the same redirect rule.
+
 ## App catalog
 
 `GET /apps` is scoped to the caller:

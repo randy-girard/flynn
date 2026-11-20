@@ -268,11 +268,7 @@ func oauthShell(title, product, heading, lede, inner string) string {
 </html>`
 }
 
-func authorizeLoginHTML(q url.Values, errMsg string) string {
-	errBlock := ""
-	if errMsg != "" {
-		errBlock = `<div class="form-error" role="alert">` + html.EscapeString(errMsg) + `</div>`
-	}
+func authorizeHiddenFields(q url.Values) string {
 	fields := []string{"client_id", "redirect_uri", "response_type", "state", "code_challenge", "code_challenge_method", "nonce", "scope", "audience"}
 	var hidden strings.Builder
 	for _, name := range fields {
@@ -282,6 +278,37 @@ func authorizeLoginHTML(q url.Values, errMsg string) string {
 		}
 		hidden.WriteString(`<input type="hidden" name="` + html.EscapeString(name) + `" value="` + html.EscapeString(v) + `">`)
 	}
+	return hidden.String()
+}
+
+// authorizeConsentHTML asks a user who already has a login session to
+// confirm before a code is issued to the CLI.
+func authorizeConsentHTML(q url.Values, email string) string {
+	target := "the Flynn CLI on this computer"
+	if isOAuthOutOfBandRedirect(q.Get("redirect_uri")) {
+		target = "a code to paste into the Flynn CLI"
+	}
+	inner := `
+      <p>Signed in as <strong>` + html.EscapeString(email) + `</strong>.</p>
+      <p><small>redirect_uri: ` + html.EscapeString(q.Get("redirect_uri")) + `</small></p>
+      <form method="post" action="/oauth/authorize">
+        ` + authorizeHiddenFields(q) + `
+        <input type="hidden" name="consent" value="1">
+        <button type="submit" class="btn btn-primary btn-block">Continue</button>
+      </form>
+      <p><small>If you did not just run <code>flynn login</code>, close this page.</small></p>`
+	return oauthShell("Flynn login", "Cluster login", "Authorize the Flynn CLI",
+		"Continue to send a login code to "+html.EscapeString(target)+".",
+		inner)
+}
+
+func authorizeLoginHTML(q url.Values, errMsg string) string {
+	errBlock := ""
+	if errMsg != "" {
+		errBlock = `<div class="form-error" role="alert">` + html.EscapeString(errMsg) + `</div>`
+	}
+	var hidden strings.Builder
+	hidden.WriteString(authorizeHiddenFields(q))
 	inner := errBlock + `
       <form method="post" action="/oauth/authorize">
         ` + hidden.String() + `

@@ -15,6 +15,7 @@ import (
 
 func TestValidateAuthorizeQuery(t *testing.T) {
 	ok := url.Values{
+		"client_id":             {"flynn-cli"},
 		"response_type":         {"code"},
 		"code_challenge":        {"abc"},
 		"code_challenge_method": {"S256"},
