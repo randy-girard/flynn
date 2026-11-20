@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -331,7 +332,29 @@ func (a *AddonSpec) CreateUsage() string {
 	if a.Create != "" {
 		parts = append(parts, a.Create)
 	}
-	return strings.Join(parts, " ")
+	return usageWithValueOptions(strings.Join(parts, " "))
+}
+
+var usageValueOption = regexp.MustCompile(`(--[a-z0-9][a-z0-9-]*) (<[^>]+>)`)
+
+// usageWithValueOptions adds an Options section that declares every
+// "--name <value>" in usage as taking a value. Without it docopt parses
+// "--runtime large" as the flag --runtime plus the positional <name>, and
+// the value never reaches the command.
+func usageWithValueOptions(usage string) string {
+	var lines []string
+	seen := map[string]bool{}
+	for _, m := range usageValueOption.FindAllStringSubmatch(usage, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		lines = append(lines, "\t"+m[1]+"="+m[2])
+	}
+	if len(lines) == 0 {
+		return usage
+	}
+	return usage + "\n\nOptions:\n" + strings.Join(lines, "\n")
 }
 
 // AcceptsRuntime is true when create offers --runtime.
