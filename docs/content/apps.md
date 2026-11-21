@@ -41,6 +41,14 @@ call `GET /apps`, but the handler returns only apps the user owns
 grants cannot list apps at all (`403`). `--all` does not expand a user
 token to the operator catalog.
 
+`POST /apps` with a user token puts the app in the caller's own account
+unless `owner_account` names an org where the caller is owner or admin, or
+an account where it is an admin collaborator. Any other owner is `403`, so
+one tenant cannot use another account's quota, app list, app names, or
+datastore-guard "same account" rule. `created_by` is always set from the
+token. The cluster key and `cluster:admin` (bootstrap, plugins, operator
+`flynn import`) may still name any account and creator.
+
 The same rules apply on a hosted cluster and on a large self-hosted
 cluster. Tenancy mode is not the switch. `GET /apps` without `count` is
 still one JSON array. `count` (maximum 1000), `before`, and `before_id`

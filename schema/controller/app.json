@@ -50,11 +50,11 @@
       "$ref": "/schema/controller/common#/definitions/deploy_timeout"
     },
     "owner_account": {
-      "description": "Account that owns the app (user:<id> or org:<id>). Empty for operator/system apps.",
+      "description": "Account that owns the app (user:<id> or org:<id>). Empty for operator/system apps. On create, a user token may name only an account it administers.",
       "type": "string"
     },
     "created_by": {
-      "description": "User id that created the app. Unchanged by transfer.",
+      "description": "User id that created the app. Unchanged by transfer. On create, a user token always gets its own id.",
       "type": "string"
     },
     "created_at": {
