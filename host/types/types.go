@@ -385,6 +385,17 @@ type NetworkConfig struct {
 	Overlay string `json:"overlay,omitempty"`
 }
 
+// OverlayIP is the netpolicy registration flynn-host holds for one of its
+// running jobs' overlay IPs (GET /host/netpolicy/ips/:ip). Meta is what the
+// host publishes for the IP in its flynn-net-* discoverd service, including
+// "class" and, for user jobs, the attached-datastore allowlist. discoverd DNS
+// reads it for a local client whose registration has not reached it yet.
+type OverlayIP struct {
+	IP    string            `json:"ip"`
+	JobID string            `json:"job_id"`
+	Meta  map[string]string `json:"meta"`
+}
+
 type DiscoverdConfig struct {
 	JobID string `json:"job_id"`
 	URL   string `json:"url"`

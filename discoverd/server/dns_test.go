@@ -869,6 +869,184 @@ func (s *DNSSuite) TestUserDiscoverdDNSEmptyAllow(c *C) {
 	c.Assert(res.Rcode, Equals, dns.RcodeNameError)
 }
 
+// localJobsFunc is a fake LocalJobs that counts its calls.
+type localJobsFunc struct {
+	fn    func(ip net.IP) (*discoverd.Instance, error)
+	calls int32
+}
+
+func (f *localJobsFunc) OverlayInstance(ip net.IP) (*discoverd.Instance, error) {
+	atomic.AddInt32(&f.calls, 1)
+	return f.fn(ip)
+}
+
+func mustCIDR(c *C, s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	c.Assert(err, IsNil)
+	return n
+}
+
+// newOverlayServer is a DNS server whose test client (127.0.0.1) is an
+// overlay IP. netSvc maps a netpolicy service to the instances listed in it;
+// postgres and redisApp are system/datastore services with a leader.
+func (s *DNSSuite) newOverlayServer(c *C, overlay, local string, jobs LocalJobs, netSvc map[string][]*discoverd.Instance, self ...net.IP) (*DNSServer, func(string) int) {
+	pg, _ := fakeStaticInstance("tcp", "10.0.0.5", 5432)
+	redis, _ := fakeStaticInstance("tcp", "10.0.0.6", 6379)
+	other, _ := fakeStaticInstance("tcp", "10.0.0.8", 6379)
+	srv := &DNSServer{UDPAddr: "127.0.0.1:0", TCPAddr: "127.0.0.1:0", LocalJobs: jobs, SelfIPs: self}
+	if overlay != "" {
+		srv.Overlay = mustCIDR(c, overlay)
+	}
+	if local != "" {
+		srv.LocalSubnet = mustCIDR(c, local)
+	}
+	srv.SetStore(&DNSServerStore{
+		InstancesFn: func(service string) ([]*discoverd.Instance, error) {
+			if insts, ok := netSvc[service]; ok {
+				return insts, nil
+			}
+			switch service {
+			case "postgres":
+				return []*discoverd.Instance{pg}, nil
+			case "redis-lagoon-59415":
+				return []*discoverd.Instance{redis}, nil
+			case "redis-victim-11111":
+				return []*discoverd.Instance{other}, nil
+			}
+			return nil, nil
+		},
+		ServiceLeaderFn: func(service string) (*discoverd.Instance, error) {
+			switch service {
+			case "postgres":
+				return pg, nil
+			case "redis-lagoon-59415":
+				return redis, nil
+			case "redis-victim-11111":
+				return other, nil
+			}
+			return nil, nil
+		},
+	})
+	c.Assert(srv.ListenAndServe(), IsNil)
+	lookup := func(name string) int {
+		req := &dns.Msg{}
+		req.SetQuestion(name, dns.TypeA)
+		res, _, err := (&dns.Client{Net: "udp"}).Exchange(req, srv.UDPAddr)
+		c.Assert(err, IsNil)
+		return res.Rcode
+	}
+	return srv, lookup
+}
+
+// CORE-25-F1: an overlay IP that is in no netpolicy service is not a system
+// client. Before the fix it got system answers, so a user job could resolve
+// another tenant's datastore leader until its own registration landed.
+func (s *DNSSuite) TestDNSUnregisteredOverlayClientFailsClosed(c *C) {
+	srv, lookup := s.newOverlayServer(c, "127.0.0.0/8", "", nil, nil)
+	defer srv.Close()
+
+	c.Assert(lookup("leader.redis-victim-11111.discoverd."), Equals, dns.RcodeNameError)
+	c.Assert(lookup("leader.postgres.discoverd."), Equals, dns.RcodeNameError)
+	c.Assert(lookup("postgres.discoverd."), Equals, dns.RcodeNameError)
+}
+
+// A local job whose registration has not reached this discoverd yet gets the
+// answer for the registration flynn-host holds: its own allowlist for a user
+// job, system answers for a system job.
+func (s *DNSSuite) TestDNSUnregisteredLocalClientUsesHostRegistration(c *C) {
+	user := &localJobsFunc{fn: func(ip net.IP) (*discoverd.Instance, error) {
+		c.Assert(ip.String(), Equals, "127.0.0.1")
+		return &discoverd.Instance{Meta: map[string]string{
+			"class": "user", netpolicy.MetaDiscoverdAllow: "redis-lagoon-59415",
+		}}, nil
+	}}
+	srv, lookup := s.newOverlayServer(c, "127.0.0.0/8", "127.0.0.0/24", user, nil)
+	c.Assert(lookup("leader.redis-lagoon-59415.discoverd."), Equals, dns.RcodeSuccess)
+	c.Assert(lookup("leader.redis-victim-11111.discoverd."), Equals, dns.RcodeNameError)
+	c.Assert(lookup("postgres.discoverd."), Equals, dns.RcodeNameError)
+	c.Assert(atomic.LoadInt32(&user.calls) > 0, Equals, true)
+	srv.Close()
+
+	for _, class := range []string{"system", "datastore", "build"} {
+		sys := &localJobsFunc{fn: func(net.IP) (*discoverd.Instance, error) {
+			return &discoverd.Instance{Meta: map[string]string{"class": class}}, nil
+		}}
+		srv, lookup = s.newOverlayServer(c, "127.0.0.0/8", "127.0.0.0/24", sys, nil)
+		c.Assert(lookup("leader.postgres.discoverd."), Equals, dns.RcodeSuccess, Commentf("class %s", class))
+		c.Assert(lookup("postgres.discoverd."), Equals, dns.RcodeSuccess, Commentf("class %s", class))
+		srv.Close()
+	}
+}
+
+// No job owns the IP, or flynn-host cannot be asked: fail closed.
+func (s *DNSSuite) TestDNSUnregisteredLocalClientUnknownToHostFailsClosed(c *C) {
+	for _, jobs := range []*localJobsFunc{
+		{fn: func(net.IP) (*discoverd.Instance, error) { return nil, nil }},
+		{fn: func(net.IP) (*discoverd.Instance, error) { return nil, fmt.Errorf("host API down") }},
+		{fn: func(net.IP) (*discoverd.Instance, error) {
+			return &discoverd.Instance{Meta: map[string]string{}}, nil // no class
+		}},
+		{fn: func(net.IP) (*discoverd.Instance, error) {
+			// user without the allowlist key: not the legacy env-wide answer
+			return &discoverd.Instance{Meta: map[string]string{"class": "user"}}, nil
+		}},
+	} {
+		srv, lookup := s.newOverlayServer(c, "127.0.0.0/8", "127.0.0.0/24", jobs, nil)
+		c.Assert(lookup("leader.redis-lagoon-59415.discoverd."), Equals, dns.RcodeNameError)
+		c.Assert(lookup("leader.postgres.discoverd."), Equals, dns.RcodeNameError)
+		srv.Close()
+	}
+}
+
+// Registered overlay IPs keep their answers and never cost a host lookup.
+func (s *DNSSuite) TestDNSRegisteredOverlayClientSkipsHostLookup(c *C) {
+	self, _ := fakeStaticInstance("tcp", "127.0.0.1", 1)
+	for _, svc := range []string{netpolicy.ServiceSys, netpolicy.ServiceData, netpolicy.ServiceBuild} {
+		jobs := &localJobsFunc{fn: func(net.IP) (*discoverd.Instance, error) { return nil, nil }}
+		srv, lookup := s.newOverlayServer(c, "127.0.0.0/8", "127.0.0.0/24", jobs,
+			map[string][]*discoverd.Instance{svc: {self}})
+		c.Assert(lookup("leader.postgres.discoverd."), Equals, dns.RcodeSuccess, Commentf("service %s", svc))
+		c.Assert(lookup("postgres.discoverd."), Equals, dns.RcodeSuccess, Commentf("service %s", svc))
+		c.Assert(atomic.LoadInt32(&jobs.calls), Equals, int32(0))
+		srv.Close()
+	}
+
+	userSelf, _ := fakeStaticInstance("tcp", "127.0.0.1", 1)
+	userSelf.Meta = map[string]string{netpolicy.MetaDiscoverdAllow: "redis-lagoon-59415"}
+	jobs := &localJobsFunc{fn: func(net.IP) (*discoverd.Instance, error) {
+		return &discoverd.Instance{Meta: map[string]string{"class": "system"}}, nil
+	}}
+	srv, lookup := s.newOverlayServer(c, "127.0.0.0/8", "127.0.0.0/24", jobs,
+		map[string][]*discoverd.Instance{netpolicy.ServiceUser: {userSelf}})
+	defer srv.Close()
+	c.Assert(lookup("leader.redis-lagoon-59415.discoverd."), Equals, dns.RcodeSuccess)
+	c.Assert(lookup("leader.postgres.discoverd."), Equals, dns.RcodeNameError)
+	c.Assert(atomic.LoadInt32(&jobs.calls), Equals, int32(0))
+}
+
+// Host-network jobs use the host's resolv.conf, whose nameserver is the
+// bridge address, so their queries come from the bridge address itself. That
+// is inside the overlay, but it is the host, not a job.
+func (s *DNSSuite) TestDNSHostBridgeAddressIsSystem(c *C) {
+	jobs := &localJobsFunc{fn: func(net.IP) (*discoverd.Instance, error) { return nil, nil }}
+	srv, lookup := s.newOverlayServer(c, "127.0.0.0/8", "127.0.0.0/24", jobs, nil, net.ParseIP("127.0.0.1"))
+	defer srv.Close()
+	c.Assert(lookup("leader.postgres.discoverd."), Equals, dns.RcodeSuccess)
+	c.Assert(lookup("postgres.discoverd."), Equals, dns.RcodeSuccess)
+	c.Assert(atomic.LoadInt32(&jobs.calls), Equals, int32(0))
+}
+
+// Host-network jobs and the host itself query from underlay or loopback
+// addresses. Those stay system clients.
+func (s *DNSSuite) TestDNSClientOutsideOverlayIsSystem(c *C) {
+	jobs := &localJobsFunc{fn: func(net.IP) (*discoverd.Instance, error) { return nil, nil }}
+	srv, lookup := s.newOverlayServer(c, "100.100.0.0/16", "100.100.7.0/24", jobs, nil)
+	defer srv.Close()
+	c.Assert(lookup("leader.postgres.discoverd."), Equals, dns.RcodeSuccess)
+	c.Assert(lookup("postgres.discoverd."), Equals, dns.RcodeSuccess)
+	c.Assert(atomic.LoadInt32(&jobs.calls), Equals, int32(0))
+}
+
 func assertSOA(c *C, rrs []dns.RR) {
 	c.Assert(rrs, HasLen, 1)
 	c.Assert(rrs[0], FitsTypeOf, &dns.SOA{})

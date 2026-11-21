@@ -23,11 +23,32 @@ type DNSStore interface {
 	ServiceLeader(service string) (*discoverd.Instance, error)
 }
 
+// LocalJobs looks up the netpolicy registration that the local flynn-host
+// holds for one of its own overlay IPs. It returns nil and no error when no
+// running job on the host owns the IP.
+type LocalJobs interface {
+	OverlayInstance(ip net.IP) (*discoverd.Instance, error)
+}
+
 type DNSServer struct {
 	UDPAddr   string
 	TCPAddr   string
 	Domain    string
 	Recursors []string
+
+	// Overlay is the cluster overlay network. A *.discoverd query from an
+	// IP in it that no netpolicy service lists is answered as a user job
+	// with no attached datastores, unless LocalJobs says otherwise. Nil
+	// turns that off: every unlisted client gets system answers.
+	Overlay *net.IPNet
+	// LocalSubnet is this host's slice of Overlay. Unlisted clients in it
+	// are looked up in LocalJobs, because a job's own registration can
+	// still be on its way through Raft when it sends its first query.
+	LocalSubnet *net.IPNet
+	LocalJobs   LocalJobs
+	// SelfIPs are this host's own addresses in Overlay (the bridge
+	// address). Host-network jobs query from them; they are system clients.
+	SelfIPs []net.IP
 
 	store   atomic.Value // *DNSStore
 	servers []*dns.Server
@@ -490,12 +511,65 @@ func (d dnsAPI) userMayResolveDiscoverd(leader bool, service string) bool {
 	return false
 }
 
+// failClosedInstance stands in for a user job with no attached datastores:
+// every *.discoverd name is NXDOMAIN for it.
+var failClosedInstance = &discoverd.Instance{Meta: map[string]string{netpolicy.MetaDiscoverdAllow: ""}}
+
+// userNetInstance returns the user registration that restricts a DNS
+// client, or nil for a system client that gets every answer.
+//
+// A client listed in flynn-net-user is a user job. Clients outside the
+// overlay network (host-network jobs, the host itself) are system clients.
+// An overlay client listed in another netpolicy service is a system,
+// datastore or build job. Any other overlay client is unknown and fails
+// closed, except that the local flynn-host is asked about its own IPs: a
+// job's registration reaches the leader before the job starts, but this
+// discoverd can apply it a few milliseconds later than the job's first
+// query, and a failed registration is only retried every 15 s.
 func (d dnsAPI) userNetInstance(addr net.Addr) *discoverd.Instance {
 	ip := remoteIP(addr)
 	if ip == nil {
 		return nil
 	}
-	insts, err := d.GetStore().Instances(netpolicy.ServiceUser)
+	if inst := d.netInstance(netpolicy.ServiceUser, ip); inst != nil {
+		return inst
+	}
+	if d.Overlay == nil || !d.Overlay.Contains(ip) {
+		return nil
+	}
+	for _, self := range d.SelfIPs {
+		if self.Equal(ip) {
+			return nil
+		}
+	}
+	for _, svc := range []string{netpolicy.ServiceSys, netpolicy.ServiceData, netpolicy.ServiceBuild} {
+		if d.netInstance(svc, ip) != nil {
+			return nil
+		}
+	}
+	if d.LocalJobs != nil && d.LocalSubnet != nil && d.LocalSubnet.Contains(ip) {
+		inst, err := d.LocalJobs.OverlayInstance(ip)
+		if err != nil {
+			log.Printf("discoverd: dns: cannot look up overlay ip %s on the local host: %s", ip, err)
+		} else if inst != nil {
+			switch inst.Meta["class"] {
+			case netpolicy.ClassUser.String():
+				if _, ok := netpolicy.ParseDiscoverdAllow(inst.Meta); !ok {
+					// Never the legacy env-wide answer for a host lookup.
+					return failClosedInstance
+				}
+				return inst
+			case netpolicy.ClassSystem.String(), netpolicy.ClassDatastore.String(), netpolicy.ClassBuild.String():
+				return nil
+			}
+		}
+	}
+	return failClosedInstance
+}
+
+// netInstance is the instance of a netpolicy service whose address is ip.
+func (d dnsAPI) netInstance(service string, ip net.IP) *discoverd.Instance {
+	insts, err := d.GetStore().Instances(service)
 	if err != nil || len(insts) == 0 {
 		return nil
 	}

@@ -392,6 +392,26 @@ func (h *jobAPI) ListJobs(w http.ResponseWriter, r *http.Request, ps httprouter.
 	httphelper.JSON(w, 200, jobs)
 }
 
+// GetOverlayIP returns the netpolicy registration for a running job's
+// overlay IP, or 404 when no starting or running job on this host has it.
+func (h *jobAPI) GetOverlayIP(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	ip := net.ParseIP(ps.ByName("ip"))
+	if ip == nil {
+		httphelper.ValidationError(w, "ip", "is not an IP address")
+		return
+	}
+	job := h.host.state.ActiveJobByIP(ip)
+	if job == nil || job.Config.HostNetwork {
+		httphelper.ObjectNotFoundError(w, "no job has this overlay ip")
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, &host.OverlayIP{
+		IP:    ip.String(),
+		JobID: job.ID,
+		Meta:  netpolicy.OverlayInstanceMeta(job),
+	})
+}
+
 func (h *jobAPI) GetJob(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	id := ps.ByName("id")
 	log := h.host.log.New("fn", "GetJob", "job.id", id)
@@ -1062,6 +1082,7 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.PUT("/host/jobs/:id", h.AddJob)
 	r.DELETE("/host/jobs/:id", h.StopJob)
 	r.PUT("/host/jobs/:id/discoverd-deregister", h.DiscoverdDeregisterJob)
+	r.GET("/host/netpolicy/ips/:ip", h.GetOverlayIP)
 	r.PUT("/host/jobs/:id/signal/:signal", h.SignalJob)
 	r.GET("/host/jobs/:id/stats", h.GetJobStats)
 	r.POST("/host/pull/images", h.PullImages)

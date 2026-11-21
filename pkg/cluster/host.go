@@ -17,6 +17,7 @@ import (
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/host/volume"
 	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/stream"
 )
 
@@ -461,4 +462,18 @@ func (c *Host) ListWebhooks() ([]*host.WebhookConfig, error) {
 // RemoveWebhook removes a webhook by ID.
 func (c *Host) RemoveWebhook(id string) error {
 	return c.c.Delete(fmt.Sprintf("/host/webhooks/%s", id))
+}
+
+// GetOverlayIP returns the netpolicy registration the host holds for one of
+// its running jobs' overlay IPs, or nil when no starting or running job on
+// the host has that IP.
+func (c *Host) GetOverlayIP(ctx context.Context, ip string) (*host.OverlayIP, error) {
+	var res host.OverlayIP
+	err := c.c.GetWithContext(ctx, "/host/netpolicy/ips/"+ip, &res)
+	if err == ErrNotFound || httphelper.IsObjectNotFoundError(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return &res, nil
 }

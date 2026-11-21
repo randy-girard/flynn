@@ -135,7 +135,7 @@ func (m *Main) Run(args ...string) error {
 			return err
 		}
 		m.logger.Println("marked", m.advertiseAddr, "as performing in deployent")
-		addr, resolvers := waitHostDNSConfig()
+		addr, resolvers, netcfg := waitHostDNSConfig()
 		if opt.DNSAddr != "" {
 			addr = opt.DNSAddr
 		}
@@ -143,7 +143,7 @@ func (m *Main) Run(args ...string) error {
 			resolvers = opt.Recursors
 		}
 		m.logger.Println("starting proxy DNS server")
-		if err := m.openDNSServer(addr, resolvers); err != nil {
+		if err := m.openDNSServer(addr, resolvers, netcfg); err != nil {
 			return fmt.Errorf("Failed to start DNS server: %s", err)
 		}
 		m.logger.Printf("discoverd listening for DNS on %s", addr)
@@ -212,15 +212,15 @@ func (m *Main) Run(args ...string) error {
 	if m.dnsServer != nil && m.store != nil {
 		m.dnsServer.SetStore(m.store)
 	} else if opt.DNSAddr != "" {
-		if err := m.openDNSServer(opt.DNSAddr, opt.Recursors); err != nil {
+		if err := m.openDNSServer(opt.DNSAddr, opt.Recursors, nil); err != nil {
 			return fmt.Errorf("Failed to start DNS server: %s", err)
 		}
 		m.logger.Printf("discoverd listening for DNS on %s", opt.DNSAddr)
 	} else if opt.WaitNetDNS {
 		go func() {
-			addr, resolvers := waitHostDNSConfig()
+			addr, resolvers, netcfg := waitHostDNSConfig()
 			m.mu.Lock()
-			if err := m.openDNSServer(addr, resolvers); err != nil {
+			if err := m.openDNSServer(addr, resolvers, netcfg); err != nil {
 				log.Fatalf("Failed to start DNS server: %s", err)
 			}
 			m.mu.Unlock()
@@ -278,7 +278,7 @@ func (m *Main) Run(args ...string) error {
 	return nil
 }
 
-func waitHostDNSConfig() (addr string, resolvers []string) {
+func waitHostDNSConfig() (addr string, resolvers []string, netcfg *host.NetworkConfig) {
 	// Wait for the host network.
 	status, err := cluster.WaitForHostStatus(os.Getenv("EXTERNAL_IP"), func(status *host.HostStatus) bool {
 		return status.Network != nil && status.Network.Subnet != ""
@@ -293,7 +293,7 @@ func waitHostDNSConfig() (addr string, resolvers []string) {
 		log.Fatal(err)
 	}
 	addr = net.JoinHostPort(ip.String(), "53")
-	return addr, status.Network.Resolvers
+	return addr, status.Network.Resolvers, status.Network
 }
 
 // Join the consensus set, promoting ourselves from proxy to raft node.
@@ -476,12 +476,18 @@ func (m *Main) openStore() error {
 }
 
 // openDNSServer initializes and opens the DNS server.
-// The store must already be open.
-func (m *Main) openDNSServer(addr string, recursors []string) error {
+// The store must already be open. netcfg is the host network the server
+// runs on; with it, overlay clients that no netpolicy service lists fail
+// closed (see server.DNSServer.Overlay). Nil keeps them system clients.
+func (m *Main) openDNSServer(addr string, recursors []string, netcfg *host.NetworkConfig) error {
 	s := &server.DNSServer{
 		UDPAddr:   addr,
 		TCPAddr:   addr,
 		Recursors: recursors,
+	}
+	applyDNSClientPolicy(s, netcfg, os.Getenv("EXTERNAL_IP"))
+	if s.Overlay != nil {
+		m.logger.Printf("dns: unlisted clients in %s fail closed; %s is looked up on this host", s.Overlay, s.LocalSubnet)
 	}
 
 	// If store is available then attach it. Otherwise use a proxy.

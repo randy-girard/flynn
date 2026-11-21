@@ -338,6 +338,21 @@ deploys); one-off jobs read the current list. Jobs started by a controller from
 before this rule (still running after an update) keep the list read from
 their env until they are next deployed.
 
+Discoverd DNS does not treat an unknown overlay address as a system job. A
+query from an overlay IP that is in none of the `flynn-net-*` sets below gets
+the answer for a user job with no attached datastores (`NXDOMAIN` for every
+`*.discoverd` name), with two exceptions. If the IP belongs to the host that
+runs this discoverd, discoverd asks that flynn-host which job has the IP
+(`GET /host/netpolicy/ips/:ip`, host-key authenticated) and answers as it would
+once the job's registration arrives: a user job gets its own allowlist, and a
+system, datastore or build job gets full answers. A job registers before it
+starts, but the local discoverd can apply the registration a few milliseconds
+after the job's first query, and a failed registration is retried only every
+15 seconds; the host lookup covers both. The host's own bridge address, which
+host-network jobs query from, and any address outside the overlay are system
+clients. If flynn-host does not answer within a second, the query fails
+closed.
+
 The controller refuses to delete an app while another app still points at
 it (a consumer's `REDIS_URL`, a follower's `FLYNN_REDIS_LEADER`). Release env
 is tenant input, so only an app of the same owner account, or one attached

@@ -533,6 +533,26 @@ func (s *State) GetActive() map[string]*host.ActiveJob {
 	return res
 }
 
+// ActiveJobByIP is the starting or running job that holds overlay IP ip, or
+// nil. An exited job can keep the IP in its state after the IP is reused.
+func (s *State) ActiveJobByIP(ip net.IP) *host.Job {
+	if ip == nil {
+		return nil
+	}
+	want := ip.String()
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	for _, job := range s.jobs {
+		if job.Status != host.StatusStarting && job.Status != host.StatusRunning {
+			continue
+		}
+		if job.InternalIP == want && job.Job != nil {
+			return job.Job.Dup()
+		}
+	}
+	return nil
+}
+
 func (s *State) ClusterJobs() []*host.Job {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
