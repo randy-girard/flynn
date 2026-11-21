@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
@@ -54,13 +55,17 @@ func (c *context) HandleReleaseCleanup(job *que.Job) (err error) {
 	return nil
 }
 
+// blobClient sends the blobstore DELETEs. The timeout fails an attempt on a
+// stalled blobstore (que retries it) instead of holding the worker forever.
+var blobClient = &http.Client{Timeout: 30 * time.Second}
+
 func deleteFile(uri string) error {
 	req, err := http.NewRequest("DELETE", uri, nil)
 	if err != nil {
 		return err
 	}
 	blobstoreauth.ApplyIfBlobstore(req)
-	res, err := http.DefaultClient.Do(req)
+	res, err := blobClient.Do(req)
 	if err != nil {
 		return err
 	}
