@@ -319,8 +319,10 @@ func IsolationSets() []string {
 // EnableJobIsolation installs default-deny overlay rules for user jobs and
 // host-local INPUT drops so tenants cannot open SSH, public discoverd, or
 // node APIs. Call after EnableOutboundNAT. Requires ipset. Same-host L2
-// isolation also needs br_netfilter (caller).
-func EnableJobIsolation(overlay, bridgeAddr string) error {
+// isolation also needs br_netfilter (caller). egressDeny (from
+// EgressDenyCIDRs) is dropped for user and build jobs ahead of the bridge
+// egress ACCEPT.
+func EnableJobIsolation(overlay, bridgeAddr string, egressDeny []string) error {
 	if err := EnsureSets(append(IsolationSets(), NodeSet)...); err != nil {
 		return err
 	}
@@ -353,6 +355,11 @@ func EnableJobIsolation(overlay, bridgeAddr string) error {
 		if err := insertIfMissing("FORWARD isolation", args); err != nil {
 			return err
 		}
+	}
+	if err := ApplyEgressDeny(func(args ...string) ([]byte, error) {
+		return Raw(args...)
+	}, egressDeny); err != nil {
+		return err
 	}
 	return EnableHostIsolation(bridgeAddr)
 }
@@ -564,6 +571,9 @@ func userOverlayDropDest(rule []string) (string, bool) {
 	if flagValueExact(rule, "-j") != "DROP" {
 		return "", false
 	}
+	if _, ok := egressDenyKey(rule); ok {
+		return "", false
+	}
 	joined := strings.Join(rule, " ")
 	if !strings.Contains(joined, netpolicy.ServiceUser) || !strings.Contains(joined, "src") {
 		return "", false
@@ -647,4 +657,111 @@ func Raw(args ...string) ([]byte, error) {
 	}
 
 	return output, err
+}
+
+// EgressDenyComment tags the egress deny rules so ApplyEgressDeny can find
+// and remove ones the operator dropped from the list.
+const EgressDenyComment = "flynn-egress-deny"
+
+// DefaultEgressDeny is always denied to user and build jobs: link-local,
+// which holds the cloud instance metadata service (169.254.169.254 on AWS,
+// GCP, Azure, and most others) with node credentials and user-data.
+var DefaultEgressDeny = []string{"169.254.0.0/16"}
+
+// EgressDenySets are the job classes whose egress the deny list covers.
+func EgressDenySets() []string {
+	return []string{netpolicy.ServiceUser, netpolicy.ServiceBuild}
+}
+
+// EgressDenyArgs drops packets from set's job IPs to cidr.
+func EgressDenyArgs(set, cidr string) []string {
+	return []string{"FORWARD", "-d", cidr, "-m", "set", "--match-set", set, "src", "-m", "comment", "--comment", EgressDenyComment, "-j", "DROP"}
+}
+
+// EgressDenyCIDRs is DefaultEgressDeny plus the operator's comma-separated
+// list (FLYNN_JOB_EGRESS_DENY), deduplicated. A bare IP is a /32. An invalid
+// entry is an error so a typo cannot silently leave a range open.
+func EgressDenyCIDRs(extra string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, raw := range append(append([]string{}, DefaultEgressDeny...), strings.Split(extra, ",")...) {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if !strings.Contains(entry, "/") {
+			entry += "/32"
+		}
+		_, ipnet, err := net.ParseCIDR(entry)
+		if err != nil || ipnet.IP.To4() == nil {
+			return nil, fmt.Errorf("invalid egress deny CIDR %q (want IPv4 a.b.c.d/n)", strings.TrimSpace(raw))
+		}
+		c := ipnet.String()
+		if !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+func egressDenyKey(rule []string) (string, bool) {
+	if flagValueExact(rule, "--comment") != EgressDenyComment || flagValueExact(rule, "-j") != "DROP" {
+		return "", false
+	}
+	set := flagValueExact(rule, "--match-set")
+	dest := flagValueExact(rule, "-d")
+	if set == "" || dest == "" {
+		return "", false
+	}
+	return set + " " + canonicalCIDR(dest), true
+}
+
+// ApplyEgressDeny makes FORWARD hold exactly one DROP per (user/build set,
+// cidr), at the head of the chain so it is ahead of the bridge egress
+// ACCEPT. Rules with EgressDenyComment for CIDRs no longer listed are
+// deleted after the new ones are in place.
+func ApplyEgressDeny(run IPTables, cidrs []string) error {
+	if run == nil {
+		return errors.New("iptables runner is nil")
+	}
+	save, err := run("-S", "FORWARD")
+	if err != nil {
+		return fmt.Errorf("reading filter rules: %s", err)
+	}
+	have := map[string]bool{}
+	var stale [][]string
+	want := map[string]bool{}
+	for _, set := range EgressDenySets() {
+		for _, c := range cidrs {
+			want[set+" "+canonicalCIDR(c)] = true
+		}
+	}
+	for _, rule := range saveRules(string(save), "FORWARD") {
+		key, ok := egressDenyKey(rule)
+		if !ok {
+			continue
+		}
+		if want[key] && !have[key] {
+			have[key] = true
+			continue
+		}
+		stale = append(stale, rule)
+	}
+	for _, set := range EgressDenySets() {
+		for _, c := range cidrs {
+			if have[set+" "+canonicalCIDR(c)] {
+				continue
+			}
+			if _, err := run(append([]string{"-I"}, EgressDenyArgs(set, c)...)...); err != nil {
+				return fmt.Errorf("installing egress deny %s for %s: %s", c, set, err)
+			}
+		}
+	}
+	for _, rule := range stale {
+		if _, err := run(append([]string{"-D", "FORWARD"}, rule...)...); err != nil {
+			return fmt.Errorf("removing stale egress deny: %s", err)
+		}
+	}
+	return nil
 }

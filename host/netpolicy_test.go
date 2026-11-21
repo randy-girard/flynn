@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"testing"
 
@@ -64,5 +65,79 @@ func TestLocalIPsSurviveStaleSnapshot(t *testing.T) {
 	}
 	if len(p.localIPs(netpolicy.ServiceUser)) != 0 {
 		t.Fatal("redis must not be merged into the user set")
+	}
+}
+
+type fakeHeartbeater struct{ closed bool }
+
+func (f *fakeHeartbeater) SetMeta(map[string]string) error { return nil }
+func (f *fakeHeartbeater) Close() error                    { f.closed = true; return nil }
+func (f *fakeHeartbeater) Addr() string                    { return "" }
+func (f *fakeHeartbeater) SetClient(*discoverd.Client)     {}
+
+func userJob(id string) *host.Job {
+	return &host.Job{ID: id, Metadata: map[string]string{"flynn-controller.app": "a1", "flynn-controller.type": "web"}}
+}
+
+func TestTrackFailsJobWhenIpsetAddFails(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		job     *host.Job
+		wantErr bool
+	}{
+		{"user", userJob("u1"), true},
+		{"build", &host.Job{ID: "b1", Metadata: map[string]string{"flynn-controller.type": "slugbuilder"}}, true},
+		{"system", &host.Job{ID: "s1", Partition: "system", Metadata: map[string]string{"flynn-system-app": "true"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newNetPolicy(log15.New())
+			p.addSetIP = func(string, net.IP) error { return errors.New("ipset: kernel error") }
+			err := p.Track(tc.job, net.ParseIP("100.64.0.7"))
+			if tc.wantErr && err == nil {
+				t.Fatal("Track must fail a user/build job whose IP is not in its isolation set")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("system job: %v", err)
+			}
+		})
+	}
+}
+
+func TestRegisterRetriesUntilRegistered(t *testing.T) {
+	p := newNetPolicy(log15.New())
+	p.addSetIP = func(string, net.IP) error { return nil }
+	calls := 0
+	hb := &fakeHeartbeater{}
+	p.registerInstance = func(svc string, inst *discoverd.Instance) (discoverd.Heartbeater, error) {
+		calls++
+		if svc != netpolicy.ServiceUser {
+			t.Fatalf("service = %s", svc)
+		}
+		if calls == 1 {
+			return nil, errors.New("discoverd: no leader")
+		}
+		return hb, nil
+	}
+	if err := p.Track(userJob("u1"), net.ParseIP("100.64.0.7")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.local["u1"]; ok {
+		t.Fatal("first registration failed; job must not be marked registered")
+	}
+	p.registerPending(netpolicy.ServiceUser)
+	if calls != 2 {
+		t.Fatalf("registerPending must retry the failed registration, calls=%d", calls)
+	}
+	if p.local["u1"] != hb {
+		t.Fatal("job not registered after retry")
+	}
+	p.registerPending(netpolicy.ServiceUser)
+	p.registerPending(netpolicy.ServiceData)
+	if calls != 2 {
+		t.Fatalf("registered jobs and other services must not re-register, calls=%d", calls)
+	}
+	p.Untrack(userJob("u1"), nil)
+	if !hb.closed {
+		t.Fatal("Untrack must close the heartbeater")
 	}
 }

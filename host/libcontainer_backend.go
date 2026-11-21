@@ -333,7 +333,12 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 		log.Error("error enabling br_netfilter", "err", err)
 		return err
 	}
-	if err := iptables.EnableJobIsolation(overlay, l.bridgeAddr.String()); err != nil {
+	egressDeny, err := iptables.EgressDenyCIDRs(os.Getenv("FLYNN_JOB_EGRESS_DENY"))
+	if err != nil {
+		log.Error("error reading FLYNN_JOB_EGRESS_DENY", "err", err)
+		return err
+	}
+	if err := iptables.EnableJobIsolation(overlay, l.bridgeAddr.String(), egressDeny); err != nil {
 		log.Error("error enabling job isolation", "err", err)
 		return err
 	}
@@ -382,7 +387,9 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 				log.Error("error requesting ip", "job.id", container.job.ID, "err", err)
 			}
 			if l.netpol != nil {
-				l.netpol.Track(container.job, container.IP)
+				if err := l.netpol.Track(container.job, container.IP); err != nil {
+					log.Error("error isolating running job", "job.id", container.job.ID, "err", err)
+				}
 			}
 		}
 	}
@@ -579,15 +586,19 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		}
 		log.Info("obtained ip", "network", l.bridgeNet.String(), "ip", container.IP.String(), "mac", container.MAC)
 		l.State.SetContainerIP(job.ID, container.IP)
-		if l.netpol != nil {
-			l.netpol.Track(job, container.IP)
-		}
 	}
 	defer func() {
 		if err != nil {
 			go container.cleanup()
 		}
 	}()
+	if container.IP != nil && l.netpol != nil {
+		// After the cleanup defer, so a failed isolation releases the IP.
+		if err = l.netpol.Track(job, container.IP); err != nil {
+			log.Error("error isolating job", "err", err)
+			return err
+		}
+	}
 
 	log.Info("setting up rootfs")
 	rootPath := filepath.Join("/var/lib/flynn/image/mnt", job.ID)

@@ -778,6 +778,30 @@ sudo flynn-host firewall:sync
 syncs. `firewall:sync` does not read the route list. The host daemon does, every
 15 seconds.
 
+### Job egress deny list
+
+User and build jobs cannot open connections to `169.254.0.0/16` (link-local).
+That range holds the cloud instance metadata service (`169.254.169.254` on
+AWS, GCP, Azure, and most other providers), which hands out the node's
+instance credentials and user-data. System and datastore jobs are not
+affected.
+
+To deny more ranges to user and build jobs, set `FLYNN_JOB_EGRESS_DENY` in the
+`env` of `/etc/flynn/host.json` on every host to a comma-separated list of IPv4
+CIDRs (a bare IP means `/32`), then restart `flynn-host`:
+
+```json
+"env": { "FLYNN_JOB_EGRESS_DENY": "168.63.129.16,10.20.0.0/16" }
+```
+
+For example, add `168.63.129.16` (the Azure platform endpoint) or a private
+range with services tenants must not reach. `169.254.0.0/16` is always
+denied, even when the list is set. An invalid entry stops `flynn-host` from
+starting job networking, so a typo cannot leave a range open. On restart,
+`flynn-host` removes rules for ranges you took off the list. The rules are
+`FORWARD` DROPs tagged `flynn-egress-deny` (`sudo iptables -S FORWARD | grep
+flynn-egress-deny`).
+
 ### Exporting datastores
 
 HTTP apps get a stable hostname on the cluster domain. `addons:expose` assigns

@@ -1,9 +1,11 @@
 package iptables
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -476,5 +478,153 @@ func TestUnionIPsKeepsLocalWhenSnapshotIsStale(t *testing.T) {
 		if got[i].String() != s {
 			t.Fatalf("UnionIPs[%d]=%s want %s (stale snapshot must not drop the local redis IP)", i, got[i], s)
 		}
+	}
+}
+
+// fakeForward is a FORWARD chain that applies -I/-D/-S like iptables does.
+type fakeForward struct{ rules []string }
+
+func (f *fakeForward) run(args ...string) ([]byte, error) {
+	if len(args) >= 2 && args[0] == "-S" && args[1] == "FORWARD" {
+		out := []string{"-P FORWARD ACCEPT"}
+		for _, r := range f.rules {
+			out = append(out, "-A FORWARD "+r)
+		}
+		return []byte(strings.Join(out, "\n")), nil
+	}
+	if len(args) >= 2 && args[1] == "FORWARD" {
+		rest := args[2:]
+		switch args[0] {
+		case "-I":
+			pos := 0
+			if len(rest) > 0 {
+				if n, err := strconv.Atoi(rest[0]); err == nil {
+					pos, rest = n-1, rest[1:]
+				}
+			}
+			r := strings.Join(rest, " ")
+			f.rules = append(f.rules[:pos], append([]string{r}, f.rules[pos:]...)...)
+			return nil, nil
+		case "-D":
+			r := strings.Join(rest, " ")
+			for i, have := range f.rules {
+				if have == r {
+					f.rules = append(f.rules[:i], f.rules[i+1:]...)
+					return nil, nil
+				}
+			}
+			return nil, fmt.Errorf("no such rule: %s", r)
+		}
+	}
+	return nil, fmt.Errorf("unexpected iptables %v", args)
+}
+
+func (f *fakeForward) index(sub ...string) int {
+	for i, r := range f.rules {
+		ok := true
+		for _, s := range sub {
+			if !strings.Contains(r, s) {
+				ok = false
+			}
+		}
+		if ok {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestEnableJobIsolationDropsLinkLocal(t *testing.T) {
+	cidrs, err := EgressDenyCIDRs("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cidrs) != 1 || cidrs[0] != "169.254.0.0/16" {
+		t.Fatalf("default deny list = %v, want [169.254.0.0/16]", cidrs)
+	}
+	f := &fakeForward{rules: []string{
+		"-m set --match-set flynn-net-user src -m set --match-set flynn-net-data dst -p tcp --dport 5432 -j ACCEPT",
+		"-m set --match-set flynn-net-user src -d 100.64.0.0/16 -m conntrack --ctstate NEW -j DROP",
+		"-i flynnbr0 ! -o flynnbr0 -j ACCEPT",
+	}}
+	if err := ApplyEgressDeny(f.run, cidrs); err != nil {
+		t.Fatal(err)
+	}
+	egress := f.index("-i flynnbr0", "ACCEPT")
+	for _, set := range []string{"flynn-net-user", "flynn-net-build"} {
+		at := f.index(set+" src", "-d 169.254.0.0/16", "DROP")
+		if at < 0 {
+			t.Fatalf("no link-local DROP for %s:\n%s", set, strings.Join(f.rules, "\n"))
+		}
+		if at > egress {
+			t.Fatalf("link-local DROP for %s is after the bridge egress ACCEPT:\n%s", set, strings.Join(f.rules, "\n"))
+		}
+	}
+	// Idempotent.
+	n := len(f.rules)
+	if err := ApplyEgressDeny(f.run, cidrs); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.rules) != n {
+		t.Fatalf("second apply changed the chain:\n%s", strings.Join(f.rules, "\n"))
+	}
+
+	src, err := os.ReadFile("iptables.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	iso := body[strings.Index(body, "func EnableJobIsolation"):]
+	iso = iso[:strings.Index(iso[1:], "\nfunc ")+1]
+	if !strings.Contains(iso, "ApplyEgressDeny(") {
+		t.Fatal("EnableJobIsolation must install the egress deny list")
+	}
+}
+
+func TestEgressDenyOperatorListAndStaleRemoval(t *testing.T) {
+	cidrs, err := EgressDenyCIDRs(" 10.0.0.0/8, 168.63.129.16 ,169.254.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"169.254.0.0/16", "10.0.0.0/8", "168.63.129.16/32"}
+	if !reflect.DeepEqual(cidrs, want) {
+		t.Fatalf("cidrs = %v, want %v", cidrs, want)
+	}
+	if _, err := EgressDenyCIDRs("10.0.0.0/33"); err == nil {
+		t.Fatal("invalid CIDR must be an error (fail closed)")
+	}
+	f := &fakeForward{rules: []string{"-i flynnbr0 ! -o flynnbr0 -j ACCEPT"}}
+	if err := ApplyEgressDeny(f.run, cidrs); err != nil {
+		t.Fatal(err)
+	}
+	if f.index("flynn-net-build src", "-d 168.63.129.16/32", "DROP") < 0 {
+		t.Fatalf("operator CIDR missing:\n%s", strings.Join(f.rules, "\n"))
+	}
+	// Operator removes 10.0.0.0/8: its rules go, the rest stay.
+	if err := ApplyEgressDeny(f.run, []string{"169.254.0.0/16", "168.63.129.16/32"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.index("10.0.0.0/8") >= 0 {
+		t.Fatalf("stale deny rule kept:\n%s", strings.Join(f.rules, "\n"))
+	}
+	if f.index("flynn-net-user src", "169.254.0.0/16") < 0 || f.index("flynn-net-user src", "168.63.129.16/32") < 0 {
+		t.Fatalf("live deny rules removed:\n%s", strings.Join(f.rules, "\n"))
+	}
+}
+
+func TestForwardDropPlanKeepsEgressDenyRules(t *testing.T) {
+	save := strings.Join([]string{
+		"-P FORWARD ACCEPT",
+		"-A FORWARD " + strings.Join(EgressDenyArgs("flynn-net-user", "169.254.0.0/16")[1:], " "),
+		"-A FORWARD -m set --match-set flynn-net-user src -d 100.100.0.0/16 -m conntrack --ctstate NEW -j DROP",
+		"-A FORWARD -i flynnbr0 ! -o flynnbr0 -j ACCEPT",
+	}, "\n")
+	plan := PlanForwardDrop(save, "flynnbr0", "100.64.0.0/10")
+	body := strings.Join(flatten(plan.Delete), "\n")
+	if strings.Contains(body, "169.254") {
+		t.Fatalf("overlay DROP replacement must not delete the egress deny rule:\n%s", body)
+	}
+	if !strings.Contains(body, "100.100.0.0/16") {
+		t.Fatalf("stale overlay DROP not deleted:\n%s", body)
 	}
 }

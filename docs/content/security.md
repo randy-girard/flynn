@@ -325,6 +325,23 @@ dropped. They still use discoverd (`:1111`) and DNS (`:53`), and they still
 reach other datastore peers and system overlay IPs. `/data` stays mounted.
 User jobs can still open the documented data-plane ports.
 
+These rules match ipsets that hold the overlay IPs of each job class
+(`flynn-net-user`, `flynn-net-build`, `flynn-net-data`, `flynn-net-sys`) and
+the cluster node IPs (`flynn-net-nodes`). flynn-host adds a job's IP when it
+starts the job and learns other hosts' jobs from discoverd. A user or build
+job does not start when its IP cannot be added to its set, because a job
+outside the set would match no isolation rule. A failed discoverd
+registration is retried every 15 seconds. The 15-second resync rebuilds each
+set without emptying it: `ipset restore` fills a temporary set and swaps it
+with the live set in one kernel operation, so a packet sees either the old or
+the new contents and isolation never switches off during a resync.
+
+User and build jobs cannot open connections to `169.254.0.0/16`, the
+link-local range that holds the cloud instance metadata service and the
+node's instance credentials. Operators can deny more ranges with
+`FLYNN_JOB_EGRESS_DENY`; see
+[Production — Job egress deny list](production.html.md#job-egress-deny-list).
+
 Build jobs (slugbuilder / dockerbuilder) are a separate overlay class. They
 cannot reach user jobs or the host control plane, but they can still reach
 cluster services the build needs, including blobstore. Blobstore HTTP

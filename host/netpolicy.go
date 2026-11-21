@@ -26,17 +26,25 @@ type pendingIP struct {
 type netPolicy struct {
 	log log15.Logger
 
-	mu      sync.Mutex
-	local   map[string]discoverd.Heartbeater // job ID → heartbeat
-	pending map[string]pendingIP
-	client  *discoverd.Client
+	mu       sync.Mutex
+	local    map[string]discoverd.Heartbeater // job ID → heartbeat
+	pending  map[string]pendingIP
+	inflight map[string]struct{} // job IDs with a registration in progress
+	client   *discoverd.Client
+
+	// addSetIP and registerInstance are iptables.AddSetIP and the discoverd
+	// client's AddServiceAndRegisterInstance; tests replace them.
+	addSetIP         func(set string, ip net.IP) error
+	registerInstance func(service string, inst *discoverd.Instance) (discoverd.Heartbeater, error)
 }
 
 func newNetPolicy(log log15.Logger) *netPolicy {
 	return &netPolicy{
-		log:     log.New("component", "netpolicy"),
-		local:   make(map[string]discoverd.Heartbeater),
-		pending: make(map[string]pendingIP),
+		log:      log.New("component", "netpolicy"),
+		local:    make(map[string]discoverd.Heartbeater),
+		pending:  make(map[string]pendingIP),
+		inflight: make(map[string]struct{}),
+		addSetIP: iptables.AddSetIP,
 	}
 }
 
@@ -50,6 +58,9 @@ func (p *netPolicy) Start(client *discoverd.Client) {
 		return
 	}
 	p.client = client
+	if p.registerInstance == nil {
+		p.registerInstance = client.AddServiceAndRegisterInstance
+	}
 	pending := make([]pendingIP, 0, len(p.pending))
 	for _, e := range p.pending {
 		pending = append(pending, e)
@@ -64,19 +75,51 @@ func (p *netPolicy) Start(client *discoverd.Client) {
 	}
 }
 
-func (p *netPolicy) Track(job *host.Job, ip net.IP) {
+// Track puts a job's overlay IP into its class's ipset and registers it in
+// discoverd so every host's set learns it. For user and build jobs the ipset
+// add must succeed: every isolation rule matches the set, so a job whose IP
+// is missing would run with no firewall restriction. The caller fails the
+// job start on error. A failed discoverd registration is retried from
+// resyncLoop.
+func (p *netPolicy) Track(job *host.Job, ip net.IP) error {
 	if job == nil || ip == nil || job.Config.HostNetwork {
-		return
+		return nil
 	}
 	class := netpolicy.ClassifyJob(job)
 	set := netpolicy.ServiceForClass(class)
-	if err := iptables.AddSetIP(set, ip); err != nil {
+	if err := p.addSetIP(set, ip); err != nil {
 		p.log.Error("ipset add", "set", set, "ip", ip, "err", err)
+		if class == netpolicy.ClassUser || class == netpolicy.ClassBuild {
+			return fmt.Errorf("isolating job %s: %w", job.ID, err)
+		}
 	}
 	p.mu.Lock()
 	p.pending[job.ID] = pendingIP{job: job, ip: ip}
 	p.mu.Unlock()
 	p.register(job, ip)
+	return nil
+}
+
+// registerPending retries discoverd registration for tracked jobs of one
+// netpolicy service that are not registered yet. Without it a single failed
+// registration (leader election, timeout) left the IP unknown to other hosts
+// and to discoverd DNS for the job's whole life.
+func (p *netPolicy) registerPending(service string) {
+	p.mu.Lock()
+	var todo []pendingIP
+	for id, e := range p.pending {
+		if _, ok := p.local[id]; ok {
+			continue
+		}
+		if netpolicy.ServiceForClass(netpolicy.ClassifyJob(e.job)) != service {
+			continue
+		}
+		todo = append(todo, e)
+	}
+	p.mu.Unlock()
+	for _, e := range todo {
+		p.register(e.job, e.ip)
+	}
 }
 
 func (p *netPolicy) register(job *host.Job, ip net.IP) {
@@ -84,15 +127,15 @@ func (p *netPolicy) register(job *host.Job, ip net.IP) {
 		return
 	}
 	p.mu.Lock()
-	client := p.client
-	if _, ok := p.local[job.ID]; ok {
+	registerInstance := p.registerInstance
+	_, done := p.local[job.ID]
+	_, busy := p.inflight[job.ID]
+	if done || busy || registerInstance == nil {
 		p.mu.Unlock()
 		return
 	}
+	p.inflight[job.ID] = struct{}{}
 	p.mu.Unlock()
-	if client == nil {
-		return
-	}
 	class := netpolicy.ClassifyJob(job)
 	svc := netpolicy.ServiceForClass(class)
 	inst := &discoverd.Instance{
@@ -100,12 +143,20 @@ func (p *netPolicy) register(job *host.Job, ip net.IP) {
 		Proto: "tcp",
 		Meta:  netpolicy.OverlayInstanceMeta(job),
 	}
-	hb, err := client.AddServiceAndRegisterInstance(svc, inst)
+	hb, err := registerInstance(svc, inst)
+	p.mu.Lock()
+	delete(p.inflight, job.ID)
 	if err != nil {
-		p.log.Error("register overlay ip", "service", svc, "ip", ip, "err", err)
+		p.mu.Unlock()
+		p.log.Error("register overlay ip (will retry)", "service", svc, "ip", ip, "err", err)
 		return
 	}
-	p.mu.Lock()
+	if _, tracked := p.pending[job.ID]; !tracked {
+		// Untracked while registering: do not leak the heartbeat.
+		p.mu.Unlock()
+		_ = hb.Close()
+		return
+	}
 	p.local[job.ID] = hb
 	p.mu.Unlock()
 }
@@ -189,6 +240,7 @@ func (p *netPolicy) resyncLoop(client *discoverd.Client, service string, stop <-
 		case <-stop:
 			return
 		case <-ticker.C:
+			p.registerPending(service)
 			if err := p.syncSet(client, service); err != nil {
 				p.log.Error("periodic sync ipset", "service", service, "err", err)
 			}
