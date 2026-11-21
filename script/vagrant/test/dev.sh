@@ -858,6 +858,45 @@ if ! ORPHAN_REPLICA_SELFTEST=1 python3 "${mod}/guest/orphan-replicas.py"; then
   echo "orphan-replicas.py selftest failed" >&2
   exit 1
 fi
+# Two containers answering ARP for one address on flynnbr0 (a reused IP
+# while the old namespace is still on the bridge) must fail the sample.
+if ! BRIDGE_IPS_SELFTEST=1 python3 "${mod}/guest/bridge-ips.py"; then
+  echo "bridge-ips.py selftest failed" >&2
+  exit 1
+fi
+bridge="$(bash -c 'set -euo pipefail
+SRC=/src
+flynn_vagrant_running_cluster_nodes() { printf "dev-node1\ndev-node2\ndev-node3\n"; }
+flynn_vagrant_cluster_nodes() { printf "dev-node1\ndev-node2\ndev-node3\n"; }
+flynn_vagrant_node_ip() { echo 10.0.0.1; }
+flynn_vagrant_cluster_domain() { echo d; }
+flynn_vagrant_get_nodes() { echo 3; }
+run_as_root_on() {
+  case "$2" in
+    *bridge-ips.py*)
+      if [[ "$1" == dev-node2 ]]; then echo "duplicate 100.100.61.7 answered by fe:00:00:00:00:01,fe:00:00:00:00:02"; return 1; fi
+      echo "answered=12 duplicates=0" ;;
+    *) echo "ok cluster: x"; echo healthy ;;
+  esac
+}
+source "$1"
+st=0; chaos_health dev-node3 || st=$?
+printf "%s\n" "${CHAOS_HEALTH_OUT}"; echo "status=${st}"' _ "${mod}/lib/chaos.sh" 2>&1)" || true
+if ! grep -Fq "FAIL bridge dev-node2: duplicate 100.100.61.7" <<<"${bridge}" || ! grep -Fq "status=1" <<<"${bridge}"; then
+  echo "chaos_health must fail when an IP answers from two MACs on a node's bridge" >&2
+  printf '%s\n' "${bridge}" >&2
+  exit 1
+fi
+if ! grep -Fq "ok bridge dev-node1: answered=12 duplicates=0" <<<"${bridge}"; then
+  echo "chaos_health must report the bridge check of each node" >&2
+  printf '%s\n' "${bridge}" >&2
+  exit 1
+fi
+if grep -Fq "bridge dev-node3" <<<"${bridge}"; then
+  echo "chaos_health must not run the bridge check on the node under fault" >&2
+  printf '%s\n' "${bridge}" >&2
+  exit 1
+fi
 for f in guest/check-health.sh guest/chaos-fault.sh; do
   awk '/<<.?PY.?$/ { on = 1; n++; next } /^PY$/ { on = 0; next } on { print > ("'"${TMPDIR:-/tmp}"'/py-check-" n ".py") }' "${mod}/${f}"
   for py in "${TMPDIR:-/tmp}"/py-check-*.py; do
@@ -963,7 +1002,7 @@ echo "round 1 node-reboot" > "${mon_dir}/phase"
 MON_DIR="${mon_dir}" bash -c "${chaos_stubs}"'
 run_as_root_on() { echo "$1" >> "${MON_DIR}/used"; rm -f "${MON_DIR}/phase"; echo "ok cluster: x"; echo healthy; }
 CHAOS_MONITOR_INTERVAL=0 chaos_monitor_loop "${MON_DIR}"' _ "${mod}/lib/chaos.sh"
-if [[ "$(cat "${mon_dir}/used")" != "dev-node2" ]] || ! grep -q $'\thealthy\t' "${mon_dir}/samples.tsv"; then
+if [[ "$(sort -u "${mon_dir}/used")" != "dev-node2" ]] || ! grep -q $'\thealthy\t' "${mon_dir}/samples.tsv"; then
   echo "chaos monitor must sample from a node other than the one in avoid" >&2
   exit 1
 fi

@@ -70,8 +70,42 @@ chaos_health() {
     if ! grep -q '^FAIL ' <<<"${CHAOS_HEALTH_OUT}"; then
       CHAOS_HEALTH_OUT="FAIL monitor: health check on ${node} exited ${st} without a result: $(printf '%s\n' "${CHAOS_HEALTH_OUT}" | grep -v '^[[:space:]]*$' | tail -2 | paste -sd ';' - | cut -c1-200 || true)"
     fi
-    return 1
   fi
+  if ! chaos_bridge_check "${1:-}"; then
+    st=1
+  fi
+  [[ "${st}" -eq 0 ]]
+}
+
+# chaos_bridge_check runs guest/bridge-ips.py on every running cluster node
+# except $1 and appends "ok bridge <node>: ..." or "FAIL bridge <node>: ..."
+# to CHAOS_HEALTH_OUT. It fails when an address on a node's flynnbr0 answers
+# ARP from two MACs (an IP reused while the old job's veth is still on the
+# bridge). An unreachable node is skipped: the cluster section reports
+# missing hosts. CHAOS_BRIDGE_CHECK=0 turns the check off.
+chaos_bridge_check() {
+  local avoid="${1:-}" name out st failed=0
+  if [[ "${CHAOS_BRIDGE_CHECK:-1}" == 0 ]]; then
+    return 0
+  fi
+  while IFS= read -r name; do
+    if [[ -z "${name}" || "${name}" == "${avoid}" ]]; then
+      continue
+    fi
+    set +e
+    out="$(chaos_exec_on "${name}" "timeout 20 python3 ${SRC}/script/vagrant/guest/bridge-ips.py" 2>&1 | grep -v '^Connection to .* closed' | grep -v '^Warning: Permanently added')"
+    st=$?
+    set -e
+    if grep -q '^duplicate ' <<<"${out}"; then
+      CHAOS_HEALTH_OUT+=$'\n'"FAIL bridge ${name}: $(grep '^duplicate ' <<<"${out}" | paste -sd ';' - | cut -c1-300)"
+      failed=1
+    elif [[ "${st}" -eq 0 ]]; then
+      CHAOS_HEALTH_OUT+=$'\n'"ok bridge ${name}: $(printf '%s\n' "${out}" | grep -v '^[[:space:]]*$' | tail -1)"
+    else
+      CHAOS_HEALTH_OUT+=$'\n'"ok bridge ${name}: skipped (exit ${st}: $(printf '%s\n' "${out}" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-120))"
+    fi
+  done < <(flynn_vagrant_running_cluster_nodes)
+  [[ "${failed}" -eq 0 ]]
 }
 
 chaos_now() { date -u +%H:%M:%S; }
