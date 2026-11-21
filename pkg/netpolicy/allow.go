@@ -24,8 +24,17 @@ var identityDiscoverdEnv = []string{
 	"FLYNN_POSTGRES",
 }
 
+// MetaJobDiscoverdAllow is host job metadata the controller and scheduler
+// stamp from the resources attached to the app (resource rows, which only a
+// provider or the cluster key writes). It is a comma-separated list of
+// datastore service names. The "flynn-controller." prefix is reserved: the
+// controller strips it from tenant app and one-off job metadata.
+const MetaJobDiscoverdAllow = "flynn-controller.discoverd_allow"
+
 // OverlayInstanceMeta is the discoverd instance meta flynn-host publishes for
-// an overlay IP. User jobs include the attached datastore allowlist.
+// an overlay IP. User jobs include the attached datastore allowlist, taken
+// from MetaJobDiscoverdAllow. Release and one-off env are tenant-controlled
+// and do not widen it.
 func OverlayInstanceMeta(job *host.Job) map[string]string {
 	class := ClassifyJob(job)
 	meta := map[string]string{"class": class.String()}
@@ -36,43 +45,103 @@ func OverlayInstanceMeta(job *host.Job) map[string]string {
 		meta["job.id"] = job.ID
 	}
 	if class == ClassUser {
-		meta[MetaDiscoverdAllow] = strings.Join(DiscoverdServicesFromEnv(job.Config.Env), ",")
+		meta[MetaDiscoverdAllow] = strings.Join(jobDiscoverdAllow(job), ",")
 	}
 	return meta
 }
 
-// DiscoverdServicesFromEnv collects datastore service names Flynn attached to
-// this job (REDIS_URL / DATABASE_URL / FLYNN_REDIS / …). Only names that
-// UserMayResolveDiscoverd would accept as a leader are kept.
-func DiscoverdServicesFromEnv(env map[string]string) []string {
-	if env == nil {
-		return nil
+// jobDiscoverdAllow is the stamped allowlist, filtered to datastore leader
+// names. A job with no stamp at all was started by a controller from before
+// the stamp existed (it kept running across a flynn-host update); it keeps
+// the env-derived list so its datastore still resolves until its next
+// deploy. Every job a current controller or scheduler starts is stamped,
+// and a tenant cannot remove the reserved key.
+func jobDiscoverdAllow(job *host.Job) []string {
+	v, ok := job.Metadata[MetaJobDiscoverdAllow]
+	if !ok {
+		return DiscoverdServicesFromEnv(job.Config.Env)
 	}
+	return filterDiscoverdServices(strings.Split(v, ","))
+}
+
+// AttachedDiscoverdServices is the allowlist the controller stamps for an
+// app, from the env of the resources attached to it. It is not filtered by
+// the installed-plugin list (the controller does not read the host's
+// installed-plugins.json); flynn-host and discoverd DNS filter it again.
+// The result is never nil, so callers can tell "no attachments" from "not
+// computed".
+func AttachedDiscoverdServices(resourceEnvs []map[string]string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, env := range resourceEnvs {
+		for _, name := range discoverdNamesFromEnv(env) {
+			if strings.ContainsAny(name, ", ") {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// StampDiscoverdAllow sets MetaJobDiscoverdAllow on job. An empty list is
+// stamped as "" so flynn-host restricts the job to no datastores.
+func StampDiscoverdAllow(job *host.Job, services []string) {
+	if job == nil {
+		return
+	}
+	if job.Metadata == nil {
+		job.Metadata = map[string]string{}
+	}
+	job.Metadata[MetaJobDiscoverdAllow] = strings.Join(services, ",")
+}
+
+// filterDiscoverdServices lowercases, dedupes and sorts names, keeping only
+// those UserMayResolveDiscoverd accepts as a leader.
+func filterDiscoverdServices(names []string) []string {
 	seen := map[string]struct{}{}
 	var out []string
-	add := func(name string) {
+	for _, name := range names {
 		name = strings.ToLower(strings.TrimSpace(name))
-		if name == "" {
-			return
-		}
-		if !UserMayResolveDiscoverd(true, name) {
-			return
+		if name == "" || !UserMayResolveDiscoverd(true, name) {
+			continue
 		}
 		if _, ok := seen[name]; ok {
-			return
+			continue
 		}
 		seen[name] = struct{}{}
 		out = append(out, name)
 	}
+	sort.Strings(out)
+	return out
+}
+
+// DiscoverdServicesFromEnv collects datastore service names from an env map
+// (REDIS_URL / DATABASE_URL / FLYNN_REDIS / …). Only names that
+// UserMayResolveDiscoverd would accept as a leader are kept. Call it on
+// resource env (trusted), not on release or job env (tenant-controlled).
+func DiscoverdServicesFromEnv(env map[string]string) []string {
+	return filterDiscoverdServices(discoverdNamesFromEnv(env))
+}
+
+// discoverdNamesFromEnv is every discoverd service name an env map points at
+// (any *.discoverd host in a value, plus the FLYNN_<DATASTORE> identity keys),
+// lowercased, before any datastore filtering.
+func discoverdNamesFromEnv(env map[string]string) []string {
+	var out []string
 	for _, v := range env {
-		for _, name := range discoverdServicesInValue(v) {
-			add(name)
-		}
+		out = append(out, discoverdServicesInValue(v)...)
 	}
 	for _, k := range identityDiscoverdEnv {
-		add(env[k])
+		if name := strings.ToLower(strings.TrimSpace(env[k])); name != "" {
+			out = append(out, name)
+		}
 	}
-	sort.Strings(out)
 	return out
 }
 

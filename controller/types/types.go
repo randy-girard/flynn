@@ -38,6 +38,13 @@ type ExpandedFormation struct {
 	Deleted             bool                         `json:"deleted,omitempty"`
 	PendingScaleRequest *ScaleRequest                `json:"pending_scale_request,omitempty"`
 
+	// DiscoverdAllow is the datastore services the app's jobs may resolve
+	// through discoverd DNS, from the env of the resources attached to the
+	// app. The controller always sends a list (possibly empty); nil means an
+	// older controller that did not compute it. Not omitempty, so an empty
+	// list survives JSON.
+	DiscoverdAllow []string `json:"discoverd_allow"`
+
 	// DeprecatedImageArtifact is for creating backwards compatible cluster
 	// backups (the restore process used to require the ImageArtifact field
 	// to be set).

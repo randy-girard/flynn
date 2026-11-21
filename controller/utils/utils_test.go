@@ -437,3 +437,49 @@ func TestProvisionVolumeZeroSizeIsUnset(t *testing.T) {
 		t.Fatalf("unset Size should stay 0 so the host applies DefaultSize, got %d", info.Size)
 	}
 }
+
+// TestJobConfigStampsDiscoverdAllowFromFormation: the scheduler stamps the
+// controller-computed attachment list (from resource rows), never one
+// derived from release env, and app meta cannot override it.
+func TestJobConfigStampsDiscoverdAllowFromFormation(t *testing.T) {
+	const key = "flynn-controller.discoverd_allow"
+	f := &ct.ExpandedFormation{
+		App: &ct.App{ID: "app-1", Name: "demo", Meta: map[string]string{key: "redis-victim-1"}},
+		Release: &ct.Release{
+			ID:        "rel-1",
+			Env:       map[string]string{"X": "leader.redis-victim-2.discoverd"},
+			Processes: map[string]ct.ProcessType{"web": {}},
+		},
+		DiscoverdAllow: []string{"redis-lagoon-59415"},
+	}
+	if got := JobConfig(f, "web", "host1", "u1").Metadata[key]; got != "redis-lagoon-59415" {
+		t.Fatalf("allow=%q", got)
+	}
+
+	f.DiscoverdAllow = []string{}
+	if v, ok := JobConfig(f, "web", "host1", "u2").Metadata[key]; !ok || v != "" {
+		t.Fatalf("no attachments: allow=%q present=%v, want empty stamp", v, ok)
+	}
+
+	// Older controllers do not send the list: leave the key off so the host
+	// falls back as it did before, instead of cutting the app off.
+	f.DiscoverdAllow = nil
+	f.App.Meta = nil
+	if _, ok := JobConfig(f, "web", "host1", "u3").Metadata[key]; ok {
+		t.Fatal("nil list must not stamp")
+	}
+}
+
+func TestExpandedFormationDiscoverdAllowJSONKeepsEmpty(t *testing.T) {
+	raw, err := json.Marshal(&ct.ExpandedFormation{DiscoverdAllow: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back ct.ExpandedFormation
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.DiscoverdAllow == nil {
+		t.Fatalf("empty list lost on the wire: %s", raw)
+	}
+}

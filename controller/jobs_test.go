@@ -445,12 +445,13 @@ func (s *S) TestRunJobDetached(c *C) {
 		c.Assert(ct.IsJobName(name), Equals, true)
 		delete(job.Metadata, host.MetaControllerName)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
-			"flynn-controller.app":          app.ID,
-			"flynn-controller.app_name":     app.Name,
-			"flynn-controller.release":      release.ID,
-			"flynn-controller.type":         "runner",
-			"foo":                           "baz",
-			"gc.max_inactive_slug_releases": "10",
+			"flynn-controller.app":             app.ID,
+			"flynn-controller.app_name":        app.Name,
+			"flynn-controller.release":         release.ID,
+			"flynn-controller.type":            "runner",
+			"flynn-controller.discoverd_allow": "",
+			"foo":                              "baz",
+			"gc.max_inactive_slug_releases":    "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env["FLYNN_JOB_NAME"], Equals, name)
@@ -594,12 +595,13 @@ func (s *S) TestRunJobAttached(c *C) {
 		c.Assert(ct.IsJobName(name), Equals, true)
 		delete(job.Metadata, host.MetaControllerName)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
-			"flynn-controller.app":          app.ID,
-			"flynn-controller.app_name":     app.Name,
-			"flynn-controller.release":      release.ID,
-			"flynn-controller.type":         "console",
-			"foo":                           "baz",
-			"gc.max_inactive_slug_releases": "10",
+			"flynn-controller.app":             app.ID,
+			"flynn-controller.app_name":        app.Name,
+			"flynn-controller.release":         release.ID,
+			"flynn-controller.type":            "console",
+			"flynn-controller.discoverd_allow": "",
+			"foo":                              "baz",
+			"gc.max_inactive_slug_releases":    "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env["FLYNN_JOB_NAME"], Equals, name)

@@ -92,6 +92,7 @@ var preparedStatements = map[string]string{
 	"resource_list":                            resourceListQuery,
 	"resource_list_by_provider":                resourceListByProviderQuery,
 	"resource_list_by_app":                     resourceListByAppQuery,
+	"resource_env_list_by_apps":                resourceEnvListByAppsQuery,
 	"resource_select":                          resourceSelectQuery,
 	"resource_insert":                          resourceInsertQuery,
 	"resource_update":                          resourceUpdateQuery,
@@ -822,6 +823,11 @@ SELECT resource_id, provider_id, external_id, env,
 FROM resources r
 WHERE provider_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC`
+	resourceEnvListByAppsQuery = `
+SELECT a.app_id, r.env
+FROM app_resources a
+JOIN resources r USING (resource_id)
+WHERE a.app_id = ANY($1) AND a.deleted_at IS NULL AND r.deleted_at IS NULL`
 	resourceListByAppQuery = `
 SELECT DISTINCT(r.resource_id), r.provider_id, r.external_id, r.env,
   ARRAY(

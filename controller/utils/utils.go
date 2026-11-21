@@ -13,6 +13,7 @@ import (
 	"github.com/randy-girard/flynn/host/volume"
 	"github.com/randy-girard/flynn/pkg/attempt"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 	"github.com/randy-girard/flynn/pkg/stream"
 )
 
@@ -52,6 +53,9 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 	metadata["flynn-controller.type"] = name
 	if t.RuntimeProfile != "" {
 		metadata[host.MetaControllerRuntime] = t.RuntimeProfile
+	}
+	if f.DiscoverdAllow != nil {
+		metadata[netpolicy.MetaJobDiscoverdAllow] = strings.Join(f.DiscoverdAllow, ",")
 	}
 	job := &host.Job{
 		ID:       id,

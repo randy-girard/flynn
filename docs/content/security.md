@@ -325,6 +325,19 @@ dropped. They still use discoverd (`:1111`) and DNS (`:53`), and they still
 reach other datastore peers and system overlay IPs. `/data` stays mounted.
 User jobs can still open the documented data-plane ports.
 
+Discoverd DNS answers a user job only for `leader.<service>.discoverd` names
+of datastores attached to its app. The list comes from the controller's
+resource records (`addons:create`, `addons:attach`), which only a
+provider or the cluster key can write, and the controller and scheduler
+stamp it on each job as the reserved `flynn-controller.discoverd_allow`
+metadata. Release env, `flynn env:set` and `flynn run -e` values are not
+read, so setting `X=leader.redis-other.discoverd` does not let a job resolve
+another app's datastore. Formation jobs pick up a newly attached or
+detached resource on the next deploy (attaching one sets env, which
+deploys); one-off jobs read the current list. Jobs started by a controller from
+before this rule (still running after an update) keep the list read from
+their env until they are next deployed.
+
 These rules match ipsets that hold the overlay IPs of each job class
 (`flynn-net-user`, `flynn-net-build`, `flynn-net-data`, `flynn-net-sys`) and
 the cluster node IPs (`flynn-net-nodes`). flynn-host adds a job's IP when it

@@ -35,6 +35,13 @@
       "description": "process tags",
       "type": "object"
     },
+    "discoverd_allow": {
+      "description": "datastore services the app's jobs may resolve through discoverd DNS, from the resources attached to the app",
+      "type": ["array", "null"],
+      "items": {
+        "type": "string"
+      }
+    },
     "pending_scale_request": {
       "description": "pending scale request",
       "type": "object"

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/random"
 )
@@ -332,7 +333,58 @@ func (r *FormationRepo) GetExpanded(appID, releaseID string, includeDeleted bool
 		return nil, err
 	}
 	populateFormationArtifacts(ef, artifacts)
+	if err := r.populateDiscoverdAllow([]*ct.ExpandedFormation{ef}); err != nil {
+		return nil, err
+	}
 	return ef, nil
+}
+
+// populateDiscoverdAllow sets DiscoverdAllow on each formation from the env
+// of the resources attached to its app. Resource rows are written by a
+// provider or the cluster key, so a tenant's release env cannot add a
+// datastore here. One query covers every app in the list.
+func (r *FormationRepo) populateDiscoverdAllow(formations []*ct.ExpandedFormation) error {
+	if len(formations) == 0 {
+		return nil
+	}
+	appIDs := make([]string, 0, len(formations))
+	seen := make(map[string]struct{}, len(formations))
+	for _, f := range formations {
+		if f.App == nil || f.App.ID == "" {
+			continue
+		}
+		if _, ok := seen[f.App.ID]; ok {
+			continue
+		}
+		seen[f.App.ID] = struct{}{}
+		appIDs = append(appIDs, f.App.ID)
+	}
+	envs := make(map[string][]map[string]string, len(appIDs))
+	if len(appIDs) > 0 {
+		rows, err := r.db.Query("resource_env_list_by_apps", fmt.Sprintf("{%s}", strings.Join(appIDs, ",")))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var appID string
+			var env map[string]string
+			if err := rows.Scan(&appID, &env); err != nil {
+				return err
+			}
+			envs[appID] = append(envs[appID], env)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	for _, f := range formations {
+		if f.App == nil {
+			continue
+		}
+		f.DiscoverdAllow = netpolicy.AttachedDiscoverdServices(envs[f.App.ID])
+	}
+	return nil
 }
 
 func (r *FormationRepo) List(appID string) ([]*ct.Formation, error) {
@@ -395,8 +447,13 @@ func (r *FormationRepo) listExpanded(rows *pgx.Rows) ([]*ct.ExpandedFormation, e
 			populateFormationArtifacts(formation, artifacts)
 		}
 	}
-
-	return formations, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.populateDiscoverdAllow(formations); err != nil {
+		return nil, err
+	}
+	return formations, nil
 }
 
 func (r *FormationRepo) UpdateScaleRequest(req *ct.ScaleRequest) error {

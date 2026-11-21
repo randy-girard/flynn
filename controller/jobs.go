@@ -18,6 +18,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 	"github.com/randy-girard/flynn/pkg/random"
 	"golang.org/x/net/context"
 )
@@ -334,6 +335,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	if name != "" {
 		metadata[host.MetaControllerName] = name
 	}
+	if err := c.stampDiscoverdAllow(app, newJob.Meta, metadata); err != nil {
+		respondWithError(w, err)
+		return
+	}
 	job := &host.Job{
 		ID:       id,
 		Metadata: metadata,
@@ -530,6 +535,9 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 	metadata[host.MetaControllerAppName] = app.Name
 	metadata["flynn-controller.release"] = release.ID
 	metadata["flynn-controller.type"] = procType
+	if err := c.stampDiscoverdAllow(app, newJob.Meta, metadata); err != nil {
+		return nil, err
+	}
 	job := &host.Job{
 		ID:       id,
 		Metadata: metadata,
@@ -572,6 +580,37 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 		Args:      newJob.Args,
 		Meta:      newJob.Meta,
 	}, nil
+}
+
+// stampDiscoverdAllow sets the discoverd DNS allowlist on a one-off job of a
+// user app from the resources attached to it. Release and one-off env are
+// tenant input and are not read. A trusted caller (cluster admin, system app)
+// that passed the reserved key itself keeps it; a tenant's copy was already
+// stripped by sanitizeOneOffJob. A failed lookup refuses the job rather than
+// start it with a list that might be wrong.
+func (c *controllerAPI) stampDiscoverdAllow(app *ct.App, jobMeta, metadata map[string]string) error {
+	if app == nil || app.System() {
+		return nil
+	}
+	if v, ok := jobMeta[netpolicy.MetaJobDiscoverdAllow]; ok {
+		metadata[netpolicy.MetaJobDiscoverdAllow] = v
+		return nil
+	}
+	if c.resourceRepo == nil {
+		return fmt.Errorf("cannot list attached resources")
+	}
+	list, err := c.resourceRepo.AppList(app.ID)
+	if err != nil {
+		return err
+	}
+	envs := make([]map[string]string, 0, len(list))
+	for _, r := range list {
+		if r != nil {
+			envs = append(envs, r.Env)
+		}
+	}
+	metadata[netpolicy.MetaJobDiscoverdAllow] = strings.Join(netpolicy.AttachedDiscoverdServices(envs), ",")
+	return nil
 }
 
 func (c *controllerAPI) attachedResourceIDs(app *ct.App) []string {

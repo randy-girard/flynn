@@ -124,3 +124,123 @@ func TestUserMayResolveAttached(t *testing.T) {
 		t.Fatal("allowlist must not open non-datastore services")
 	}
 }
+
+// TestDiscoverdAllowIgnoresTenantSetEnv: a tenant controls release and
+// one-off env, so `flynn env:set X=leader.redis-victim.discoverd` must not
+// widen the DNS allowlist. Only the controller-stamped job metadata counts.
+func TestDiscoverdAllowIgnoresTenantSetEnv(t *testing.T) {
+	path := t.TempDir() + "/installed-plugins.json"
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", path)
+	if err := plugin.WriteInstalled(path, []plugin.Installed{
+		{Name: "redis", Datastore: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tenantEnv := map[string]string{
+		"X":           "leader.redis-victim-11111.discoverd",
+		"REDIS_URL":   "redis://:x@leader.redis-victim-22222.discoverd:6379",
+		"FLYNN_REDIS": "redis-victim-33333",
+	}
+
+	attached := OverlayInstanceMeta(&host.Job{
+		ID: "node1-abc",
+		Metadata: map[string]string{
+			"flynn-controller.app_name": "app-one",
+			"flynn-controller.type":     "web",
+			MetaJobDiscoverdAllow:       "redis-lagoon-59415",
+		},
+		Config: host.ContainerConfig{Env: tenantEnv},
+	})
+	if got := attached[MetaDiscoverdAllow]; got != "redis-lagoon-59415" {
+		t.Fatalf("allow=%q, want only the stamped attachment", got)
+	}
+
+	none := OverlayInstanceMeta(&host.Job{
+		ID: "node1-def",
+		Metadata: map[string]string{
+			"flynn-controller.app_name": "app-one",
+			"flynn-controller.type":     "web",
+			MetaJobDiscoverdAllow:       "",
+		},
+		Config: host.ContainerConfig{Env: tenantEnv},
+	})
+	if v, ok := none[MetaDiscoverdAllow]; !ok || v != "" {
+		t.Fatalf("allow=%q present=%v, want empty: env must not add services", v, ok)
+	}
+
+	// The stamp is filtered the same way: a non-datastore name never opens.
+	filtered := OverlayInstanceMeta(&host.Job{
+		ID: "node1-ghi",
+		Metadata: map[string]string{
+			"flynn-controller.app_name": "app-one",
+			"flynn-controller.type":     "web",
+			MetaJobDiscoverdAllow:       "app-two-web, Redis-Lagoon-59415,controller",
+		},
+	})
+	if got := filtered[MetaDiscoverdAllow]; got != "redis-lagoon-59415" {
+		t.Fatalf("allow=%q", got)
+	}
+}
+
+// Jobs started by a controller from before the stamp existed keep running
+// across a flynn-host update. They keep the env-derived list so their
+// datastore still resolves; every job a current controller starts is stamped.
+func TestDiscoverdAllowLegacyJobWithoutStampUsesEnv(t *testing.T) {
+	path := t.TempDir() + "/installed-plugins.json"
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", path)
+	if err := plugin.WriteInstalled(path, []plugin.Installed{
+		{Name: "redis", Datastore: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	meta := OverlayInstanceMeta(&host.Job{
+		ID: "node1-old",
+		Metadata: map[string]string{
+			"flynn-controller.app_name": "app-one",
+			"flynn-controller.type":     "web",
+		},
+		Config: host.ContainerConfig{Env: map[string]string{
+			"REDIS_URL": "redis://:x@leader.redis-lagoon-59415.discoverd:6379",
+		}},
+	})
+	if got := meta[MetaDiscoverdAllow]; got != "redis-lagoon-59415" {
+		t.Fatalf("allow=%q", got)
+	}
+}
+
+func TestAttachedDiscoverdServices(t *testing.T) {
+	path := t.TempDir() + "/installed-plugins.json"
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", path)
+	if err := plugin.WriteInstalled(path, []plugin.Installed{
+		{Name: "redis", Datastore: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := AttachedDiscoverdServices([]map[string]string{
+		{"FLYNN_REDIS": "redis-lagoon-59415", "REDIS_URL": "redis://:x@leader.redis-lagoon-59415.discoverd:6379"},
+		{"DATABASE_URL": "postgres://u:p@leader.postgresql-concave-48291.discoverd:5432/db"},
+		nil,
+		{"FOO": "bar"},
+	})
+	if strings.Join(got, ",") != "postgresql-concave-48291,redis-lagoon-59415" {
+		t.Fatalf("got %v", got)
+	}
+	// The controller has no installed-plugins.json: shared appliance names
+	// are kept here and filtered on the host.
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", t.TempDir()+"/missing.json")
+	if got := AttachedDiscoverdServices([]map[string]string{{"FLYNN_MYSQL": "MariaDB"}}); strings.Join(got, ",") != "mariadb" {
+		t.Fatalf("got %v", got)
+	}
+	if got := AttachedDiscoverdServices(nil); got == nil || len(got) != 0 {
+		t.Fatalf("no resources must give an empty, non-nil list, got %#v", got)
+	}
+	job := &host.Job{}
+	StampDiscoverdAllow(job, []string{"redis-a", "pg-b"})
+	if job.Metadata[MetaJobDiscoverdAllow] != "redis-a,pg-b" {
+		t.Fatalf("stamp=%q", job.Metadata[MetaJobDiscoverdAllow])
+	}
+	StampDiscoverdAllow(job, nil)
+	if v, ok := job.Metadata[MetaJobDiscoverdAllow]; !ok || v != "" {
+		t.Fatalf("empty stamp=%q ok=%v", v, ok)
+	}
+}
