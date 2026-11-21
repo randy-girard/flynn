@@ -7,11 +7,15 @@ import (
 	"math/big"
 	"net"
 	"sync"
+	"time"
 )
 
 // allocatedMap is thread-unsafe set of allocated IP
 type allocatedMap struct {
-	p     map[string]struct{}
+	p map[string]struct{}
+	// held are released addresses in quarantine, with the time they may be
+	// handed out again. Each one is also in p, so getNextIP skips it.
+	held  map[string]time.Time
 	last  *big.Int
 	begin *big.Int
 	end   *big.Int
@@ -24,6 +28,7 @@ func newAllocatedMap(network *net.IPNet) *allocatedMap {
 
 	return &allocatedMap{
 		p:     make(map[string]struct{}),
+		held:  make(map[string]time.Time),
 		begin: begin,
 		end:   end,
 		last:  big.NewInt(0).Sub(begin, big.NewInt(1)), // so first allocated will be begin
@@ -49,11 +54,12 @@ var (
 type IPAllocator struct {
 	allocatedIPs networkSet
 	mutex        sync.Mutex
+	now          func() time.Time
 }
 
 // New returns a new instance of IPAllocator
 func New() *IPAllocator {
-	return &IPAllocator{networkSet{}, sync.Mutex{}}
+	return &IPAllocator{allocatedIPs: networkSet{}, now: time.Now}
 }
 
 // RegisterSubnet registers network in global allocator with bounds
@@ -96,6 +102,7 @@ func (a *IPAllocator) RequestIP(network *net.IPNet, ip net.IP) (net.IP, error) {
 		a.allocatedIPs[key] = allocated
 	}
 
+	allocated.expireHeld(a.now())
 	if ip == nil {
 		return allocated.getNextIP()
 	}
@@ -111,8 +118,74 @@ func (a *IPAllocator) ReleaseIP(network *net.IPNet, ip net.IP) error {
 	nw := &net.IPNet{IP: network.IP.Mask(network.Mask), Mask: network.Mask}
 	if allocated, exists := a.allocatedIPs[nw.String()]; exists {
 		delete(allocated.p, ip.String())
+		delete(allocated.held, ip.String())
 	}
 	return nil
+}
+
+// ReleaseIPAfter puts ip in quarantine until the given time: RequestIP does
+// not return it before then, unless every other address in the network is
+// taken. ip does not have to be allocated, so a restarted host can hold
+// addresses that the previous process released. If ip is already held, the
+// later deadline wins. A deadline that has passed releases ip at once.
+func (a *IPAllocator) ReleaseIPAfter(network *net.IPNet, ip net.IP, until time.Time) error {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
+	nw := &net.IPNet{IP: network.IP.Mask(network.Mask), Mask: network.Mask}
+	key := nw.String()
+	allocated, ok := a.allocatedIPs[key]
+	if !ok {
+		allocated = newAllocatedMap(nw)
+		a.allocatedIPs[key] = allocated
+	}
+	k := ip.String()
+	if !until.After(a.now()) {
+		delete(allocated.p, k)
+		delete(allocated.held, k)
+		return nil
+	}
+	pos := ipToBigInt(ip)
+	if pos == nil || pos.Cmp(allocated.begin) == -1 || pos.Cmp(allocated.end) == 1 {
+		return ErrIPOutOfRange
+	}
+	if prev, ok := allocated.held[k]; ok && prev.After(until) {
+		return nil
+	}
+	allocated.p[k] = struct{}{}
+	allocated.held[k] = until
+	return nil
+}
+
+// expireHeld frees quarantined addresses whose deadline has passed.
+func (allocated *allocatedMap) expireHeld(now time.Time) {
+	for k, until := range allocated.held {
+		if !until.After(now) {
+			delete(allocated.p, k)
+			delete(allocated.held, k)
+		}
+	}
+}
+
+// takeEarliestHeld hands out the quarantined address with the nearest
+// deadline. It is the fallback when no address is free.
+func (allocated *allocatedMap) takeEarliestHeld() (net.IP, bool) {
+	var best string
+	var bestUntil time.Time
+	for k, until := range allocated.held {
+		if best == "" || until.Before(bestUntil) || (until.Equal(bestUntil) && k < best) {
+			best, bestUntil = k, until
+		}
+	}
+	if best == "" {
+		return nil, false
+	}
+	delete(allocated.held, best)
+	ip := net.ParseIP(best)
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+	return ip, true
 }
 
 func (allocated *allocatedMap) checkIP(ip net.IP) (net.IP, error) {
@@ -148,6 +221,9 @@ func (allocated *allocatedMap) getNextIP() (net.IP, error) {
 		allocated.p[bigIntToIP(pos).String()] = struct{}{}
 		allocated.last.Set(pos)
 		return bigIntToIP(pos), nil
+	}
+	if ip, ok := allocated.takeEarliestHeld(); ok {
+		return ip, nil
 	}
 	return nil, ErrNoAvailableIPs
 }
