@@ -373,8 +373,39 @@ func (p *Peer) setState(state *State) {
 
 func (p *Peer) setPeers(peers []*discoverd.Instance) {
 	info := *p.Info()
-	info.Peers = peers
+	info.Peers = collapsePeers(p.idKey, peers)
 	p.setInfo(info)
+}
+
+// collapsePeers keeps one discoverd instance per appliance ID. discoverd keys
+// instances by address, so a replaced job that reused its data volume (and
+// thus its appliance ID) is listed at both addresses until the old
+// registration expires. The newest registration (highest Index; later in the
+// list on a tie) wins and the order of the kept instances is unchanged.
+// Instances without an appliance ID are kept as they are.
+func collapsePeers(idKey string, peers []*discoverd.Instance) []*discoverd.Instance {
+	newest := make(map[string]int, len(peers))
+	for i, peer := range peers {
+		id := peerApplianceID(idKey, peer)
+		if id == "" {
+			continue
+		}
+		if j, ok := newest[id]; !ok || peer.Index >= peers[j].Index {
+			newest[id] = i
+		}
+	}
+	if len(newest) == len(peers) {
+		return peers
+	}
+	out := make([]*discoverd.Instance, 0, len(newest))
+	for i, peer := range peers {
+		id := peerApplianceID(idKey, peer)
+		if id != "" && newest[id] != i {
+			continue
+		}
+		out = append(out, peer)
+	}
+	return out
 }
 
 func (p *Peer) setRole(role Role) {
@@ -1286,8 +1317,11 @@ func (p *Peer) startTransitionToNormalMode() {
 
 	// In the normal takeover case, we'd pick an async. In this case, we take
 	// any other peer because we know none of them has anything replicated.
+	// One appliance ID may be listed at two addresses (see collapsePeers);
+	// each peer must appear once, or it becomes its own downstream.
+	peers := collapsePeers(p.idKey, p.Info().Peers)
 	var newSync *discoverd.Instance
-	for _, peer := range p.Info().Peers {
+	for _, peer := range peers {
 		if peer.Meta[p.idKey] != p.id {
 			newSync = peer
 		}
@@ -1296,8 +1330,8 @@ func (p *Peer) startTransitionToNormalMode() {
 		log.Warn("would takeover but no peers present")
 		return
 	}
-	newAsync := make([]*discoverd.Instance, 0, len(p.Info().Peers))
-	for _, a := range p.Info().Peers {
+	newAsync := make([]*discoverd.Instance, 0, len(peers))
+	for _, a := range peers {
 		if a.Meta[p.idKey] != p.id && a.Meta[p.idKey] != newSync.Meta[p.idKey] {
 			newAsync = append(newAsync, a)
 		}
@@ -1738,6 +1772,7 @@ func nextAsyncMembership(idKey string, st *State, peers []*discoverd.Instance) (
 	if st == nil {
 		return nil, nil, false
 	}
+	peers = collapsePeers(idKey, peers)
 	keepMissing := hasNewcomerPeer(idKey, peers, assignedReplicaIDs(idKey, st))
 
 	newAsync = make([]*discoverd.Instance, 0, len(peers))
@@ -1796,6 +1831,7 @@ func nextAsyncMembership(idKey string, st *State, peers []*discoverd.Instance) (
 		if _, ok := present[id]; ok {
 			continue
 		}
+		present[id] = struct{}{}
 		newAsync = append(newAsync, peer)
 		changes = true
 	}

@@ -248,6 +248,12 @@ set up during the copy; writes still pause for a few seconds when the old
 sync is stopped and sirenia promotes the async, which is the same window a
 sync failure already causes.
 
+A peer is identified by the ID stored on its data volume, not by its address.
+When a job is replaced and the new job reuses the volume, discoverd can list
+the old and the new address for a short time. Sirenia counts that peer once
+and uses its newest registration, so a peer never appears twice in the chain
+and never becomes its own downstream.
+
 The cluster state is maintained by the primary and stored in discoverd. The
 discoverd DNS and HTTP APIs expose the current primary instance.
 
