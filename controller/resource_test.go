@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/controller/api"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/random"
@@ -404,4 +405,89 @@ func (s *S) TestAttachUnownedResourceNeedsClusterKey(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(got.OwnerAccount, Equals, "")
 	c.Assert(got.Apps, HasLen, 0)
+}
+
+// countingProvider is a provider that counts provision calls.
+func (s *S) countingProvider(c *C, name string) (*ct.Provider, *int, func()) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == "DELETE" {
+			w.WriteHeader(200)
+			return
+		}
+		calls++
+		w.Write([]byte(fmt.Sprintf(`{"id":"/things/%s-%d","env":{"foo":"baz"}}`, name, calls)))
+	}))
+	p := s.createTestProvider(c, &ct.Provider{URL: fmt.Sprintf("http://%s/things", srv.Listener.Addr()), Name: name})
+	return p, &calls, srv.Close
+}
+
+func (s *S) TestProvisionRejectsSecondAppOfAnotherAccount(c *C) {
+	ada, bev := random.UUID(), random.UUID()
+	mine := s.createTestApp(c, &ct.App{Name: "prov-two-mine", OwnerAccount: "user:" + ada})
+	victim := s.createTestApp(c, &ct.App{Name: "prov-two-victim", OwnerAccount: "user:" + bev})
+	p, calls, done := s.countingProvider(c, "prov-two")
+	defer done()
+	path := "/providers/" + p.ID + "/resources"
+
+	for _, apps := range []string{
+		`["` + mine.ID + `","` + victim.ID + `"]`,
+		`["` + mine.ID + `","` + victim.Name + `"]`,
+	} {
+		code, body := s.resourceAuthz(c, "POST", s.signUser(c, ada, nil), path, `{"apps":`+apps+`}`)
+		c.Assert(code, Equals, 403, Commentf(body))
+	}
+	// The cluster key cannot mix owners either.
+	code, body := s.resourceAuthz(c, "POST", authKey, path, `{"apps":["`+mine.ID+`","`+victim.ID+`"]}`)
+	c.Assert(code, Equals, 403, Commentf(body))
+
+	c.Assert(*calls, Equals, 0)
+	for _, app := range []*ct.App{mine, victim} {
+		list, err := s.c.AppResourceList(app.ID)
+		c.Assert(err, IsNil)
+		c.Assert(list, HasLen, 0)
+	}
+}
+
+func (s *S) TestProvisionRequiresManageOnEveryApp(c *C) {
+	ada, bev := random.UUID(), random.UUID()
+	// Both apps belong to bev; ada holds a grant on the first one only.
+	first := s.createTestApp(c, &ct.App{Name: "prov-manage-a", OwnerAccount: "user:" + bev})
+	second := s.createTestApp(c, &ct.App{Name: "prov-manage-b", OwnerAccount: "user:" + bev})
+	p, calls, done := s.countingProvider(c, "prov-manage")
+	defer done()
+	tok := s.signUser(c, ada, []*api.AppGrant{{AppId: first.ID, Permissions: []string{"app:write"}}})
+	code, body := s.resourceAuthz(c, "POST", tok, "/providers/"+p.ID+"/resources",
+		`{"apps":["`+first.ID+`","`+second.ID+`"]}`)
+	c.Assert(code, Equals, 403, Commentf(body))
+	c.Assert(*calls, Equals, 0)
+}
+
+func (s *S) TestProvisionAllowsSeveralAppsOfOneAccount(c *C) {
+	ada := random.UUID()
+	a := s.createTestApp(c, &ct.App{Name: "prov-same-a", OwnerAccount: "user:" + ada})
+	b := s.createTestApp(c, &ct.App{Name: "prov-same-b", OwnerAccount: "user:" + ada})
+	p, calls, done := s.countingProvider(c, "prov-same")
+	defer done()
+	code, body := s.resourceAuthz(c, "POST", s.signUser(c, ada, nil), "/providers/"+p.ID+"/resources",
+		`{"apps":["`+a.ID+`","`+b.Name+`"]}`)
+	c.Assert(code, Equals, 200, Commentf(body))
+	c.Assert(*calls, Equals, 1)
+	var res ct.Resource
+	c.Assert(json.Unmarshal([]byte(body), &res), IsNil)
+	c.Assert(res.Apps, DeepEquals, []string{a.ID, b.ID})
+	c.Assert(res.OwnerAccount, Equals, "user:"+ada)
+	c.Assert(res.OwnerApp, Equals, a.ID)
+}
+
+func (s *S) TestProvisionPlatformPostgresChecksEveryApp(c *C) {
+	sys := s.createTestApp(c, &ct.App{Name: "sys-two-pg", Meta: map[string]string{"flynn-system-app": "true"}})
+	user := s.createTestApp(c, &ct.App{Name: "user-two-pg"})
+	p := s.createTestProvider(c, &ct.Provider{URL: "http://postgres-api.discoverd/databases?suite=two", Name: "platform-postgres-two"})
+	_, err := s.c.ProvisionResource(&ct.ResourceReq{ProviderID: p.ID, Apps: []string{sys.ID, user.ID}})
+	c.Assert(err, NotNil)
+	c.Assert(err.Error(), Matches, ".*flynn-plugin-postgres.*")
+	list, err := s.c.AppResourceList(user.ID)
+	c.Assert(err, IsNil)
+	c.Assert(list, HasLen, 0)
 }

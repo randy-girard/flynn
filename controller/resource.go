@@ -62,16 +62,13 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	}
 	var owner string
 	var target *ct.App
+	var apps []*ct.App
 	if len(rr.Apps) > 0 {
-		app, err := c.appRepo.Get(rr.Apps[0])
-		if err != nil {
-			respondWithError(w, err)
+		var ok bool
+		if apps, ok = c.provisionApps(ctx, w, rr.Apps); !ok {
 			return
 		}
-		target = app.(*ct.App)
-		if !c.requireAppManage(ctx, w, target) {
-			return
-		}
+		target = apps[0]
 		if err := c.rejectIfSuspended(target.OwnerAccount); err != nil {
 			respondWithError(w, err)
 			return
@@ -139,7 +136,11 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	// the controller and blobstore databases (system apps, platform marker).
 	// A tenant app never reaches the appliance, so no tenant role is created.
 	if pgappliance.IsPlatformApplianceURL(p.URL) {
-		if !pgappliance.AllowPlatformApp(target != nil && target.System(), target != nil && target.Plugin()) {
+		allowed := len(apps) > 0
+		for _, app := range apps {
+			allowed = allowed && pgappliance.AllowPlatformApp(app.System(), app.Plugin())
+		}
+		if !allowed {
 			respondWithError(w, ct.ValidationError{Field: "provider", Message: pgappliance.ErrTenantProvision.Error()})
 			return
 		}
@@ -194,6 +195,31 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		return
 	}
 	httphelper.JSON(w, 200, res)
+}
+
+// provisionApps loads every app named in a provision request. The caller must
+// manage each one, and each must have the owner_account of the first, the
+// same rule AddResourceApp applies, so a resource is never attached to an app
+// of another account. It writes the error and returns false on refusal.
+func (c *controllerAPI) provisionApps(ctx context.Context, w http.ResponseWriter, ids []string) ([]*ct.App, bool) {
+	apps := make([]*ct.App, 0, len(ids))
+	for _, id := range ids {
+		raw, err := c.appRepo.Get(id)
+		if err != nil {
+			respondWithError(w, err)
+			return nil, false
+		}
+		app := raw.(*ct.App)
+		if len(apps) > 0 && app.OwnerAccount != apps[0].OwnerAccount {
+			httphelper.Forbidden(w, "every app in apps must have the same owner_account")
+			return nil, false
+		}
+		if !c.requireAppManage(ctx, w, app) {
+			return nil, false
+		}
+		apps = append(apps, app)
+	}
+	return apps, true
 }
 
 // defaultResourceOwner is the account for a resource created with no app.

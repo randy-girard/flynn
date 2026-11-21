@@ -722,7 +722,13 @@ only; bootstrap, migration, and the database plugins use it. All
 `/providers/:p/resources/:id` routes answer 404 when the resource belongs to
 a different provider than the one in the URL. Provision, attach, and
 detach (`flynn resource:add`, `addons:attach`, `resource:remove`) are
-unchanged for the owner.
+unchanged for the owner. `POST /providers/:p/resources` checks every app in
+`apps`, not just the first: the caller needs write or admin on each one, and
+each must have the same `owner_account` as the first (the rule attach
+already applies), so a provision cannot attach a resource to another
+tenant's app. That owner rule holds for the cluster key too. The platform
+Postgres appliance accepts the request only when every listed app is a
+system or plugin app.
 
 `POST /users` creates an account that is already email-verified, so it is
 cluster-admin only (the cluster key or a cluster admin). A logged-in tenant
