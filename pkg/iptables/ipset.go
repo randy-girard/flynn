@@ -1,10 +1,12 @@
 package iptables
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 func ipsetBin() (string, error) {
@@ -15,12 +17,22 @@ func ipsetBin() (string, error) {
 	return path, nil
 }
 
-func ipset(args ...string) error {
+// ipsetExec runs the ipset binary with args, feeding stdin when it is not
+// nil. Tests replace it with a recorder.
+var ipsetExec = func(stdin []byte, args ...string) ([]byte, error) {
 	bin, err := ipsetBin()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	out, err := exec.Command(bin, args...).CombinedOutput()
+	cmd := exec.Command(bin, args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	return cmd.CombinedOutput()
+}
+
+func ipset(args ...string) error {
+	out, err := ipsetExec(nil, args...)
 	if err != nil {
 		return fmt.Errorf("ipset %s: %s (%s)", strings.Join(args, " "), bytesPreview(out), err)
 	}
@@ -71,6 +83,8 @@ func AddSetIP(set string, addr net.IP) error {
 	if addr == nil {
 		return nil
 	}
+	unlock := lockSet(set)
+	defer unlock()
 	if err := EnsureSets(set); err != nil {
 		return err
 	}
@@ -82,6 +96,8 @@ func DelSetIP(set string, addr net.IP) error {
 	if addr == nil {
 		return nil
 	}
+	unlock := lockSet(set)
+	defer unlock()
 	err := ipset("del", set, addr.String())
 	if err != nil && strings.Contains(err.Error(), "not added") {
 		return nil
@@ -89,21 +105,49 @@ func DelSetIP(set string, addr net.IP) error {
 	return err
 }
 
-// ReplaceSetIPs flushes set and adds addrs.
+// setLocks serialises changes to one named set, so an incremental add or
+// delete cannot land on the temporary set between fill and swap, and two
+// replaces of the same set cannot share the temporary name.
+var setLocks sync.Map // set name -> *sync.Mutex
+
+func lockSet(set string) func() {
+	m, _ := setLocks.LoadOrStore(set, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// tempSetName is the scratch set ReplaceSetIPs fills before the swap. ipset
+// names are at most 31 characters.
+func tempSetName(set string) string { return set + "-swap" }
+
+// ReplaceSetIPs makes set contain exactly addrs without ever emptying it.
+// Every isolation rule matches `--match-set <set>`, so a flush followed by
+// one add per IP left user jobs unmatched (unrestricted) until the last add.
+// One `ipset restore` fills a temporary set and swaps it with the live set;
+// the swap is a single kernel operation, so a packet sees either the old or
+// the new contents. On error the live set is left as it was.
 func ReplaceSetIPs(set string, addrs []net.IP) error {
+	unlock := lockSet(set)
+	defer unlock()
 	if err := EnsureSets(set); err != nil {
 		return err
 	}
-	if err := ipset("flush", set); err != nil {
-		return err
-	}
+	tmp := tempSetName(set)
+	var b strings.Builder
+	fmt.Fprintf(&b, "create %s hash:ip family inet\n", tmp)
+	fmt.Fprintf(&b, "flush %s\n", tmp)
 	for _, addr := range addrs {
 		if addr == nil {
 			continue
 		}
-		if err := ipset("add", set, addr.String(), "-exist"); err != nil {
-			return err
-		}
+		fmt.Fprintf(&b, "add %s %s\n", tmp, addr.String())
+	}
+	fmt.Fprintf(&b, "swap %s %s\n", tmp, set)
+	fmt.Fprintf(&b, "destroy %s\n", tmp)
+	out, err := ipsetExec([]byte(b.String()), "-exist", "restore")
+	if err != nil {
+		return fmt.Errorf("ipset restore %s: %s (%s)", set, bytesPreview(out), err)
 	}
 	return nil
 }
