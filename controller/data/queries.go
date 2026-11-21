@@ -8,6 +8,9 @@ import (
 var preparedStatements = map[string]string{
 	"ping":                                     pingQuery,
 	"app_list":                                 appListQuery,
+	"app_list_by_refs":                         appListByRefsQuery,
+	"app_list_by_owner":                        appListByOwnerQuery,
+	"app_list_plugins":                         appListPluginsQuery,
 	"app_list_page":                            appListPageQuery,
 	"app_visible_list_page":                    appVisibleListPageQuery,
 	"app_select_by_name":                       appSelectByNameQuery,
@@ -92,6 +95,8 @@ var preparedStatements = map[string]string{
 	"provider_update_tenant_safe":              providerUpdateTenantSafeQuery,
 	"resource_list":                            resourceListQuery,
 	"resource_list_by_provider":                resourceListByProviderQuery,
+	"resource_list_by_owners":                  resourceListByOwnersQuery,
+	"resource_list_by_provider_and_owners":     resourceListByProviderAndOwnersQuery,
 	"resource_list_by_app":                     resourceListByAppQuery,
 	"resource_env_list_by_apps":                resourceEnvListByAppsQuery,
 	"datastore_guard_app_refs":                 datastoreGuardAppRefsQuery,
@@ -182,6 +187,12 @@ var preparedStatements = map[string]string{
 	"github_repo_delete":                       githubRepoDeleteQuery,
 }
 
+// PreparedSQL is the SQL text of a prepared statement, "" if the name is
+// unknown. pgx logs the text, not the name, so query-count tests use this.
+func PreparedSQL(name string) string {
+	return preparedStatements[name]
+}
+
 func PrepareStatements(conn *pgx.Conn) error {
 	for name, sql := range preparedStatements {
 		if _, err := conn.Prepare(name, sql); err != nil {
@@ -198,6 +209,17 @@ const (
 	appListQuery = `
 SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps WHERE deleted_at IS NULL ORDER BY created_at DESC`
+	// $1 is app ids (uuid text), $2 names. One read for a batch of app
+	// references, the same rows selectApp returns one at a time.
+	appListByRefsQuery = `
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
+FROM apps WHERE deleted_at IS NULL AND (app_id = ANY($1::text[]::uuid[]) OR name = ANY($2::text[]))`
+	appListByOwnerQuery = `
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
+FROM apps WHERE deleted_at IS NULL AND owner_account = $1 ORDER BY created_at DESC`
+	appListPluginsQuery = `
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
+FROM apps WHERE deleted_at IS NULL AND COALESCE(meta->>'flynn-plugin', '') = 'true' ORDER BY created_at DESC`
 	appListPageQuery = `
 SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps
@@ -827,6 +849,30 @@ SELECT resource_id, provider_id, external_id, env,
   ), created_at, owner_account, owner_app
 FROM resources r
 WHERE provider_id = $1 AND deleted_at IS NULL
+ORDER BY created_at DESC`
+	// The owner filters keep a tenant list to the accounts the caller
+	// administers, so no row outside them is read.
+	resourceListByOwnersQuery = `
+SELECT resource_id, provider_id, external_id, env,
+  ARRAY(
+	SELECT a.app_id
+    FROM app_resources a
+	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
+	ORDER BY a.created_at DESC
+  ), created_at, owner_account, owner_app
+FROM resources r
+WHERE owner_account = ANY($1::text[]) AND deleted_at IS NULL
+ORDER BY created_at DESC`
+	resourceListByProviderAndOwnersQuery = `
+SELECT resource_id, provider_id, external_id, env,
+  ARRAY(
+	SELECT a.app_id
+    FROM app_resources a
+	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
+	ORDER BY a.created_at DESC
+  ), created_at, owner_account, owner_app
+FROM resources r
+WHERE provider_id = $1 AND owner_account = ANY($2::text[]) AND deleted_at IS NULL
 ORDER BY created_at DESC`
 	// One row per live app: owner, current release env, and the env of each
 	// attached resource. The app-deletion datastore guard reads this once

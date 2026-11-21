@@ -276,6 +276,76 @@ func (r *AppRepo) List() (interface{}, error) {
 	return apps, rows.Err()
 }
 
+// ListByOwner lists the live apps owned by account, newest first.
+func (r *AppRepo) ListByOwner(account string) ([]*ct.App, error) {
+	return r.listApps("app_list_by_owner", account)
+}
+
+// ListPlugins lists the live apps installed by flynn-host plugin:install
+// (meta flynn-plugin=true), newest first.
+func (r *AppRepo) ListPlugins() ([]*ct.App, error) {
+	return r.listApps("app_list_plugins")
+}
+
+// GetMany resolves app references the way Get does, in one query: a ref
+// shaped like an app id matches that id first, then a name. The result maps
+// each ref that resolved to its app; missing and deleted apps are left out.
+func (r *AppRepo) GetMany(refs []string) (map[string]*ct.App, error) {
+	out := make(map[string]*ct.App, len(refs))
+	if len(refs) == 0 {
+		return out, nil
+	}
+	ids := []string{}
+	for _, ref := range refs {
+		if idPattern.MatchString(ref) {
+			ids = append(ids, ref)
+		}
+	}
+	apps, err := r.listApps("app_list_by_refs", ids, refs)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]*ct.App, len(apps))
+	byName := make(map[string]*ct.App, len(apps))
+	for _, app := range apps {
+		byID[compactAppID(app.ID)] = app
+		byName[app.Name] = app
+	}
+	for _, ref := range refs {
+		if idPattern.MatchString(ref) {
+			if app, ok := byID[compactAppID(ref)]; ok {
+				out[ref] = app
+				continue
+			}
+		}
+		if app, ok := byName[ref]; ok {
+			out[ref] = app
+		}
+	}
+	return out, nil
+}
+
+func compactAppID(id string) string {
+	return strings.ReplaceAll(strings.ToLower(id), "-", "")
+}
+
+func (r *AppRepo) listApps(query string, args ...interface{}) ([]*ct.App, error) {
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	apps := []*ct.App{}
+	for rows.Next() {
+		app, err := scanApp(rows)
+		if err != nil {
+			return nil, err
+		}
+		apps = append(apps, app)
+	}
+	return apps, rows.Err()
+}
+
 type ListAppOptions struct {
 	PageToken    PageToken
 	AppIDs       []string

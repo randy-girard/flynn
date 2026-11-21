@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,13 +57,12 @@ func (c *controllerAPI) UnsuspendAccount(ctx context.Context, w http.ResponseWri
 }
 
 func (c *controllerAPI) scaleAccountToZero(account string) {
-	list, err := c.appRepo.List()
+	apps, err := c.appRepo.ListByOwner(account)
 	if err != nil {
 		return
 	}
-	apps, _ := list.([]*ct.App)
 	for _, app := range apps {
-		if app.OwnerAccount != account || app.System() {
+		if app.System() {
 			continue
 		}
 		forms, err := c.formationRepo.List(app.ID)
@@ -318,23 +318,87 @@ func (c *controllerAPI) accessForAccount(ctx context.Context, account string) ac
 			}
 		}
 	}
-	var ledger []access.LedgerRole
-	if rows, err := c.tenancy.ListMemberships(tok.UserID); err == nil {
-		for _, row := range rows {
-			if row.Subject == account {
-				ledger = append(ledger, access.LedgerRole{Subject: row.Subject, Role: row.Role})
-			}
-		}
+	memberships, err := c.tenancy.ListMemberships(tok.UserID)
+	if err != nil {
+		memberships = nil
 	}
 	suspended, _ := c.tenancy.AccountSuspended(account)
+	return resolveAccountAccess(tok.UserID, account, role, memberships, suspended)
+}
+
+// resolveAccountAccess is the account-level access a user holds from an
+// account collaborator role and the user's ledger rows. accessForAccount
+// (one account) and adminOwnerAccounts (every account, batched) share it.
+func resolveAccountAccess(userID, account, role string, memberships []ct.Membership, suspended bool) access.Result {
+	var ledger []access.LedgerRole
+	for _, row := range memberships {
+		if row.Subject == account {
+			ledger = append(ledger, access.LedgerRole{Subject: row.Subject, Role: row.Role})
+		}
+	}
 	return access.Resolve(access.Input{
-		CallerUserID:    tok.UserID,
+		CallerUserID:    userID,
 		OwnerAccount:    account,
 		AccountRole:     role,
 		Ledger:          ledger,
 		OwnerSuspended:  suspended,
 		CallerSuspended: false,
 	})
+}
+
+// adminsAccount is true for owner, org owner/admin or an admin role.
+func adminsAccount(res access.Result) bool {
+	return access.Has(res.Permissions, access.PermAppAdmin) || res.ImplicitOwner || res.OrgManager
+}
+
+// adminOwnerAccounts lists every account a user token administers, with a
+// fixed number of queries: the caller's account collaborations, its ledger
+// rows, and which of those accounts are suspended. Only those accounts can
+// resolve to admin (accessForAccount gives nothing else), so a list filtered
+// to them by owner in SQL keeps the rows the per-account check kept.
+func (c *controllerAPI) adminOwnerAccounts(ctx context.Context) ([]string, error) {
+	tok := authz.TokenFromContext(ctx)
+	if c.tenancy == nil || tok == nil || tok.UserID == "" {
+		return nil, nil
+	}
+	roles, err := c.tenancy.ListUserAccountCollaborations(tok.UserID)
+	if err != nil {
+		return nil, err
+	}
+	// memberships.user_id is a uuid: accessForAccount's lookup fails, and
+	// so finds no rows, for any other id.
+	var memberships []ct.Membership
+	if validUserUUID(tok.UserID) {
+		if memberships, err = c.tenancy.ListMemberships(tok.UserID); err != nil {
+			return nil, err
+		}
+	}
+	candidates := []string{"user:" + tok.UserID}
+	seen := map[string]bool{candidates[0]: true}
+	add := func(account string) {
+		if account != "" && !seen[account] {
+			seen[account] = true
+			candidates = append(candidates, account)
+		}
+	}
+	for account := range roles {
+		add(account)
+	}
+	for _, m := range memberships {
+		add(m.Subject)
+	}
+	suspended, err := c.tenancy.SuspendedAccounts(candidates)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, account := range candidates {
+		if adminsAccount(resolveAccountAccess(tok.UserID, account, roles[account], memberships, suspended[account])) {
+			out = append(out, account)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (c *controllerAPI) ListAccountCollaborators(ctx context.Context, w http.ResponseWriter, _ *http.Request) {

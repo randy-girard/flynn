@@ -295,7 +295,8 @@ Omit `count` and the response is one JSON array. Pass `count` (at most
 `GET /routes` for a user token includes only routes of apps that user owns
 or collaborates on, and hides catalog-internal apps. The `acme:issue`
 service token drops the owner filter and keeps the catalog filter. That filter runs
-before the limit. The cluster key, a nil internal caller, and a
+before the limit. The unpaged list reads the parent apps of all routes in
+one query, not one per route. The cluster key, a nil internal caller, and a
 cluster-admin token see every route, including system apps. That is
 different from `GET /apps`, which hides bootstrap apps unless `?all=true`.
 The router and the host firewall need those routes. Private keys are still
@@ -549,10 +550,15 @@ which for a tenant is none. `GET /whoami/grants` is a user-session route:
 compile and service tokens are denied.
 
 `GET /resources` is open to user sessions. A non-admin user sees only the
-resources whose owner account it administers (its own account, or an
-organization it manages); unowned platform resources and other tenants'
-resources are left out. App-scoped and compile tokens are denied and use
+resources whose owner account it administers (its own account, an
+organization it owns or admins, or an account that made it an `admin`
+collaborator); unowned platform resources, suspended accounts and other
+tenants' resources are left out. `GET /providers/:id/resources` applies the
+same filter. App-scoped and compile tokens are denied and use
 `GET /apps/:id/resources`. A cluster admin still sees every resource.
+The controller works out the administered accounts once per request and
+filters by owner in SQL, so a tenant list runs a fixed number of queries
+however many resources and accounts the cluster holds.
 
 `GET /plugin-catalog` is open to user sessions. It is the plugin commands
 and add-on types the flynn CLI offers (`flynn help`, `addons:types`,

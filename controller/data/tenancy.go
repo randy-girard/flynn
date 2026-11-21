@@ -423,6 +423,52 @@ func (r *TenancyRepo) AccountSuspended(account string) (bool, error) {
 	return suspended, err
 }
 
+// SuspendedAccounts is the subset of accounts that is suspended, in one
+// query.
+func (r *TenancyRepo) SuspendedAccounts(accounts []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(accounts) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(`SELECT account FROM account_state WHERE suspended AND account = ANY($1::text[])`, accounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var account string
+		if err := rows.Scan(&account); err != nil {
+			return nil, err
+		}
+		out[account] = true
+	}
+	return out, rows.Err()
+}
+
+// ListUserAccountCollaborations maps each account userID collaborates on to
+// the role, the rows ListAccountCollaborators returns for that user. The id
+// is compared as text, as accessForAccount compares it, so an id that is
+// not a uuid matches nothing instead of failing.
+func (r *TenancyRepo) ListUserAccountCollaborations(userID string) (map[string]string, error) {
+	rows, err := r.db.Query(`
+		SELECT c.account, c.role
+		FROM account_collaborators c JOIN users u ON u.id=c.user_id
+		WHERE c.user_id::text = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var account, role string
+		if err := rows.Scan(&account, &role); err != nil {
+			return nil, err
+		}
+		out[account] = role
+	}
+	return out, rows.Err()
+}
+
 func (r *TenancyRepo) UpsertAccountCollaborator(account, userID, role string) error {
 	return r.db.Exec(`
 		INSERT INTO account_collaborators (account, user_id, role) VALUES ($1, $2, $3)

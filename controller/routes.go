@@ -236,8 +236,10 @@ func (c *controllerAPI) GetRouteList(ctx context.Context, w http.ResponseWriter,
 	} else {
 		routes, err = c.routeRepo.List("")
 		if err == nil {
-			routes = c.filterRoutes(ctx, routes)
-			sort.Sort(sortedRoutes(routes))
+			routes, err = c.filterRoutes(ctx, routes)
+			if err == nil {
+				sort.Sort(sortedRoutes(routes))
+			}
 		}
 	}
 	if err != nil {

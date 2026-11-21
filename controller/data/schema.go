@@ -1579,6 +1579,12 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 	migrations.Add(95,
 		`ALTER TABLE users ADD COLUMN tokens_valid_after timestamptz`,
 	)
+
+	// A tenant's GET /resources reads only the accounts it administers
+	// (CORE-34), by owner_account.
+	migrations.Add(96,
+		`CREATE INDEX resources_owner_account_idx ON resources (owner_account) WHERE deleted_at IS NULL`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

@@ -209,6 +209,26 @@ func (r *ResourceRepo) ProviderList(providerID string) ([]*ct.Resource, error) {
 	return resourceList(rows)
 }
 
+// ListOwnedBy lists the resources owned by one of owners, newest first. A
+// non-empty providerID limits it to that provider. No owners, no rows.
+func (r *ResourceRepo) ListOwnedBy(providerID string, owners []string) ([]*ct.Resource, error) {
+	if len(owners) == 0 {
+		return []*ct.Resource{}, nil
+	}
+	var rows *pgx.Rows
+	var err error
+	if providerID == "" {
+		rows, err = r.db.Query("resource_list_by_owners", owners)
+	} else {
+		rows, err = r.db.Query("resource_list_by_provider_and_owners", providerID, owners)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return resourceList(rows)
+}
+
 func resourceList(rows *pgx.Rows) ([]*ct.Resource, error) {
 	var resources []*ct.Resource
 	for rows.Next() {

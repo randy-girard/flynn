@@ -402,32 +402,45 @@ func (c *controllerAPI) routeListScope(ctx context.Context) data.RouteListScope 
 	}
 }
 
-func (c *controllerAPI) filterRoutes(ctx context.Context, routes []*router.Route) []*router.Route {
+// filterRoutes keeps the routes of apps the caller may see. The parent apps
+// are read in one query, however many routes there are.
+func (c *controllerAPI) filterRoutes(ctx context.Context, routes []*router.Route) ([]*router.Route, error) {
 	tok := authz.TokenFromContext(ctx)
 	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() || c.appRepo == nil {
-		return routes
+		return routes, nil
 	}
 	// acme:issue sees the routes of every app its GET /apps returns.
 	acme := authz.HasACMEIssue(tok)
-	var out []*router.Route
-	for _, route := range routes {
+	parent := func(route *router.Route) string {
 		appID := strings.TrimPrefix(route.ParentRef, ct.RouteParentRefPrefix)
-		if appID == "" || appID == route.ParentRef {
+		if appID == route.ParentRef {
+			return ""
+		}
+		return appID
+	}
+	var refs []string
+	seen := map[string]bool{}
+	for _, route := range routes {
+		if ref := parent(route); ref != "" && !seen[ref] {
+			seen[ref] = true
+			refs = append(refs, ref)
+		}
+	}
+	apps, err := c.appRepo.GetMany(refs)
+	if err != nil {
+		return nil, err
+	}
+	out := []*router.Route{}
+	for _, route := range routes {
+		app, ok := apps[parent(route)]
+		if !ok {
 			continue
 		}
-		raw, err := c.appRepo.Get(appID)
-		if err != nil {
-			continue
-		}
-		app := raw.(*ct.App)
 		if (acme && !catalogInternalApp(app)) || appVisible(tok, app) {
 			out = append(out, route)
 		}
 	}
-	if out == nil {
-		out = []*router.Route{}
-	}
-	return out
+	return out, nil
 }
 
 func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, release *ct.Release, oldCounts, newCounts map[string]int, newTags map[string]map[string]string, applyTags bool) error {

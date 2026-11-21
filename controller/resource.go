@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/randy-girard/flynn/controller/access"
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -128,7 +127,8 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	} else {
 		config = []byte(`{}`)
 	}
-	if c.providerPassesApp(p) {
+	addon := c.addonForProvider(p)
+	if addon != nil && addon.PassApp {
 		tok := authz.TokenFromContext(ctx)
 		config = provisionConfigWithApp(config, target, tok != nil && tok.ClusterKey)
 	}
@@ -165,7 +165,7 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		}
 	}
 	data.Env = resname.ResourceEnv(c.appReleaseEnv(target), data.Env, provisionAs(config))
-	env, err := c.stampInstancePort(p, data.ID, data.Env)
+	env, err := c.stampInstancePort(p, addon, data.ID, data.Env)
 	if err != nil {
 		rollbackProvision()
 		respondWithError(w, err)
@@ -337,21 +337,21 @@ func (c *controllerAPI) GetProviderResources(ctx context.Context, w http.Respons
 		return
 	}
 
-	res, err := c.resourceRepo.ProviderList(p.ID)
+	res, err := c.listVisibleResources(ctx, p.ID)
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
-	httphelper.JSON(w, 200, c.filterResources(ctx, res))
+	httphelper.JSON(w, 200, res)
 }
 
 func (c *controllerAPI) GetResources(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	res, err := c.resourceRepo.List()
+	res, err := c.listVisibleResources(ctx, "")
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
-	httphelper.JSON(w, 200, c.filterResources(ctx, res))
+	httphelper.JSON(w, 200, res)
 }
 
 // providerResource loads the resource for a provider route. A resource that
@@ -595,35 +595,41 @@ func (c *controllerAPI) DeleteResourceApp(ctx context.Context, w http.ResponseWr
 	httphelper.JSON(w, 200, resource)
 }
 
-func (c *controllerAPI) filterResources(ctx context.Context, res []*ct.Resource) []*ct.Resource {
+// listVisibleResources lists every resource (of one provider when
+// providerID is set) for cluster admin and the cluster key. A user token gets
+// the resources owned by an account it administers, filtered by owner in SQL:
+// a fixed number of queries however many resources and accounts exist.
+// Unowned (platform) resources stay admin only.
+func (c *controllerAPI) listVisibleResources(ctx context.Context, providerID string) ([]*ct.Resource, error) {
 	tok := authz.TokenFromContext(ctx)
 	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
-		return res
-	}
-	var out []*ct.Resource
-	for _, item := range res {
-		if item.OwnerAccount == "" {
-			continue
+		if providerID == "" {
+			return c.resourceRepo.List()
 		}
-		if c.canAdminOwner(ctx, item.OwnerAccount) {
-			out = append(out, item)
-		}
+		return c.resourceRepo.ProviderList(providerID)
 	}
-	if out == nil {
-		out = []*ct.Resource{}
+	owners, err := c.adminOwnerAccounts(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return out
+	res, err := c.resourceRepo.ListOwnedBy(providerID, owners)
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		res = []*ct.Resource{}
+	}
+	return res, nil
 }
 
 func (c *controllerAPI) canAdminOwner(ctx context.Context, account string) bool {
-	res := c.accessForAccount(ctx, account)
-	return access.Has(res.Permissions, access.PermAppAdmin) || res.ImplicitOwner || res.OrgManager
+	return adminsAccount(c.accessForAccount(ctx, account))
 }
 
 var instancePortAssign sync.Mutex
 
-func (c *controllerAPI) stampInstancePort(p *ct.Provider, externalID string, env map[string]string) (map[string]string, error) {
-	if p == nil || c.resourceRepo == nil || !c.providerStampsInstancePort(p) {
+func (c *controllerAPI) stampInstancePort(p *ct.Provider, addon *plugin.AddonSpec, externalID string, env map[string]string) (map[string]string, error) {
+	if p == nil || c.resourceRepo == nil || !providerStampsInstancePort(p, addon) {
 		return env, nil
 	}
 	instancePortAssign.Lock()
@@ -654,33 +660,27 @@ func (c *controllerAPI) stampInstancePort(p *ct.Provider, externalID string, env
 	return assigned, nil
 }
 
-// providerPassesApp is true when the installed add-on asks for the tenant
-// app name in the provision body. Other providers receive the config unchanged.
-func (c *controllerAPI) providerPassesApp(p *ct.Provider) bool {
-	spec := c.addonForProvider(p)
-	return spec != nil && spec.PassApp
-}
-
 // providerStampsInstancePort is true when the installed plugin asks for a
 // per-instance port. The platform appliance never gets one. Provider names
 // are not special-cased here.
-func (c *controllerAPI) providerStampsInstancePort(p *ct.Provider) bool {
+func providerStampsInstancePort(p *ct.Provider, addon *plugin.AddonSpec) bool {
 	if p == nil || pgappliance.IsPlatformApplianceURL(p.URL) {
 		return false
 	}
-	spec := c.addonForProvider(p)
-	return spec != nil && spec.InstancePort
+	return addon != nil && addon.InstancePort
 }
 
+// addonForProvider is the add-on spec of the installed plugin that serves
+// provider p, or nil. It reads plugin apps only, and a provision reads it
+// once: PassApp (send the tenant app name) and InstancePort come from it.
 func (c *controllerAPI) addonForProvider(p *ct.Provider) *plugin.AddonSpec {
 	if p == nil || c == nil || c.appRepo == nil {
 		return nil
 	}
-	raw, err := c.appRepo.List()
+	apps, err := c.appRepo.ListPlugins()
 	if err != nil {
 		return nil
 	}
-	apps, _ := raw.([]*ct.App)
 	for _, app := range apps {
 		spec := plugin.AddonFromApp(app)
 		if spec == nil || !spec.MatchesType(p.Name) {
