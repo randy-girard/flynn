@@ -66,7 +66,7 @@ func TestHostAuthMiddleware(t *testing.T) {
 			want: http.StatusUnauthorized,
 		},
 		{
-			name:   "no key subnet auth-key TOFU allowed",
+			name:   "no key subnet auth-key reaches the handler (join token checked there)",
 			method: "POST", path: "/host/auth-key", remote: "10.0.0.9:9",
 			want: http.StatusNoContent,
 		},
@@ -162,8 +162,10 @@ func TestHostAuthMiddleware(t *testing.T) {
 
 // TestConfigureAuthKeyEmptyRejectsSubnet documents the multi-node bootstrap
 // exception: configure-host-auth runs on one coordinator and POSTs
-// /host/auth-key to every peer's advertised IP. While the key is empty that
-// one route stays TOFU; job/volume/update APIs on the subnet stay 401.
+// /host/auth-key to every peer's advertised IP. While the key is empty the
+// middleware lets that one route through to ConfigureAuthKey, which requires
+// the host's join token from a remote peer (CORE-40, http_core40_test.go);
+// job/volume/update APIs on the subnet stay 401.
 func TestConfigureAuthKeyEmptyRejectsSubnet(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

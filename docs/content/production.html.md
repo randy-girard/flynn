@@ -1238,7 +1238,12 @@ running rollback again with `--all-nodes`.
 ## Adding Hosts
 
 Hosts may be added to an existing cluster by running `flynn-host init` with the
-discovery token or list of host IPs that was used to start the cluster. Those
+discovery token or list of host IPs that was used to start the cluster. Export
+the cluster's `FLYNN_HOST_AUTH_KEY` and `DISCOVERD_AUTH_KEY` (from an existing
+host's `/etc/flynn/host.json`) before that init, so the new host has its key
+before the daemon listens. A new host without a key and without a join token
+accepts `POST /host/auth-key` only from itself. See
+[Security](security.md). Those
 hosts are still this cluster. To run user apps on the added hosts, tag the
 install hosts `--role core`, run `flynn-host placement:mode split`, and join
 the further hosts with `--role app`. See [Workload placement](#workload-placement).

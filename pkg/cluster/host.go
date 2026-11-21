@@ -249,9 +249,19 @@ func (c *Host) ConfigureAuthKey(key string) error {
 // DISCOVERD_AUTH_KEY) in the target host's config. systemd-managed daemons
 // restart; otherwise the running daemon applies the secrets in-process.
 func (c *Host) ConfigureHostSecrets(key string, env map[string]string) error {
+	return c.ConfigureHostSecretsWithJoinToken(key, "", env)
+}
+
+// ConfigureHostSecretsWithJoinToken is ConfigureHostSecrets plus the target
+// host's one-time join token (FLYNN_HOST_JOIN_TOKEN from flynn-host init).
+// A host without a key accepts a remote POST /host/auth-key only with it.
+func (c *Host) ConfigureHostSecretsWithJoinToken(key, joinToken string, env map[string]string) error {
 	body := map[string]interface{}{"key": key}
 	if len(env) > 0 {
 		body["env"] = env
+	}
+	if joinToken != "" {
+		body["join_token"] = joinToken
 	}
 	return c.c.Post("/host/auth-key", body, nil)
 }

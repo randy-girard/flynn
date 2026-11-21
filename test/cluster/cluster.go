@@ -45,6 +45,10 @@ type Cluster struct {
 	defaultInstances []*Instance
 	releaseInstances []*Instance
 
+	// joinToken lets bootstrap on the first instance set the auth key on
+	// the other keyless hosts (CORE-40).
+	joinToken string
+
 	bc     BootConfig
 	vm     *VMManager
 	out    io.Writer
@@ -270,10 +274,14 @@ func (c *Cluster) startFlynnHost(inst *Instance, peerInstances []*Instance) erro
 		peers = append(peers, inst.IP)
 	}
 	var script bytes.Buffer
+	if c.joinToken == "" {
+		c.joinToken = random.Hex(16)
+	}
 	data := hostScriptData{
-		ID:    inst.ID,
-		IP:    inst.IP,
-		Peers: strings.Join(peers, ","),
+		ID:        inst.ID,
+		IP:        inst.IP,
+		Peers:     strings.Join(peers, ","),
+		JoinToken: c.joinToken,
 	}
 	flynnHostScript.Execute(&script, data)
 	c.logf("Starting flynn-host on %s [id: %s]\n", inst.IP, inst.ID)
@@ -407,9 +415,10 @@ func runUnitTests(inst *Instance, out io.Writer) error {
 }
 
 type hostScriptData struct {
-	ID    string
-	IP    string
-	Peers string
+	ID        string
+	IP        string
+	Peers     string
+	JoinToken string
 }
 
 var flynnHostScript = template.Must(template.New("flynn-host").Parse(`
@@ -429,6 +438,7 @@ sudo start-stop-daemon \
   --pidfile /var/run/flynn-host.pid \
   --exec /usr/bin/env \
   -- \
+  FLYNN_HOST_JOIN_TOKEN={{ .JoinToken }} \
   flynn-host \
   daemon \
   --id {{ .ID }} \
@@ -467,8 +477,8 @@ func (c *Cluster) bootstrapLayer1(instances []*Instance) error {
 	var cmdErr error
 	go func() {
 		command := fmt.Sprintf(
-			"CLUSTER_DOMAIN=%s CONTROLLER_KEY=%s DISCOVERD=%s:1111 FLANNEL_NETWORK=100.65.0.0/16 flynn-host bootstrap --json --min-hosts=%d --peer-ips=%s --job-timeout=120 --admin-email admin@%s --admin-password flynn-dev /etc/flynn-bootstrap.json",
-			c.ClusterDomain, c.ControllerKey, inst.IP, len(instances), strings.Join(ips, ","), c.ClusterDomain,
+			"CLUSTER_DOMAIN=%s CONTROLLER_KEY=%s FLYNN_HOST_JOIN_TOKEN=%s DISCOVERD=%s:1111 FLANNEL_NETWORK=100.65.0.0/16 flynn-host bootstrap --json --min-hosts=%d --peer-ips=%s --job-timeout=120 --admin-email admin@%s --admin-password flynn-dev /etc/flynn-bootstrap.json",
+			c.ClusterDomain, c.ControllerKey, c.joinToken, inst.IP, len(instances), strings.Join(ips, ","), c.ClusterDomain,
 		)
 		cmdErr = inst.Run(command, &Streams{Stdout: wr, Stderr: c.out})
 		wr.Close()

@@ -57,7 +57,7 @@ func (a *ConfigureRestoreAuthAction) Run(s *State) error {
 		key = random.Hex(16)
 	}
 	clientKey := os.Getenv("FLYNN_HOST_AUTH_KEY")
-	for _, h := range s.Hosts {
+	for _, h := range orderHostsLocalLast(s.Hosts) {
 		if err := configureHostAuthOn(h, key, clientKey, extra); err != nil {
 			return fmt.Errorf("bootstrap: error applying restore host secrets on %s: %s", h.Addr(), err)
 		}

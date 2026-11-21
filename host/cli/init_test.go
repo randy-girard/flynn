@@ -132,3 +132,36 @@ func TestFormatDaemonTagsArgRole(t *testing.T) {
 		t.Fatalf("same role: %q %v", same, err)
 	}
 }
+
+// CORE-40: a host without a key accepts a remote POST /host/auth-key only
+// with the join token that init writes into host.json.
+func TestRunInitWritesJoinToken(t *testing.T) {
+	for _, k := range []string{"FLYNN_HOST_AUTH_KEY", "DISCOVERD_AUTH_KEY", "AUTH_KEY", "CONTROLLER_KEY", "FLYNN_HOST_JOIN_TOKEN"} {
+		t.Setenv(k, "")
+	}
+	path := filepath.Join(t.TempDir(), "host.json")
+	args := parseHostCLI(t, "init", []string{"init", "--file", path, "--join-token", "0123456789abcdef0123"})
+	if err := runInit(args); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := config.LoadEnvKey(path, "FLYNN_HOST_JOIN_TOKEN"); got != "0123456789abcdef0123" {
+		t.Fatalf("--join-token not in host.json: %q", got)
+	}
+
+	// The exported variable works too (install scripts).
+	path2 := filepath.Join(t.TempDir(), "host.json")
+	t.Setenv("FLYNN_HOST_JOIN_TOKEN", "fedcba9876543210fedc")
+	if err := runInit(parseHostCLI(t, "init", []string{"init", "--file", path2})); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := config.LoadEnvKey(path2, "FLYNN_HOST_JOIN_TOKEN"); got != "fedcba9876543210fedc" {
+		t.Fatalf("FLYNN_HOST_JOIN_TOKEN not in host.json: %q", got)
+	}
+
+	// A short token is refused.
+	t.Setenv("FLYNN_HOST_JOIN_TOKEN", "")
+	err := runInit(parseHostCLI(t, "init", []string{"init", "--file", filepath.Join(t.TempDir(), "host.json"), "--join-token", "short"}))
+	if err == nil || !strings.Contains(err.Error(), "join token") {
+		t.Fatalf("short join token: %v", err)
+	}
+}

@@ -12,6 +12,9 @@ var cliSecretEnv = []string{
 	"DISCOVERD_AUTH_KEY",
 	"AUTH_KEY",
 	"CONTROLLER_KEY",
+	// One-time token for a remote POST /host/auth-key on a host without a
+	// key (CORE-40). flynn-host bootstrap reads it to configure peers.
+	"FLYNN_HOST_JOIN_TOKEN",
 }
 
 // LoadAuthKey returns FLYNN_HOST_AUTH_KEY from the host config file, if set.

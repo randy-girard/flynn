@@ -358,10 +358,16 @@ func runDaemon(args *docopt.Args) {
 	if authKey == "" {
 		authKey = os.Getenv("FLYNN_HOST_AUTH_KEY")
 	}
+	// CORE-40: the one-time join token from flynn-host init (host.json env).
+	// A keyless host accepts a remote POST /host/auth-key only with it.
+	joinToken := os.Getenv("FLYNN_HOST_JOIN_TOKEN")
 	if authKey != "" {
 		log.Info("host HTTP API authentication enabled")
+		joinToken = ""
+	} else if joinToken != "" {
+		log.Warn("host HTTP API auth key unset; non-status requests fail closed except from this machine, and a remote auth-key claim needs the join token")
 	} else {
-		log.Warn("host HTTP API auth key unset; non-status requests fail closed except loopback/unix")
+		log.Warn("host HTTP API auth key unset and no join token; non-status requests and auth-key claims are accepted only from this machine")
 	}
 
 	tags = resolveStartupMaxProcesses(log, tags)
@@ -392,6 +398,8 @@ func runDaemon(args *docopt.Args) {
 		discMan:           discoverdManager,
 		log:               logger.New("host.id", hostID),
 		authKey:           authKey,
+		joinToken:         joinToken,
+		configFile:        configFile,
 		webhookDispatcher: webhookDisp,
 		maxJobConcurrency: maxJobConcurrency,
 		zpoolName:         zpoolName,

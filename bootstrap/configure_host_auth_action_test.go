@@ -184,3 +184,45 @@ func TestWaitForHostAuthTimeout(t *testing.T) {
 		t.Fatal("expected timeout error, got nil")
 	}
 }
+
+// CORE-40: a keyless remote host accepts POST /host/auth-key only with its
+// join token, so configure-host-auth sends FLYNN_HOST_JOIN_TOKEN.
+func TestConfigureHostAuthSendsJoinToken(t *testing.T) {
+	t.Setenv("FLYNN_HOST_JOIN_TOKEN", "join-secret")
+	var got struct {
+		Key       string `json:"key"`
+		JoinToken string `json:"join_token"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/host/auth-key" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	h := cluster.NewHost("h1", srv.URL, srv.Client(), nil)
+	if err := configureHostAuthOn(h, "cluster-secret", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.Key != "cluster-secret" || got.JoinToken != "join-secret" {
+		t.Fatalf("POST /host/auth-key body key=%q join_token=%q, want the join token", got.Key, got.JoinToken)
+	}
+}
+
+// Remote hosts are configured before this one, so a coordinator that fails
+// part way still has its own join token in host.json for a rerun.
+func TestOrderHostsLocalLast(t *testing.T) {
+	local := cluster.NewHost("local", "127.0.0.1:1113", nil, nil)
+	r1 := cluster.NewHost("r1", "198.51.100.20:1113", nil, nil)
+	r2 := cluster.NewHost("r2", "198.51.100.21:1113", nil, nil)
+	got := orderHostsLocalLast([]*cluster.Host{local, r1, r2})
+	if len(got) != 3 || got[0] != r1 || got[1] != r2 || got[2] != local {
+		ids := []string{}
+		for _, h := range got {
+			ids = append(ids, h.ID())
+		}
+		t.Fatalf("order %v, want r1 r2 local", ids)
+	}
+}

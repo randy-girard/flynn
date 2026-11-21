@@ -60,10 +60,19 @@ bootstrap) the API **fails closed**, with these exceptions:
   present it is liveness only: host id, advertised URL, version, flags, and
   `auth`. The discoverd job id and address, and the flannel job id and overlay
   subnet, are returned only when the request presents `FLYNN_HOST_AUTH_KEY`.
-* First-time `POST /host/auth-key` is trust-on-first-use from any peer,
-  including advertised subnet IPs. Multi-node bootstrap runs
-  `configure-host-auth` on one coordinator and must reach every host's
-  `:1113`, not only loopback.
+* `POST /host/auth-key` on a host with no key is accepted from **this host**
+  (loopback, a Unix socket, or a local interface IP), or from a peer that
+  sends the host's one-time join token (`join_token` in the body; set with
+  `flynn-host init --join-token` or `FLYNN_HOST_JOIN_TOKEN`). Multi-node
+  bootstrap runs `configure-host-auth` on one coordinator and must reach
+  every host's `:1113`, so every host gets the same join token at install.
+  A host with no key and no join token answers a remote claim with `403`;
+  a wrong token is `401`. The host deletes the token from `host.json` and
+  from its environment once a key is set, so it cannot be replayed. The
+  claim may write only `FLYNN_HOST_AUTH_KEY`, `DISCOVERD_AUTH_KEY`,
+  `AUTH_KEY`, `CONTROLLER_KEY`, and `DISCOVERD` into `host.json`; any other
+  env key is `400`, so a caller cannot inject `LD_PRELOAD` or `PATH` into the
+  root daemon. Claims are serialized, so two racing claims cannot both win.
 * Every other method is `401` unless the client is on **this host**: TCP
   loopback (`127.0.0.0/8` or `::1`), a **Unix domain socket**, or a **local
   interface IP**. `flynn-host` often listens on `--listen-ip` rather than
@@ -73,6 +82,10 @@ bootstrap) the API **fails closed**, with these exceptions:
 
 After a key is set, loopback is not a bypass; the request must present
 `authKey`. Forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are ignored.
+The per-IP limit (100 requests a minute) is always on. Requests that
+present the key, and requests from this host while it has no key, are not
+counted. A host that got its key in-process (not under systemd) is limited
+the same way as one that started with it.
 
 The cluster status app (`status.$CLUSTER_DOMAIN`) uses a separate
 `AUTH_KEY`. Private overlay, loopback, and RFC1918 TCP peers may skip
@@ -85,8 +98,10 @@ at init would desynchronize multi-node bootstrap, which installs one shared
 secret. If `FLYNN_HOST_AUTH_KEY` is already in the environment, init persists
 it into `host.json`. Joining hosts should set that cluster key before the
 daemon listens. Bootstrap still prefers `127.0.0.1` when configuring the
-local host (faster); remote peers use the advertised address and empty-key
-TOFU on `POST /host/auth-key` only.
+local host (faster); remote peers use the advertised address and the join
+token. Bootstrap configures remote hosts first and its own host last, so a
+run that fails on a remote host keeps the coordinator's token for a retry.
+See [Manual installation — Join token](installation/manual.md#join-token-multi-node).
 
 Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. Cluster

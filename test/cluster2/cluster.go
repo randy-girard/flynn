@@ -131,6 +131,7 @@ func Boot(c *BootConfig) (*Cluster, error) {
 		return nil, err
 	}
 
+	joinToken := random.Hex(16)
 	profiles := []host.JobProfile{host.JobProfileZFS}
 	if c.UseKVM {
 		profiles[0] = host.JobProfileKVM
@@ -142,6 +143,9 @@ func Boot(c *BootConfig) (*Cluster, error) {
 			"host": {
 				Env: map[string]string{
 					"DISCOVERY_SERVICE": app.Name,
+					// CORE-40: bootstrap sets the key on keyless peers
+					// only with this shared join token.
+					"FLYNN_HOST_JOIN_TOKEN": joinToken,
 				},
 				Profiles: profiles,
 				Mounts: []host.Mount{
@@ -261,14 +265,15 @@ func bootCluster(c *BootConfig, cluster *Cluster, manifest io.Reader, log log15.
 	}
 	discURL := fmt.Sprintf("http://%s:1111", peerIPs[0])
 	cmd.Env = map[string]string{
-		"CLUSTER_DOMAIN":  domain,
-		"CONTROLLER_KEY":  key,
-		"DISCOVERD":       discURL,
-		"FLANNEL_NETWORK": "100.64.0.0/16",
-		"TLS_CA":          cert.CACert,
-		"TLS_KEY":         cert.PrivateKey,
-		"TLS_CERT":        cert.Cert,
-		"DEBUG":           "1",
+		"CLUSTER_DOMAIN":        domain,
+		"CONTROLLER_KEY":        key,
+		"FLYNN_HOST_JOIN_TOKEN": cluster.Release.Processes["host"].Env["FLYNN_HOST_JOIN_TOKEN"],
+		"DISCOVERD":             discURL,
+		"FLANNEL_NETWORK":       "100.64.0.0/16",
+		"TLS_CA":                cert.CACert,
+		"TLS_KEY":               cert.PrivateKey,
+		"TLS_CERT":              cert.Cert,
+		"DEBUG":                 "1",
 	}
 	cmd.HostNetwork = true
 	cmd.Stdin = manifest

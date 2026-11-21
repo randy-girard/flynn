@@ -1037,8 +1037,10 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	systemEnv := map[string]string{}
 	// Data-plane engines are system apps but must not receive the host API key.
 	if netpolicy.HostTrusted(job) {
-		if l.host != nil && l.host.authKey != "" {
-			systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
+		if l.host != nil {
+			if key := l.host.currentAuthKey(); key != "" {
+				systemEnv["FLYNN_HOST_AUTH_KEY"] = key
+			}
 		}
 	}
 	// System and datastore jobs register with discoverd from containerinit.

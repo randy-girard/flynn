@@ -82,12 +82,15 @@ sudo bash /tmp/install-flynn --zpool-create-device /dev/sdb --zpool-create-optio
 **Three-node cluster** using a discovery API you run (there is no public hosted service). `--init-discovery` requires `DISCOVERY_SERVER` and `CONTROLLER_KEY`:
 
 ```bash
+# one join token for every node (bootstrap uses it to set each node's auth key)
+JOIN_TOKEN=$(openssl rand -hex 16)
+
 # first node (example URL; use your own discovery API)
-sudo DISCOVERY_SERVER=https://discovery.example.com CONTROLLER_KEY=<controller key> flynn-host init --init-discovery
+sudo DISCOVERY_SERVER=https://discovery.example.com CONTROLLER_KEY=<controller key> flynn-host init --init-discovery --join-token "$JOIN_TOKEN"
 # prints https://discovery.example.com/clusters/<id>
 
 # other nodes
-sudo flynn-host init --discovery https://discovery.example.com/clusters/<id>
+sudo flynn-host init --discovery https://discovery.example.com/clusters/<id> --join-token "$JOIN_TOKEN"
 
 sudo systemctl start flynn-host
 ```

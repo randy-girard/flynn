@@ -19,7 +19,9 @@ func TestPerIPRateLimiter(t *testing.T) {
 	}
 }
 
-func TestRateLimitMiddlewareDisabledWithoutAuthKey(t *testing.T) {
+// A keyless host still serves a normal request; the limiter only trips after
+// 100 requests a minute from one remote IP (TestRateLimitInstalledWithoutAuthKey).
+func TestRateLimitMiddlewareAllowsRequestWithoutAuthKey(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

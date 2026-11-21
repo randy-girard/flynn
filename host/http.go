@@ -55,7 +55,18 @@ type Host struct {
 
 	maxJobConcurrency uint64
 
-	authKey string
+	// authMtx guards authKey and joinToken: POST /host/auth-key can set
+	// them in-process while other requests read them. authConfigMtx
+	// serializes POST /host/auth-key so two claims cannot both win.
+	authMtx       sync.RWMutex
+	authConfigMtx sync.Mutex
+	authKey       string
+	// joinToken is the one-time FLYNN_HOST_JOIN_TOKEN from flynn-host init.
+	// While authKey is empty, a peer that is not this machine must present it
+	// to POST /host/auth-key.
+	joinToken string
+	// configFile is host.json (config.DefaultPath when empty).
+	configFile string
 
 	webhookDispatcher *WebhookDispatcher
 
@@ -80,10 +91,35 @@ func hostAuthKeyFromRequest(r *http.Request) string {
 
 // authKeyValid reports whether key matches the configured host API secret.
 func (h *Host) authKeyValid(key string) bool {
-	if h.authKey == "" || key == "" || len(key) != len(h.authKey) {
+	return secretEqual(h.currentAuthKey(), key)
+}
+
+// secretEqual compares a configured secret with a presented one in constant
+// time. An empty configured secret never matches.
+func secretEqual(want, got string) bool {
+	if want == "" || got == "" || len(got) != len(want) {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) == 1
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func (h *Host) currentAuthKey() string {
+	h.authMtx.RLock()
+	defer h.authMtx.RUnlock()
+	return h.authKey
+}
+
+func (h *Host) currentJoinToken() string {
+	h.authMtx.RLock()
+	defer h.authMtx.RUnlock()
+	return h.joinToken
+}
+
+func (h *Host) hostConfigFile() string {
+	if h.configFile != "" {
+		return h.configFile
+	}
+	return config.DefaultPath
 }
 
 func writeHostUnauthorized(w http.ResponseWriter) {
@@ -102,8 +138,10 @@ func writeHostUnauthorized(w http.ResponseWriter) {
 // the request presents that key. With no key configured the full status is
 // returned so bootstrap can still read it.
 // When no authKey is configured:
-//   - POST /host/auth-key is trust-on-first-use from any peer (multi-node
-//     bootstrap's configure-host-auth dials advertised IPs, not loopback)
+//   - POST /host/auth-key reaches ConfigureAuthKey, which accepts it from
+//     this machine, or from a peer that presents the one-time join token
+//     written by flynn-host init (CORE-40). Without a join token a remote
+//     claim is refused.
 //   - every other non-status request fails closed unless it arrived from
 //     this machine (TCP loopback, Unix socket, or a local interface IP).
 //     discoverd, flannel, and flynn-builder notify --listen-ip, not 127.0.0.1.
@@ -117,7 +155,7 @@ func (h *Host) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if h.authKey == "" {
+		if h.currentAuthKey() == "" {
 			if r.URL.Path == "/host/auth-key" && r.Method == "POST" {
 				next.ServeHTTP(w, r)
 				return
@@ -171,15 +209,10 @@ func (rl *perIPRateLimiter) Allow(ip string) bool {
 	return rl.requests[ip] <= rl.limit
 }
 
+// rateLimitMiddleware is always installed (CORE-40): a host that starts
+// without a key and gets one in-process must still throttle guesses, and a
+// keyless host must throttle remote join-token guesses.
 func (h *Host) rateLimitMiddleware(next http.Handler) http.Handler {
-	// Without host HTTP authentication, every client looks the same to us and the
-	// controller issues many requests from one address — a global limit breaks
-	// flynn run, pg psql, deploys, etc. Enable FLYNN_HOST_AUTH_KEY on flynn-host
-	// (and the same value on the controller) to apply limits only to clients that
-	// do not present the key.
-	if h.authKey == "" {
-		return next
-	}
 	limiter := newPerIPRateLimiter(100, time.Minute) // 100 requests per minute per IP
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Exempt health checks from rate limiting
@@ -190,7 +223,15 @@ func (h *Host) rateLimitMiddleware(next http.Handler) http.Handler {
 		// Requests authenticated with the host API key are trusted (controller,
 		// CLI via controller, internal tooling). Per-IP limits still apply to
 		// missing or wrong credentials so brute-force attempts remain throttled.
-		if h.authKey != "" && h.authKeyValid(hostAuthKeyFromRequest(r)) {
+		// The controller issues many requests from one address, so a host with
+		// a key must not limit it.
+		if h.authKeyValid(hostAuthKeyFromRequest(r)) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Before a key is set, bootstrap and the local daemons talk to this
+		// host from this machine; only remote peers are limited.
+		if h.currentAuthKey() == "" && httphelper.RequestFromLocalMachine(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -771,7 +812,7 @@ func (h *jobAPI) GetStatus(w http.ResponseWriter, r *http.Request, _ httprouter.
 	// liveness only (id and URL stay so host discovery can match the dialed
 	// peer). A valid Auth-Key or Basic password still receives the topology.
 	// log_drops stays on the liveness body. It is a count, not log text.
-	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(r)) {
+	if h.host.currentAuthKey() != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(r)) {
 		status = status.Liveness()
 	}
 	httphelper.JSON(w, 200, status)
@@ -959,42 +1000,96 @@ func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ ht
 	h.scheduleDaemonRestart(log, w)
 }
 
+// hostSecretEnvKeys are the only env keys POST /host/auth-key writes into
+// host.json next to FLYNN_HOST_AUTH_KEY (CORE-40). The daemon loads every
+// host.json env key at start, so anything else (LD_PRELOAD, PATH, ...) would
+// run in the root daemon.
+var hostSecretEnvKeys = map[string]bool{
+	"DISCOVERD_AUTH_KEY": true,
+	"AUTH_KEY":           true,
+	"CONTROLLER_KEY":     true,
+	"DISCOVERD":          true,
+}
+
+// ConfigureAuthKey handles POST /host/auth-key.
+//
+// With a key set, the request must present it. Without one (a fresh host
+// before bootstrap, or a new host waiting to join), the claim is accepted
+// from this machine (loopback, Unix socket, a local interface IP), or from a
+// peer that sends the host's one-time join token (FLYNN_HOST_JOIN_TOKEN from
+// flynn-host init) as join_token. A keyless host with no join token refuses
+// remote claims. The join token is deleted once a key is set. Only the
+// cluster secrets in hostSecretEnvKeys may be written as env.
 func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	log := h.host.log.New("fn", "ConfigureAuthKey")
 
-	// Empty-key TOFU is allowed here so a coordinator can POST the cluster
-	// key to each advertised :1113. After a key is set, the existing
-	// credential check applies (loopback is not a bypass).
-	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
+	// One claim at a time, so the keyless check and the write are atomic.
+	h.host.authConfigMtx.Lock()
+	defer h.host.authConfigMtx.Unlock()
+
+	current := h.host.currentAuthKey()
+	if current != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
 		writeHostUnauthorized(w)
 		return
 	}
 
 	var input struct {
-		Key string            `json:"key"`
-		Env map[string]string `json:"env,omitempty"`
+		Key       string            `json:"key"`
+		Env       map[string]string `json:"env,omitempty"`
+		JoinToken string            `json:"join_token,omitempty"`
 	}
 	if err := httphelper.DecodeJSON(req, &input); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
+
+	if current == "" && !httphelper.RequestFromLocalMachine(req) {
+		joinToken := h.host.currentJoinToken()
+		if joinToken == "" {
+			log.Warn("refused remote auth-key claim on a host with no key and no join token", "remote", req.RemoteAddr)
+			httphelper.Error(w, httphelper.JSONError{
+				Code: httphelper.ForbiddenErrorCode,
+				Message: "this host has no auth key and no join token, so it only accepts POST /host/auth-key from this machine; " +
+					"run flynn-host init --join-token=TOKEN (or export FLYNN_HOST_AUTH_KEY before flynn-host init) on every host " +
+					"and run flynn-host bootstrap with the same FLYNN_HOST_JOIN_TOKEN",
+			})
+			return
+		}
+		if !secretEqual(joinToken, input.JoinToken) {
+			log.Warn("refused remote auth-key claim with a missing or wrong join token", "remote", req.RemoteAddr)
+			writeHostUnauthorized(w)
+			return
+		}
+	}
+
 	if input.Key == "" {
-		httphelper.Error(w, fmt.Errorf("missing auth key"))
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.ValidationErrorCode,
+			Message: "missing auth key",
+		})
 		return
+	}
+	for k := range input.Env {
+		if !hostSecretEnvKeys[k] {
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.ValidationErrorCode,
+				Message: fmt.Sprintf("env key %q is not allowed; only DISCOVERD_AUTH_KEY, AUTH_KEY, CONTROLLER_KEY and DISCOVERD can be set", k),
+			})
+			return
+		}
 	}
 
 	kv := map[string]string{"FLYNN_HOST_AUTH_KEY": input.Key}
 	for k, v := range input.Env {
-		if k == "" {
-			continue
-		}
 		kv[k] = v
 	}
-	if err := config.SetEnv(config.DefaultPath, kv); err != nil {
+	// The join token is one-time: a host with a key never needs it again.
+	kv["FLYNN_HOST_JOIN_TOKEN"] = ""
+	if err := config.SetEnv(h.host.hostConfigFile(), kv); err != nil {
 		log.Error("error writing host auth key", "err", err)
 		httphelper.Error(w, httphelper.JSONError{
 			Code:    httphelper.UnknownErrorCode,
-			Message: fmt.Sprintf("write %s: %s", config.DefaultPath, err),
+			Message: fmt.Sprintf("write %s: %s", h.host.hostConfigFile(), err),
 		})
 		return
 	}
@@ -1010,6 +1105,10 @@ func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ ht
 		return
 	}
 
+	// Hold the key in memory until systemd replaces this process, so the old
+	// daemon refuses a second keyless claim during the restart window.
+	// status.Auth stays false so bootstrap still waits for the restart.
+	h.host.setAuthKey(input.Key)
 	log.Info("host auth key configured, scheduling restart")
 	h.scheduleDaemonRestart(log, w)
 }
@@ -1024,7 +1123,7 @@ func daemonManagedBySystemd() bool {
 // running daemon so GET /host/status reports Auth and later jobs inherit
 // DISCOVERD_AUTH_KEY without a restart.
 func (h *Host) enableAuthInProcess(key string, env map[string]string) {
-	h.authKey = key
+	h.setAuthKey(key)
 	h.statusMtx.Lock()
 	if h.status == nil {
 		h.status = &host.HostStatus{}
@@ -1040,6 +1139,20 @@ func (h *Host) enableAuthInProcess(key string, env map[string]string) {
 			continue
 		}
 		os.Setenv(k, v)
+	}
+}
+
+// setAuthKey stores the host API key. Once a key is set the one-time join
+// token is cleared, in memory and in this process's environment.
+func (h *Host) setAuthKey(key string) {
+	h.authMtx.Lock()
+	h.authKey = key
+	if key != "" {
+		h.joinToken = ""
+	}
+	h.authMtx.Unlock()
+	if key != "" {
+		os.Unsetenv("FLYNN_HOST_JOIN_TOKEN")
 	}
 }
 

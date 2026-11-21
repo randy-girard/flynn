@@ -91,6 +91,27 @@ opens that one port on every host. It does not print `flynn-host firewall:expose
 Next, start a Layer 0 cluster: run `flynn-host` on every node. The daemon uses
 Raft for leader election and must know its peers.
 
+### Join token (multi-node)
+
+A host that has no `FLYNN_HOST_AUTH_KEY` yet lets only that machine set its
+key. `flynn-host bootstrap` runs on one node and sets the key on every other
+node over the network, so each node needs the same one-time join token.
+Generate one value and pass it to `flynn-host init` on every node, together
+with the `--discovery` or `--peer-ips` flags below:
+
+```
+$ JOIN_TOKEN=$(openssl rand -hex 16)   # once, then copy it to every node
+$ sudo flynn-host init --join-token "$JOIN_TOKEN" ...
+```
+
+Init writes it to `/etc/flynn/host.json` (mode 0600) as
+`FLYNN_HOST_JOIN_TOKEN`, and `flynn-host bootstrap` on the first node reads
+it from there. A node deletes the token once its key is set. A token must be
+at least 16 characters. Without one, a bootstrap on another node fails with
+`this host has no auth key and no join token`: re-run `flynn-host init` on
+that node with `--join-token`, restart `flynn-host`, and run bootstrap again
+with the same token. A single-node install needs no join token.
+
 ### Discovery token
 
 For more than one node, create a discovery token with `flynn-host init`. Skip

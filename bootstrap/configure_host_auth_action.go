@@ -47,7 +47,7 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 	}
 
 	clientKey := os.Getenv("FLYNN_HOST_AUTH_KEY")
-	for _, h := range s.Hosts {
+	for _, h := range orderHostsLocalLast(s.Hosts) {
 		if err := configureHostAuthOn(h, key, clientKey, extra); err != nil {
 			return fmt.Errorf("bootstrap: error configuring host auth on %s: %s", h.Addr(), err)
 		}
@@ -67,14 +67,19 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 	return nil
 }
 
+// configureHostAuthOn POSTs the cluster key to one host. A host without a
+// key accepts that from a remote coordinator only with its one-time join
+// token (CORE-40), so FLYNN_HOST_JOIN_TOKEN (loaded from this host's
+// host.json, or exported) is sent too. This machine needs no token.
 func configureHostAuthOn(h *cluster.Host, key, clientKey string, extra map[string]string) error {
+	joinToken := os.Getenv("FLYNN_HOST_JOIN_TOKEN")
 	var last error
 	for _, addr := range configureAuthDialAddrs(h.Addr()) {
 		client := cluster.NewHostWithKey(h.ID(), addr, nil, h.Tags(), clientKey)
-		err := client.ConfigureHostSecrets(key, extra)
+		err := client.ConfigureHostSecretsWithJoinToken(key, joinToken, extra)
 		if err != nil && clientKey != "" {
 			client = cluster.NewHostWithKey(h.ID(), addr, nil, h.Tags(), "")
-			err = client.ConfigureHostSecrets(key, extra)
+			err = client.ConfigureHostSecretsWithJoinToken(key, joinToken, extra)
 		}
 		if err == nil {
 			return nil
@@ -82,6 +87,22 @@ func configureHostAuthOn(h *cluster.Host, key, clientKey string, extra map[strin
 		last = err
 	}
 	return last
+}
+
+// orderHostsLocalLast returns hosts with this machine's hosts last. Setting
+// the key on this host deletes its join token from host.json, so remote hosts
+// go first: a bootstrap that fails on a remote host can be rerun.
+func orderHostsLocalLast(hosts []*cluster.Host) []*cluster.Host {
+	out := make([]*cluster.Host, 0, len(hosts))
+	var local []*cluster.Host
+	for _, h := range hosts {
+		if loopbackAuthAddr(h.Addr()) != "" {
+			local = append(local, h)
+			continue
+		}
+		out = append(out, h)
+	}
+	return append(out, local...)
 }
 
 // configureAuthDialAddrs prefers 127.0.0.1 when addr is this machine
