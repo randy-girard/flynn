@@ -374,6 +374,19 @@ func (p *Peer) setState(state *State) {
 func (p *Peer) setPeers(peers []*discoverd.Instance) {
 	info := *p.Info()
 	info.Peers = collapsePeers(p.idKey, peers)
+	if len(info.Peers) < len(peers) {
+		kept := make(map[*discoverd.Instance]struct{}, len(info.Peers))
+		for _, inst := range info.Peers {
+			kept[inst] = struct{}{}
+		}
+		for _, inst := range peers {
+			if _, ok := kept[inst]; !ok {
+				cur := instanceByApplianceID(p.idKey, peerApplianceID(p.idKey, inst), info.Peers)
+				p.log.Warn("peer listed at two addresses, using the newest registration",
+					"peer.id", peerApplianceID(p.idKey, inst), "stale_addr", inst.Addr, "addr", cur.Addr)
+			}
+		}
+	}
 	p.setInfo(info)
 }
 
