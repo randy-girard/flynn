@@ -144,6 +144,7 @@ func main() {
 		caCert:           []byte(os.Getenv("CA_CERT")),
 	})
 	go api.ensureAuthRouteLoop()
+	go api.purgeExpiredOAuthLoop()
 	go grpcServer.Serve(grpcListener)
 	shutdown.Fatal(http.ListenAndServe(httpAddr, handler))
 }
@@ -246,6 +247,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		authorizer:             authorizer.New(c.keys, c.keyIDs, c.tokenKey, c.tokenMaxValidity),
 		tokenSigner:            c.tokenSigner,
 		limiter:                limiterFromEnv(),
+		loginLimiter:           newLoginLimiter(loginLimitsFromEnv()),
 	}
 	if strings.TrimSpace(api.githubPluginURL) == "" {
 		api.githubPluginURL = "http://github.discoverd"
@@ -626,6 +628,7 @@ type controllerAPI struct {
 	authorizer        *authorizer.Authorizer
 	tokenSigner       *tokensigner.Signer
 	limiter           *accountLimiter
+	loginLimiter      *loginLimiter
 	// lookupTXT resolves domain verification records. Nil uses the system
 	// resolver. Tests replace it so they do not need live DNS.
 	lookupTXT func(ctx context.Context, name string) ([]string, error)

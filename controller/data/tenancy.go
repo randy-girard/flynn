@@ -89,14 +89,14 @@ func (r *TenancyRepo) CreateUser(u *ct.User) error {
 
 func scanUser(s postgres.Scanner) (*ct.User, error) {
 	u := &ct.User{}
-	err := s.Scan(&u.ID, &u.Handle, &u.Email, &u.PasswordHash, &u.ClusterAdmin, &u.Disabled, &u.Suspended, &u.EmailVerified, &u.CreatedAt, &u.UpdatedAt)
+	err := s.Scan(&u.ID, &u.Handle, &u.Email, &u.PasswordHash, &u.ClusterAdmin, &u.Disabled, &u.Suspended, &u.EmailVerified, &u.CreatedAt, &u.UpdatedAt, &u.TokensValidAfter)
 	if err == pgx.ErrNoRows {
 		return nil, ErrNotFound
 	}
 	return u, err
 }
 
-const userCols = `id, handle, email, password_hash, cluster_admin, disabled, suspended, email_verified, created_at, updated_at`
+const userCols = `id, handle, email, password_hash, cluster_admin, disabled, suspended, email_verified, created_at, updated_at, tokens_valid_after`
 
 func (r *TenancyRepo) GetUser(id string) (*ct.User, error) {
 	return scanUser(r.db.QueryRow(`SELECT `+userCols+` FROM users WHERE id = $1`, id))
@@ -141,6 +141,51 @@ func (r *TenancyRepo) UpdateUser(u *ct.User) error {
 		return ErrConflict
 	}
 	return err
+}
+
+// UpdateUserRevokingCredentials saves u and, in the same transaction, revokes
+// every credential the user holds: authorization codes, refresh tokens and
+// /oauth/authorize sessions are deleted, personal access tokens are marked
+// revoked, and login tokens signed before at are refused from now on
+// (users.tokens_valid_after). Used when the password changes.
+func (r *TenancyRepo) UpdateUserRevokingCredentials(u *ct.User, at time.Time) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRow(`
+		UPDATE users SET handle=$2, email=$3, password_hash=$4, cluster_admin=$5, disabled=$6, suspended=$7, email_verified=$8,
+			tokens_valid_after=$9, updated_at=now()
+		WHERE id=$1 RETURNING updated_at`,
+		u.ID, u.Handle, u.Email, u.PasswordHash, u.ClusterAdmin, u.Disabled, u.Suspended, u.EmailVerified, at,
+	).Scan(&u.UpdatedAt)
+	if err == pgx.ErrNoRows {
+		return ErrNotFound
+	}
+	if postgres.IsUniquenessError(err, "") {
+		return ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`DELETE FROM oauth_codes WHERE user_id=$1`,
+		`DELETE FROM oauth_refresh_tokens WHERE user_id=$1`,
+		`DELETE FROM oauth_sessions WHERE user_id=$1`,
+	} {
+		if err := tx.Exec(q, u.ID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Exec(`UPDATE personal_access_tokens SET revoked_at=$2 WHERE user_id=$1 AND revoked_at IS NULL`, u.ID, at); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	u.TokensValidAfter = &at
+	return nil
 }
 
 func (r *TenancyRepo) DeleteUser(id string) error {

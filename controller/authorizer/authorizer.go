@@ -46,6 +46,9 @@ type Token struct {
 	Blocked   bool
 	Scopes    []string
 	AppGrants []AppGrant
+	// IssuedAt is a signed login token's issue time. It is zero for the
+	// cluster key and personal access tokens.
+	IssuedAt time.Time
 }
 
 // HasClusterAdmin reports full cluster access: the cluster install key, or an
@@ -217,6 +220,7 @@ func (a *Authorizer) AuthorizeToken(token string) (*Token, error) {
 		ClusterKey: false,
 		Scopes:     scopes,
 		AppGrants:  grants,
+		IssuedAt:   iss,
 	}, nil
 }
 

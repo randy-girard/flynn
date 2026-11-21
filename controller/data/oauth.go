@@ -101,3 +101,49 @@ func (r *TenancyRepo) GetOAuthSession(token string, now time.Time) (*OAuthSessio
 	}
 	return s, err
 }
+
+// ConsumeOAuthCode deletes the code and returns it, in one statement, so
+// two concurrent token requests cannot both redeem it.
+func (r *TenancyRepo) ConsumeOAuthCode(code string) (*OAuthCode, error) {
+	c := &OAuthCode{}
+	err := r.db.QueryRow(`
+		DELETE FROM oauth_codes WHERE code=$1
+		RETURNING code, client_id, redirect_uri, code_challenge, user_id, expires_at, created_at, COALESCE(nonce, ''), COALESCE(scopes, '')`, code).Scan(
+		&c.Code, &c.ClientID, &c.RedirectURI, &c.CodeChallenge, &c.UserID, &c.ExpiresAt, &c.CreatedAt, &c.Nonce, &c.Scopes)
+	if err == pgx.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return c, err
+}
+
+// ConsumeRefreshToken deletes the refresh token and returns it, in one
+// statement, so a refresh token is redeemed at most once.
+func (r *TenancyRepo) ConsumeRefreshToken(token string) (*OAuthRefreshToken, error) {
+	rt := &OAuthRefreshToken{}
+	err := r.db.QueryRow(`
+		DELETE FROM oauth_refresh_tokens WHERE token=$1
+		RETURNING token, user_id, client_id, created_at, expires_at`, token).Scan(
+		&rt.Token, &rt.UserID, &rt.ClientID, &rt.CreatedAt, &rt.ExpiresAt)
+	if err == pgx.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return rt, err
+}
+
+// PurgeExpiredOAuth deletes authorization codes, refresh tokens and browser
+// sessions that expired before now, and returns how many rows went.
+func (r *TenancyRepo) PurgeExpiredOAuth(now time.Time) (int64, error) {
+	var total int64
+	for _, q := range []string{
+		`DELETE FROM oauth_codes WHERE expires_at < $1`,
+		`DELETE FROM oauth_refresh_tokens WHERE expires_at < $1`,
+		`DELETE FROM oauth_sessions WHERE expires_at < $1`,
+	} {
+		tag, err := r.db.ConnPool.Exec(q, now)
+		if err != nil {
+			return total, err
+		}
+		total += tag.RowsAffected()
+	}
+	return total, nil
+}

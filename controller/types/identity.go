@@ -114,6 +114,9 @@ type User struct {
 	EmailVerified bool       `json:"email_verified"`
 	CreatedAt     *time.Time `json:"created_at,omitempty"`
 	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+	// TokensValidAfter is when the password last changed. Login tokens
+	// signed before it are refused.
+	TokensValidAfter *time.Time `json:"tokens_valid_after,omitempty"`
 }
 
 // WhoAmI is the authenticated caller.

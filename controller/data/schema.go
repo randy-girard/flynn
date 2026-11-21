@@ -1572,6 +1572,13 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 		WHERE action = 'user.update' AND jsonb_typeof(data->'password') = 'string'`,
 		`UPDATE core_audit SET data = data - 'password' WHERE action = 'user.update' AND data ? 'password'`,
 	)
+
+	// A password change revokes the user's credentials (CORE-31). Login
+	// tokens are signed, not stored, so the user row records when the
+	// password changed and expandToken refuses tokens signed before it.
+	migrations.Add(95,
+		`ALTER TABLE users ADD COLUMN tokens_valid_after timestamptz`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

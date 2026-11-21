@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -62,6 +63,10 @@ func validCollabRole(role string) bool {
 	}
 }
 
+// errCredentialRevoked is a login token signed before the user's last
+// password change. The middleware answers 401.
+var errCredentialRevoked = errors.New("credential revoked by a password change")
+
 func (c *controllerAPI) expandToken(tok *authorizer.Token) error {
 	if c == nil || c.tenancy == nil || tok == nil || tok.ClusterKey || tok.UserID == "" {
 		return nil
@@ -85,6 +90,11 @@ func (c *controllerAPI) expandToken(tok *authorizer.Token) error {
 		tok.AppGrants = nil
 		tok.Scopes = nil
 		return nil
+	}
+	// A password change revokes login tokens signed before it.
+	if user.TokensValidAfter != nil && !tok.IssuedAt.IsZero() &&
+		tok.IssuedAt.Add(credentialRevokeSkew).Before(*user.TokensValidAfter) {
+		return errCredentialRevoked
 	}
 	suspended, err := c.tenancy.AccountSuspended("user:" + user.ID)
 	if err != nil {
@@ -437,13 +447,18 @@ func (c *controllerAPI) PatchUser(ctx context.Context, w http.ResponseWriter, re
 	if body.ClusterAdmin != nil {
 		u.ClusterAdmin = *body.ClusterAdmin
 	}
-	if body.Password != nil {
+	// Setting the password the user already has is not a change: the
+	// dashboard re-sends it when it syncs a user, and that must not sign the
+	// user out everywhere.
+	passwordChanged := false
+	if body.Password != nil && !tenancy.CheckPassword(u.PasswordHash, *body.Password) {
 		hash, err := tenancy.HashPassword(*body.Password)
 		if err != nil {
 			httphelper.ValidationError(w, "password", err.Error())
 			return
 		}
 		u.PasswordHash = hash
+		passwordChanged = true
 	}
 	if body.Suspended != nil {
 		u.Suspended = *body.Suspended
@@ -452,7 +467,16 @@ func (c *controllerAPI) PatchUser(ctx context.Context, w http.ResponseWriter, re
 			c.scaleAccountToZero("user:" + u.ID)
 		}
 	}
-	if err := c.tenancy.UpdateUser(u); err != nil {
+	// A changed password revokes every credential the user holds, the
+	// caller's own included: login and refresh tokens, personal access
+	// tokens, and /oauth/authorize sessions. The dashboard keeps its own
+	// session and mints fresh login tokens, so a dashboard user stays signed
+	// in there; the CLI must run flynn login again.
+	update := c.tenancy.UpdateUser
+	if passwordChanged {
+		update = func(u *ct.User) error { return c.tenancy.UpdateUserRevokingCredentials(u, time.Now()) }
+	}
+	if err := update(u); err != nil {
 		if err == data.ErrConflict {
 			httphelper.ConflictError(w, "email is already taken")
 			return
@@ -461,7 +485,9 @@ func (c *controllerAPI) PatchUser(ctx context.Context, w http.ResponseWriter, re
 		return
 	}
 	u.PasswordHash = ""
-	_ = c.tenancy.Audit(c.actor(ctx), "user.update", "user:"+u.ID, "", userUpdateAudit(&body))
+	audit := userUpdateAudit(&body)
+	audit.CredentialsRevoked = passwordChanged
+	_ = c.tenancy.Audit(c.actor(ctx), "user.update", "user:"+u.ID, "", audit)
 	httphelper.JSON(w, 200, u)
 }
 
@@ -475,6 +501,9 @@ type userUpdateAuditData struct {
 	EmailVerified   *bool   `json:"email_verified"`
 	Suspended       *bool   `json:"suspended"`
 	PasswordChanged bool    `json:"password_changed,omitempty"`
+	// CredentialsRevoked is set when the password really changed and the
+	// user's tokens and sessions were revoked.
+	CredentialsRevoked bool `json:"credentials_revoked,omitempty"`
 }
 
 func userUpdateAudit(p *ct.UserPatch) *userUpdateAuditData {

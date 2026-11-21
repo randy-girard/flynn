@@ -159,11 +159,21 @@ func (c *controllerAPI) oauthAuthorizeLogin(w http.ResponseWriter, req *http.Req
 	}
 	identifier := firstNonEmpty(q.Get("login"), q.Get("email"), q.Get("username"))
 	password := q.Get("password")
+	res, retry, ok := c.reserveLogin(req, identifier)
+	if !ok {
+		w.Header().Set("Retry-After", retryAfterHeader(retry))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, authorizeLoginHTML(q, loginThrottledMessage(retry)))
+		return
+	}
 	u, err := c.authenticatePassword(identifier, password)
 	if err != nil {
+		res.failure()
 		c.writeAuthorizeLoginForm(w, q, "invalid credentials")
 		return
 	}
+	res.success()
 	tok := random.Hex(32)
 	if err := c.tenancy.CreateOAuthSession(u.ID, tok, time.Now().Add(oauthSessionTTL)); err != nil {
 		httphelper.Error(w, err)
@@ -329,15 +339,16 @@ func (c *controllerAPI) OAuthToken(_ context.Context, w http.ResponseWriter, req
 	}
 }
 
+// A code is redeemed at most once: ConsumeOAuthCode deletes it as it reads
+// it, so a failed check below also burns it (RFC 6749 10.5).
 func (c *controllerAPI) oauthTokenAuthCode(w http.ResponseWriter, req *http.Request) {
 	code := req.FormValue("code")
-	oc, err := c.tenancy.GetOAuthCode(code)
+	oc, err := c.tenancy.ConsumeOAuthCode(code)
 	if err != nil || oc == nil {
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "invalid code")
 		return
 	}
 	if time.Now().After(oc.ExpiresAt) {
-		_ = c.tenancy.DeleteOAuthCode(code)
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "code expired")
 		return
 	}
@@ -349,7 +360,6 @@ func (c *controllerAPI) oauthTokenAuthCode(w http.ResponseWriter, req *http.Requ
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "invalid code_verifier")
 		return
 	}
-	_ = c.tenancy.DeleteOAuthCode(code)
 	u, err := c.tenancy.GetUser(oc.UserID)
 	if err != nil || u == nil {
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "user not found")
@@ -362,15 +372,16 @@ func (c *controllerAPI) oauthTokenAuthCode(w http.ResponseWriter, req *http.Requ
 	c.writeOAuthTokens(w, req, u, cid, oc.Nonce)
 }
 
+// Refresh tokens rotate: ConsumeRefreshToken deletes the presented token as
+// it reads it, so two concurrent refreshes cannot both succeed.
 func (c *controllerAPI) oauthTokenRefresh(w http.ResponseWriter, req *http.Request) {
 	raw := req.FormValue("refresh_token")
-	rt, err := c.tenancy.GetRefreshToken(raw)
+	rt, err := c.tenancy.ConsumeRefreshToken(raw)
 	if err != nil || rt == nil {
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "invalid refresh token")
 		return
 	}
 	if time.Now().After(rt.ExpiresAt) {
-		_ = c.tenancy.DeleteRefreshToken(raw)
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "refresh token expired")
 		return
 	}
@@ -383,18 +394,25 @@ func (c *controllerAPI) oauthTokenRefresh(w http.ResponseWriter, req *http.Reque
 		oauthTokenError(w, http.StatusForbidden, "invalid_grant", err.Error())
 		return
 	}
-	_ = c.tenancy.DeleteRefreshToken(raw)
 	cid := firstNonEmpty(req.FormValue("client_id"), rt.ClientID, oauthClientID)
 	c.writeOAuthTokens(w, req, u, cid, "")
 }
 
 func (c *controllerAPI) oauthTokenPassword(w http.ResponseWriter, req *http.Request) {
 	identifier := firstNonEmpty(req.FormValue("username"), req.FormValue("login"), req.FormValue("email"))
+	res, retry, ok := c.reserveLogin(req, identifier)
+	if !ok {
+		w.Header().Set("Retry-After", retryAfterHeader(retry))
+		oauthTokenError(w, http.StatusTooManyRequests, "too_many_attempts", loginThrottledMessage(retry))
+		return
+	}
 	u, err := c.authenticatePassword(identifier, req.FormValue("password"))
 	if err != nil {
+		res.failure()
 		oauthTokenError(w, http.StatusUnauthorized, "invalid_grant", "invalid credentials")
 		return
 	}
+	res.success()
 	cid := firstNonEmpty(req.FormValue("client_id"), oauthClientID)
 	c.writeOAuthTokens(w, req, u, cid, "")
 }
@@ -507,6 +525,10 @@ func (c *controllerAPI) lookupLoginUser(identifier string) (*ct.User, error) {
 	return c.tenancy.GetUserByEmail(id)
 }
 
+func loginThrottledMessage(retry time.Duration) string {
+	return fmt.Sprintf("too many failed sign-in attempts; try again in %d seconds", retryAfterSeconds(retry))
+}
+
 func oauthTokenError(w http.ResponseWriter, status int, code, desc string) {
 	httphelper.JSON(w, status, map[string]string{"error": code, "error_description": desc})
 }
@@ -573,4 +595,21 @@ func oauthHTTPRedirectLocation(redirectURI, code, state string) (string, error) 
 	}
 	base.RawQuery = q.Encode()
 	return base.String(), nil
+}
+
+// oauthPurgeInterval is how often expired authorization codes, refresh
+// tokens and /oauth/authorize sessions are deleted. Every controller process
+// runs the purge; the DELETEs are idempotent.
+const oauthPurgeInterval = time.Hour
+
+func (c *controllerAPI) purgeExpiredOAuthLoop() {
+	time.Sleep(time.Minute)
+	for {
+		if n, err := c.tenancy.PurgeExpiredOAuth(time.Now()); err != nil {
+			log.Printf("oauth: purge expired rows: %v", err)
+		} else if n > 0 {
+			log.Printf("oauth: purged %d expired codes, refresh tokens and sessions", n)
+		}
+		time.Sleep(oauthPurgeInterval)
+	}
 }

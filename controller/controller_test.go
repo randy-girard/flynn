@@ -119,6 +119,9 @@ func (s *S) SetUpSuite(c *C) {
 
 func (s *S) SetUpTest(c *C) {
 	s.cc.SetHosts(make(map[string]utils.HostClient))
+	// Every test signs in from 127.0.0.1; a shared limiter would carry one
+	// test's failed logins into the next.
+	s.api.loginLimiter = newLoginLimiter(defaultLoginLimits())
 }
 
 func (s *S) TestBadAuth(c *C) {

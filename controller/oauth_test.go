@@ -4,14 +4,19 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/controller/data"
 	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/random"
@@ -279,4 +284,311 @@ func TestOAuthIssuerEmptyHostUsesAuthDomain(t *testing.T) {
 	if got := api.oauthIssuer(nil); got != "https://auth.demo.localflynn.com" {
 		t.Fatalf("got %q", got)
 	}
+}
+
+// --- CORE-31 -----------------------------------------------------------------
+
+func passwordGrantFrom(c *C, srvURL, ip, email, password string) *http.Response {
+	form := url.Values{
+		"grant_type": {"password"},
+		"username":   {email},
+		"password":   {password},
+		"client_id":  {"flynn-cli"},
+		"audience":   {srvURL},
+	}
+	req, err := http.NewRequest(http.MethodPost, srvURL+"/oauth/token", strings.NewReader(form.Encode()))
+	c.Assert(err, IsNil)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if ip != "" {
+		req.Header.Set("X-Forwarded-For", ip)
+	}
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	return res
+}
+
+func passwordGrantStatus(c *C, srvURL, ip, email, password string) (int, http.Header, map[string]interface{}) {
+	res := passwordGrantFrom(c, srvURL, ip, email, password)
+	defer res.Body.Close()
+	var out map[string]interface{}
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	return res.StatusCode, res.Header, out
+}
+
+// POST /oauth/token grant_type=password is throttled per account and per
+// address, answers 429 with Retry-After, and does not lock the owner out.
+func (s *S) TestPasswordGrantIsRateLimited(c *C) {
+	clk := &fakeClock{t: time.Now()}
+	s.api.loginLimiter = newTestLoginLimiter(clk)
+	lim := defaultLoginLimits()
+	s.createLoginUser(c, "core31-rl@example.com", "core31-rl", "core31-right-pw", false)
+
+	// Per account and address.
+	for i := 0; i < lim.pairBurst; i++ {
+		code, _, _ := passwordGrantStatus(c, s.srv.URL, "198.51.100.1", "core31-rl@example.com", "wrong")
+		c.Assert(code, Equals, http.StatusUnauthorized, Commentf("attempt %d", i+1))
+	}
+	code, hdr, body := passwordGrantStatus(c, s.srv.URL, "198.51.100.1", "core31-rl@example.com", "core31-right-pw")
+	c.Assert(code, Equals, http.StatusTooManyRequests, Commentf("%v", body))
+	c.Assert(hdr.Get("Retry-After"), Not(Equals), "")
+	c.Assert(body["error"], Equals, "too_many_attempts")
+
+	// The owner from another address still signs in.
+	code, _, body = passwordGrantStatus(c, s.srv.URL, "203.0.113.20", "core31-rl@example.com", "core31-right-pw")
+	c.Assert(code, Equals, http.StatusOK, Commentf("%v", body))
+
+	// Backoff, not a lock: after the refill interval one more try is allowed.
+	clk.add(lim.pairEvery)
+	code, _, body = passwordGrantStatus(c, s.srv.URL, "198.51.100.1", "core31-rl@example.com", "core31-right-pw")
+	c.Assert(code, Equals, http.StatusOK, Commentf("%v", body))
+
+	// Per address: spraying many accounts from one address.
+	for i := 0; i < lim.ipBurst; i++ {
+		code, _, _ := passwordGrantStatus(c, s.srv.URL, "198.51.100.99", fmt.Sprintf("core31-spray-%d@example.com", i), "guess")
+		c.Assert(code, Equals, http.StatusUnauthorized, Commentf("spray %d", i))
+	}
+	code, _, _ = passwordGrantStatus(c, s.srv.URL, "198.51.100.99", "core31-rl@example.com", "core31-right-pw")
+	c.Assert(code, Equals, http.StatusTooManyRequests)
+
+	// The form login on /oauth/authorize shares the same limiter.
+	for i := 0; i < lim.pairBurst; i++ {
+		c.Assert(s.authorizeLoginStatus(c, "198.51.100.2", "core31-rl@example.com", "wrong"), Equals, http.StatusUnauthorized)
+	}
+	c.Assert(s.authorizeLoginStatus(c, "198.51.100.2", "core31-rl@example.com", "core31-right-pw"), Equals, http.StatusTooManyRequests)
+	c.Assert(s.authorizeLoginStatus(c, "203.0.113.21", "core31-rl@example.com", "core31-right-pw"), Equals, http.StatusFound)
+}
+
+// The dashboard signs users in with the cluster key from its own address. It
+// forwards the browser's address, so the per-address bucket is the user's,
+// not the dashboard's.
+func (s *S) TestPasswordGrantServiceCallerForwardsAddress(c *C) {
+	clk := &fakeClock{t: time.Now()}
+	s.api.loginLimiter = newTestLoginLimiter(clk)
+	lim := defaultLoginLimits()
+	s.createLoginUser(c, "core31-dash@example.com", "core31-dash", "core31-dash-pw", false)
+	send := func(xff, email, pw string) int {
+		form := url.Values{"grant_type": {"password"}, "username": {email}, "password": {pw}, "client_id": {"flynn-dashboard"}}
+		req, err := http.NewRequest(http.MethodPost, s.srv.URL+"/oauth/token", strings.NewReader(form.Encode()))
+		c.Assert(err, IsNil)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetBasicAuth("", authKey)
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		res, err := http.DefaultClient.Do(req)
+		c.Assert(err, IsNil)
+		res.Body.Close()
+		return res.StatusCode
+	}
+	for i := 0; i < lim.ipBurst; i++ {
+		c.Assert(send("198.51.100.70", fmt.Sprintf("core31-d%d@example.com", i), "x"), Equals, http.StatusUnauthorized)
+	}
+	c.Assert(send("198.51.100.70", "core31-dash@example.com", "core31-dash-pw"), Equals, http.StatusTooManyRequests)
+	// Another browser behind the same dashboard is not affected.
+	c.Assert(send("198.51.100.71", "core31-dash@example.com", "core31-dash-pw"), Equals, http.StatusOK)
+	// No forwarded address: only the account buckets apply.
+	for i := 0; i < lim.ipBurst+2; i++ {
+		c.Assert(send("", fmt.Sprintf("core31-n%d@example.com", i), "x"), Equals, http.StatusUnauthorized)
+	}
+	c.Assert(send("", "core31-dash@example.com", "core31-dash-pw"), Equals, http.StatusOK)
+}
+
+func (s *S) authorizeLoginStatus(c *C, ip, email, password string) int {
+	form := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {"flynn-cli"},
+		"redirect_uri":          {"http://127.0.0.1:8085/"},
+		"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+		"code_challenge_method": {"S256"},
+		"login":                 {email},
+		"password":              {password},
+	}
+	req, err := http.NewRequest(http.MethodPost, s.srv.URL+"/oauth/authorize", strings.NewReader(form.Encode()))
+	c.Assert(err, IsNil)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-For", ip)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := client.Do(req)
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	return res.StatusCode
+}
+
+// Concurrent uses of one refresh token: exactly one may succeed.
+func (s *S) TestRefreshTokenSingleUse(c *C) {
+	s.createLoginUser(c, "core31-rt@example.com", "core31-rt", "core31-rt-pw", false)
+	code, _, first := passwordGrantStatus(c, s.srv.URL, "", "core31-rt@example.com", "core31-rt-pw")
+	c.Assert(code, Equals, http.StatusOK)
+	rt := first["refresh_token"].(string)
+
+	const n = 16
+	var wg sync.WaitGroup
+	var ok int32
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res, err := http.PostForm(s.srv.URL+"/oauth/token", url.Values{
+				"grant_type": {"refresh_token"}, "refresh_token": {rt}, "client_id": {"flynn-cli"},
+			})
+			if err != nil {
+				return
+			}
+			res.Body.Close()
+			if res.StatusCode == http.StatusOK {
+				atomic.AddInt32(&ok, 1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	c.Assert(atomic.LoadInt32(&ok), Equals, int32(1))
+}
+
+// Concurrent uses of one authorization code: exactly one may succeed.
+func (s *S) TestAuthorizationCodeSingleUse(c *C) {
+	u := s.createLoginUser(c, "core31-code@example.com", "core31-code", "core31-code-pw", false)
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	sum := sha256.Sum256([]byte(verifier))
+	codeVal := random.Hex(32)
+	c.Assert(s.api.tenancy.SaveOAuthCode(&data.OAuthCode{
+		Code: codeVal, ClientID: "flynn-cli", RedirectURI: "http://127.0.0.1:8085/",
+		CodeChallenge: base64.RawURLEncoding.EncodeToString(sum[:]), UserID: u.ID,
+		ExpiresAt: time.Now().Add(time.Minute), CreatedAt: time.Now(),
+	}), IsNil)
+
+	const n = 16
+	var wg sync.WaitGroup
+	var ok int32
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			res, err := http.PostForm(s.srv.URL+"/oauth/token", url.Values{
+				"grant_type": {"authorization_code"}, "code": {codeVal}, "client_id": {"flynn-cli"},
+				"redirect_uri": {"http://127.0.0.1:8085/"}, "code_verifier": {verifier},
+			})
+			if err != nil {
+				return
+			}
+			res.Body.Close()
+			if res.StatusCode == http.StatusOK {
+				atomic.AddInt32(&ok, 1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	c.Assert(atomic.LoadInt32(&ok), Equals, int32(1))
+}
+
+func (s *S) patchUserAsCluster(c *C, id, body string) int {
+	req, err := http.NewRequest(http.MethodPatch, s.srv.URL+"/users/"+id, strings.NewReader(body))
+	c.Assert(err, IsNil)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("", authKey)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	return res.StatusCode
+}
+
+// After a password change every credential issued before it stops working:
+// login tokens, refresh tokens, personal access tokens and the /oauth/authorize
+// browser session. A new login with the new password works.
+func (s *S) TestPasswordChangeRevokesTokens(c *C) {
+	defer func(orig time.Duration) { credentialRevokeSkew = orig }(credentialRevokeSkew)
+	credentialRevokeSkew = 0
+	u := s.createLoginUser(c, "core31-pw@example.com", "core31-pw", "core31-old-pw", false)
+	other := s.createLoginUser(c, "core31-bystander@example.com", "core31-by", "core31-by-pw", false)
+
+	code, _, tok := passwordGrantStatus(c, s.srv.URL, "", "core31-pw@example.com", "core31-old-pw")
+	c.Assert(code, Equals, http.StatusOK)
+	access := tok["access_token"].(string)
+	refresh := tok["refresh_token"].(string)
+	pat := s.storePAT(c, u.ID, "user")
+	c.Assert(s.api.tenancy.CreateOAuthSession(u.ID, "core31-session-cookie", time.Now().Add(time.Hour)), IsNil)
+	otherPAT := s.storePAT(c, other.ID, "user")
+
+	code, _ = s.scopedStatus(c, http.MethodGet, access, "/whoami", "")
+	c.Assert(code, Equals, http.StatusOK)
+	code, _ = s.scopedStatus(c, http.MethodGet, pat, "/whoami", "")
+	c.Assert(code, Equals, http.StatusOK)
+
+	c.Assert(s.patchUserAsCluster(c, u.ID, `{"password":"core31-new-pw"}`), Equals, http.StatusOK)
+
+	code, _ = s.scopedStatus(c, http.MethodGet, access, "/whoami", "")
+	c.Assert(code, Equals, http.StatusUnauthorized, Commentf("login token survived a password change"))
+	code, _ = s.scopedStatus(c, http.MethodGet, pat, "/whoami", "")
+	c.Assert(code, Equals, http.StatusUnauthorized, Commentf("PAT survived a password change"))
+	res, err := http.PostForm(s.srv.URL+"/oauth/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}, "client_id": {"flynn-cli"}})
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	c.Assert(res.StatusCode, Equals, http.StatusBadRequest, Commentf("refresh token survived a password change"))
+	_, err = s.api.tenancy.GetOAuthSession("core31-session-cookie", time.Now())
+	c.Assert(err, Equals, data.ErrNotFound, Commentf("oauth session survived a password change"))
+
+	// Other users keep their credentials.
+	code, _ = s.scopedStatus(c, http.MethodGet, otherPAT, "/whoami", "")
+	c.Assert(code, Equals, http.StatusOK)
+
+	// The old password no longer works; the new one does and its token works.
+	code, _, _ = passwordGrantStatus(c, s.srv.URL, "", "core31-pw@example.com", "core31-old-pw")
+	c.Assert(code, Equals, http.StatusUnauthorized)
+	code, _, tok = passwordGrantStatus(c, s.srv.URL, "", "core31-pw@example.com", "core31-new-pw")
+	c.Assert(code, Equals, http.StatusOK)
+	code, _ = s.scopedStatus(c, http.MethodGet, tok["access_token"].(string), "/whoami", "")
+	c.Assert(code, Equals, http.StatusOK)
+}
+
+// The dashboard re-sends the current password when it syncs a user. Setting
+// the same password again is not a change and must not sign the user out.
+func (s *S) TestPasswordResyncKeepsTokens(c *C) {
+	u := s.createLoginUser(c, "core31-sync@example.com", "core31-sync", "core31-sync-pw", false)
+	pat := s.storePAT(c, u.ID, "user")
+	c.Assert(s.patchUserAsCluster(c, u.ID, `{"password":"core31-sync-pw","email_verified":true}`), Equals, http.StatusOK)
+	code, _ := s.scopedStatus(c, http.MethodGet, pat, "/whoami", "")
+	c.Assert(code, Equals, http.StatusOK)
+}
+
+// Expired authorization codes, refresh tokens and browser sessions are
+// deleted; live ones stay.
+func (s *S) TestPurgeExpiredOAuthRows(c *C) {
+	u := s.createLoginUser(c, "core31-purge@example.com", "core31-purge", "core31-purge-pw", false)
+	now := time.Now()
+	past, future := now.Add(-time.Hour), now.Add(time.Hour)
+	for _, oc := range []*data.OAuthCode{
+		{Code: "core31-code-old", RedirectURI: "urn:ietf:wg:oauth:2.0:oob", UserID: u.ID, ExpiresAt: past, CreatedAt: past},
+		{Code: "core31-code-new", RedirectURI: "urn:ietf:wg:oauth:2.0:oob", UserID: u.ID, ExpiresAt: future, CreatedAt: now},
+	} {
+		c.Assert(s.api.tenancy.SaveOAuthCode(oc), IsNil)
+	}
+	_, err := s.api.tenancy.CreateRefreshToken(u.ID, "core31-rt-old", "flynn-cli", past)
+	c.Assert(err, IsNil)
+	_, err = s.api.tenancy.CreateRefreshToken(u.ID, "core31-rt-new", "flynn-cli", future)
+	c.Assert(err, IsNil)
+	c.Assert(s.api.tenancy.CreateOAuthSession(u.ID, "core31-sess-old", past), IsNil)
+	c.Assert(s.api.tenancy.CreateOAuthSession(u.ID, "core31-sess-new", future), IsNil)
+
+	n, err := s.api.tenancy.PurgeExpiredOAuth(now)
+	c.Assert(err, IsNil)
+	c.Assert(n >= 3, Equals, true, Commentf("purged %d", n))
+
+	_, err = s.api.tenancy.ConsumeOAuthCode("core31-code-old")
+	c.Assert(err, Equals, data.ErrNotFound)
+	_, err = s.api.tenancy.ConsumeRefreshToken("core31-rt-old")
+	c.Assert(err, Equals, data.ErrNotFound)
+	_, err = s.api.tenancy.GetOAuthSession("core31-sess-old", past.Add(-time.Hour))
+	c.Assert(err, Equals, data.ErrNotFound)
+
+	_, err = s.api.tenancy.ConsumeOAuthCode("core31-code-new")
+	c.Assert(err, IsNil)
+	_, err = s.api.tenancy.ConsumeRefreshToken("core31-rt-new")
+	c.Assert(err, IsNil)
+	_, err = s.api.tenancy.GetOAuthSession("core31-sess-new", now)
+	c.Assert(err, IsNil)
 }
