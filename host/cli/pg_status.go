@@ -107,6 +107,10 @@ func pgStatusRows(instances []*discoverd.Instance, status func(string) (*sirenia
 }
 
 func pgReplicaProgress(st *sireniaclient.Status, primaryXLog string, tracker *sireniaclient.CatchupTracker) (string, bool) {
+	if st.Database.StandbyStalled {
+		// Its xlog can sit right at the primary's while nothing streams.
+		return fmt.Sprintf("stalled: no WAL streamed or replayed, re-seeding from upstream xlog=%s", st.Database.XLog), false
+	}
 	lag, ok := sireniaclient.LagBytes(primaryXLog, st.Database.XLog)
 	if !ok {
 		return fmt.Sprintf("streaming WAL xlog=%s", st.Database.XLog), false

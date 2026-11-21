@@ -158,6 +158,9 @@ func walCatchup(up, down *Status, t *CatchupTracker) string {
 	if !up.Database.Running || !down.Database.Running {
 		return ""
 	}
+	if down.Database.StandbyStalled {
+		return "replica stalled (no WAL streamed or replayed), re-seeding from upstream"
+	}
 	ux, dx := up.Database.XLog, down.Database.XLog
 	if ux == "" || dx == "" || ux == zeroXLog || dx == zeroXLog {
 		return "WAL streaming not established"

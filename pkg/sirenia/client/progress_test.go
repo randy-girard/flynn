@@ -100,3 +100,14 @@ func TestCatchupTrackerPercent(t *testing.T) {
 		t.Fatalf("untracked %q", got)
 	}
 }
+
+// TestFormatReplSyncStalledReplica: the deploy progress line must say the
+// replica is stalled instead of "streaming WAL, catching up" (CORE-25-F1-F3).
+func TestFormatReplSyncStalledReplica(t *testing.T) {
+	up := &Status{Database: &DatabaseInfo{Running: true, XLog: "0/ECB407A0"}}
+	down := &Status{Database: &DatabaseInfo{Running: true, XLog: "0/E16ADD00", StandbyStalled: true}}
+	got := FormatReplSyncProgress(up, down, nil, nil)
+	if !strings.Contains(got, "replica stalled (no WAL streamed or replayed), re-seeding from upstream") || strings.Contains(got, "streaming WAL") {
+		t.Fatalf("got %q", got)
+	}
+}

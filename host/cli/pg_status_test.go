@@ -111,3 +111,22 @@ func TestHostPgWaitTimeout(t *testing.T) {
 		t.Fatalf("output %q", buf.String())
 	}
 }
+
+// TestPgStatusRowsFlagsStalledStandby: CORE-25-F1-F3 showed the stuck sync as
+// "catching up, 180.6 MB behind" for hours. A standby that reports
+// standby_stalled is named as stalled and is never ready.
+func TestPgStatusRowsFlagsStalledStandby(t *testing.T) {
+	instances, status := pgTestPeers(map[string]*sireniaclient.Status{
+		"10.0.0.1:5432": pgTestStatus("p", state.RolePrimary, &sireniaclient.DatabaseInfo{Running: true, ReadWrite: true, XLog: "0/ECB407A0"}),
+		"10.0.0.2:5432": pgTestStatus("s", state.RoleSync, &sireniaclient.DatabaseInfo{Running: true, XLog: "0/ECB407A0", StandbyStalled: true}),
+	})
+	rows, ready := pgStatusRows(instances, status, nil)
+	if ready {
+		t.Fatal("a stalled sync must not be ready, even at the primary's xlog")
+	}
+	var buf bytes.Buffer
+	writePgStatus(&buf, rows)
+	if want := "10.0.0.2:5432  sync     stalled: no WAL streamed or replayed, re-seeding from upstream xlog=0/ECB407A0"; !strings.Contains(buf.String(), want) {
+		t.Fatalf("missing %q in\n%s", want, buf.String())
+	}
+}
