@@ -64,7 +64,7 @@ func stripReservedJobMeta(meta map[string]string) { stripReserved(meta) }
 // only a cluster-admin credential may set on an app or job.
 func reservedAppMetaKey(k string) bool {
 	switch k {
-	case metaSystemApp, metaDatastore, metaPlugin:
+	case metaSystemApp, metaDatastore, metaPlugin, ct.JobMetaOneOffMemoryMB:
 		return true
 	}
 	return strings.HasPrefix(k, metaControllerPrefix)

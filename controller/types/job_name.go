@@ -13,6 +13,13 @@ const (
 	// so it survives JobMetaFromMetadata stripping.
 	JobNameMetaKey = "name"
 
+	// JobMetaOneOffMemoryMB marks a one-off started by POST /apps/:id/jobs
+	// (or the controller's own detached one-offs) and holds the MiB it was
+	// admitted with. It is stored in job_cache.meta (not flynn-controller.*)
+	// so the account quota can count running one-offs. Only the controller
+	// sets it; app and job meta from a tenant cannot.
+	JobMetaOneOffMemoryMB = "flynn-one-off-memory-mb"
+
 	jobNameMax = 9999
 )
 

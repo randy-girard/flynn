@@ -428,13 +428,26 @@ func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, release *
 	// changes, and AddScaleRequest stores that overlay. Subtracting the
 	// whole stored formation and adding only the request keys drops the
 	// types the request left out.
+	// Running one-offs hold processes and memory too. They are the same
+	// before and after the scale, so they never turn a shrink into growth.
+	oneOffProcs, oneOffMem, err := c.oneOffUsage(app.OwnerAccount)
+	if err != nil {
+		return err
+	}
+	usage.Processes += oneOffProcs
 	procs := projectedAccountProcesses(usage.Processes, oldCounts, newCounts)
 	mem, err := c.projectedScaleMemory(app, release, newCounts, newTags, applyTags)
 	if err != nil {
 		return err
 	}
+	if mem, err = addMemoryMB(mem, oneOffMem); err != nil {
+		return err
+	}
 	curMem, err := c.projectedScaleMemory(app, release, oldCounts, nil, false)
 	if err != nil {
+		return err
+	}
+	if curMem, err = addMemoryMB(curMem, oneOffMem); err != nil {
 		return err
 	}
 	// A shrink is allowed while the account is already over the limit so

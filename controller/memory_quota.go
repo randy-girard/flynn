@@ -419,41 +419,6 @@ func (c *controllerAPI) accountFormations(account string) ([]memoryFormation, er
 	return out, nil
 }
 
-func (c *controllerAPI) enforceOneOffMemory(app *ct.App, procType string, resources resource.Resources) error {
-	if !scaleQuotaApplies(c, app) {
-		return nil
-	}
-	forms, err := c.accountFormations(app.OwnerAccount)
-	if err != nil {
-		return err
-	}
-	hosts, err := c.memoryHosts(forms)
-	if err != nil {
-		return err
-	}
-	profiles, err := c.memoryProfiles(forms)
-	if err != nil {
-		return err
-	}
-	current, err := accountMemoryMB(app.OwnerAccount, forms, hosts, profiles)
-	if err != nil {
-		return err
-	}
-	extra, err := oneOffMemoryMB(app.Name, procType, resources, c.buildJobMemoryAvailable())
-	if err != nil {
-		return err
-	}
-	total, err := addMemoryMB(current, extra)
-	if err != nil {
-		return err
-	}
-	arg, err := memoryQuotaArg(total)
-	if err != nil {
-		return err
-	}
-	return c.quotaAllows(app.OwnerAccount, 0, 0, arg, 0, 0)
-}
-
 func formsNeedOmniHosts(forms []memoryFormation) bool {
 	for _, f := range forms {
 		for name, n := range f.Processes {

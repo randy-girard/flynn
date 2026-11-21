@@ -244,6 +244,20 @@ already reserves CPU and memory for builtin `small`, `medium`, and `large`.
 This command does not repeat either of those. It does not reschedule jobs.
 Reservation is read when a job is placed.
 
+One-off jobs (`flynn run`, `POST /apps/:id/jobs`) on an app with an owner
+count against the same account `max_processes` and `max_memory_mb` as its
+formations. Each one-off is checked with every formation process and every
+one-off of that account that is still pending, starting, up, or stopping,
+and a running one-off also counts when a formation scales up. A one-off
+counts at its memory limit (1 GiB when the request sets none). The
+controller stamps the admitted MiB on the job as `flynn-one-off-memory-mb`;
+tenants cannot set that key. One-offs started before this check existed
+carry no stamp and are not counted. A one-off the controller has started but
+the scheduler has not recorded yet still counts for two minutes, so
+back-to-back requests cannot each pass alone. That hold lives in one
+controller process, so two requests that reach different controller web
+processes at the same moment can still both pass once.
+
 `flynn-host tenancy:mode self_hosted`, while the cluster is hosted, is
 refused when any app that is not a system app (`flynn-system-app=true`)
 still has an `owner_account`. That reversal is not safe. The command does
@@ -432,7 +446,13 @@ the mode or the role tag changed.
 - Process tags and runtime tags still have to match. `flynn-max-processes`
   still counts tenant jobs only.
 
-One-off jobs follow the app they belong to. `slugbuilder` and
+One-off jobs follow the app they belong to. `flynn run` and
+`POST /apps/:id/jobs` pick a random host that is not shutting down and
+that the same role filter allows, so a user app's one-off runs on an app
+host and a control-plane one-off (a system app or plugin app) on a core
+host. With no such host the request fails with `503` and the job is not
+started; it is never sent to a host of the other role. In `mixed` the
+controller still skips hosts that are shutting down. `slugbuilder` and
 `dockerbuilder` run on the user app, so a build runs on an app host.
 gitreceive stays on a core host.
 

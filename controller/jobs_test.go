@@ -11,14 +11,18 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	. "github.com/flynn/go-check"
 	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/authz"
+	"github.com/randy-girard/flynn/controller/placement"
+	"github.com/randy-girard/flynn/controller/tenancy"
 	tu "github.com/randy-girard/flynn/controller/testutils"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/resource"
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/httphelper"
@@ -951,5 +955,175 @@ func (s *S) TestStartDetachedJobSystemAppKeepsTrust(c *C) {
 		c.Assert(job.Metadata["flynn-system-app"], Equals, "true")
 		c.Assert(job.Metadata["github"], Equals, "true")
 		c.Assert(job.Profiles, DeepEquals, []host.JobProfile{host.JobProfileZFS})
+	}
+}
+
+// CORE-28: one-off jobs count against the owner's process and memory quota,
+// including one-offs already running and one-offs started a moment ago that
+// the scheduler has not persisted yet.
+func (s *S) TestRunJobCountsRunningOneOffsAgainstQuota(c *C) {
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeHosted, nil), IsNil)
+	var cleanup []formationStop
+	var started []*ct.Job
+	defer func() {
+		for _, j := range started {
+			j.State = ct.JobStateDown
+			s.api.jobRepo.Add(j)
+		}
+		s.zeroFormations(c, cleanup)
+		c.Assert(s.api.tenancy.SetSettings(tenancy.ModeSelfHosted, nil), IsNil)
+	}()
+
+	app := s.createTestApp(c, &ct.App{Name: "core28-quota", OwnerAccount: "user:core28-quota"})
+	procs := 2
+	mem := 8192
+	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{
+		Account: app.OwnerAccount, MaxProcesses: &procs, MaxMemoryMB: &mem,
+	}), IsNil)
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	release := s.createTestRelease(c, app.ID, &ct.Release{
+		ArtifactIDs: []string{artifact.ID},
+		Processes:   map[string]ct.ProcessType{"web": oneMiBProcess()},
+	})
+	c.Assert(s.api.appRepo.SetRelease(app, release.ID), IsNil)
+	hc := tu.NewFakeHostClient(fakeHostID(), false)
+	s.cc.AddHost(hc)
+
+	run := func() (*ct.Job, error) {
+		return s.c.RunJobDetached(app.ID, &ct.NewJob{ReleaseID: release.ID, Args: []string{"sleep", "60"}})
+	}
+	persist := func(res *ct.Job, state ct.JobState) {
+		job := &ct.Job{
+			ID: res.ID, UUID: res.UUID, HostID: res.HostID, AppID: app.ID,
+			ReleaseID: release.ID, Type: res.Type, State: state,
+		}
+		hj, ok := hc.Jobs[res.ID]
+		c.Assert(ok, Equals, true)
+		job.Meta = map[string]string{}
+		for k, v := range hj.Job.Metadata {
+			if !strings.HasPrefix(k, "flynn-controller.") {
+				job.Meta[k] = v
+			}
+		}
+		c.Assert(s.api.jobRepo.Add(job), IsNil)
+		started = append(started, job)
+	}
+
+	// A one-off the host refused does not keep its reservation.
+	hc.AddJobErr = fmt.Errorf("host refused")
+	for i := 0; i < 3; i++ {
+		_, err := run()
+		c.Assert(err, NotNil)
+		c.Assert(strings.Contains(err.Error(), "max_processes"), Equals, false, Commentf("%v", err))
+	}
+	hc.AddJobErr = nil
+
+	// Two back-to-back one-offs fill max_processes=2 before the scheduler
+	// has written either one to job_cache.
+	first, err := run()
+	c.Assert(err, IsNil)
+	second, err := run()
+	c.Assert(err, IsNil)
+	_, err = run()
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_processes"), Equals, true, Commentf("%v", err))
+
+	// Once persisted, a running one-off still counts and a stopped one does not.
+	persist(first, ct.JobStateUp)
+	persist(second, ct.JobStateDown)
+	third, err := run()
+	c.Assert(err, IsNil)
+	persist(third, ct.JobStateUp)
+	_, err = run()
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_processes"), Equals, true, Commentf("%v", err))
+
+	// Running one-offs count against a formation scale too.
+	cleanup = append(cleanup, formationStop{app.ID, release.ID, []string{"web"}})
+	err = s.c.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: release.ID, Processes: map[string]int{"web": 1}})
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "quota"), Equals, true, Commentf("%v", err))
+
+	// Memory: two running 1 GiB one-offs plus a third 1 GiB one-off is
+	// over 2500 MB even with processes to spare.
+	wide := 10
+	lowMem := 2500
+	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{
+		Account: app.OwnerAccount, MaxProcesses: &wide, MaxMemoryMB: &lowMem,
+	}), IsNil)
+	_, err = run()
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_memory_mb"), Equals, true, Commentf("%v", err))
+	err = s.c.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: release.ID, Processes: map[string]int{"web": 1}})
+	c.Assert(err, IsNil)
+	_, err = s.c.RunJobDetached(app.ID, &ct.NewJob{
+		ReleaseID: release.ID, Args: []string{"true"},
+		Resources: resource.Resources{resource.TypeMemory: {Limit: mibPtr(256)}},
+	})
+	c.Assert(err, IsNil)
+
+	// A tenant cannot hide a one-off by setting the reserved marker itself.
+	c.Assert(reservedAppMetaKey(ct.JobMetaOneOffMemoryMB), Equals, true)
+}
+
+// CORE-28: a one-off for a user app lands on a flynn-role=app host while
+// split is on, a system app one-off on a core host, and a host that is
+// shutting down is never picked.
+func (s *S) TestRunJobHonoursSplitPlacement(c *C) {
+	c.Assert(s.api.tenancy.SetWorkloadPlacement(placement.ModeSplit), IsNil)
+	defer func() {
+		c.Assert(s.api.tenancy.SetWorkloadPlacement(placement.ModeMixed), IsNil)
+	}()
+
+	core := tu.NewFakeHostClient("core28core", false)
+	c.Assert(core.UpdateTags(map[string]string{placement.TagRole: placement.RoleCore}), IsNil)
+	appHost := tu.NewFakeHostClient("core28app", false)
+	c.Assert(appHost.UpdateTags(map[string]string{placement.TagRole: placement.RoleApp}), IsNil)
+	draining := tu.NewFakeHostClient("core28drain", false)
+	c.Assert(draining.UpdateTags(map[string]string{placement.TagRole: placement.RoleApp}), IsNil)
+	draining.Shutdown = true
+	untagged := tu.NewFakeHostClient("core28none", false)
+	s.cc.AddHost(core)
+	s.cc.AddHost(appHost)
+	s.cc.AddHost(draining)
+	s.cc.AddHost(untagged)
+
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	app := s.createTestApp(c, &ct.App{Name: "core28-split"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+	for i := 0; i < 12; i++ {
+		res, err := s.c.RunJobDetached(app.ID, &ct.NewJob{ReleaseID: release.ID, Args: []string{"true"}})
+		c.Assert(err, IsNil)
+		c.Assert(res.HostID, Equals, appHost.ID())
+	}
+	for i := 0; i < 4; i++ {
+		res, err := s.api.startDetachedJob(app, &ct.NewJob{ReleaseID: release.ID, Args: []string{"true"}})
+		c.Assert(err, IsNil)
+		c.Assert(res.HostID, Equals, appHost.ID())
+	}
+
+	sys := s.createTestApp(c, &ct.App{Name: "core28-split-sys", Meta: map[string]string{"flynn-system-app": "true"}})
+	sysRelease := s.createTestRelease(c, sys.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+	for i := 0; i < 8; i++ {
+		res, err := s.c.RunJobDetached(sys.ID, &ct.NewJob{ReleaseID: sysRelease.ID, Args: []string{"true"}})
+		c.Assert(err, IsNil)
+		c.Assert(res.HostID, Equals, core.ID())
+	}
+
+	// With the only app host draining, a user one-off is refused, not sent
+	// to a core host.
+	appHost.Shutdown = true
+	_, err := s.c.RunJobDetached(app.ID, &ct.NewJob{ReleaseID: release.ID, Args: []string{"true"}})
+	c.Assert(err, NotNil)
+	c.Assert(core.Jobs, HasLen, 8)
+	c.Assert(draining.Jobs, HasLen, 0)
+	c.Assert(untagged.Jobs, HasLen, 0)
+
+	// mixed ignores flynn-role but still skips shutting-down hosts.
+	c.Assert(s.api.tenancy.SetWorkloadPlacement(placement.ModeMixed), IsNil)
+	for i := 0; i < 12; i++ {
+		res, err := s.c.RunJobDetached(app.ID, &ct.NewJob{ReleaseID: release.ID, Args: []string{"true"}})
+		c.Assert(err, IsNil)
+		c.Assert(res.HostID == core.ID() || res.HostID == untagged.ID(), Equals, true, Commentf("%s", res.HostID))
 	}
 }

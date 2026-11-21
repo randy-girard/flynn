@@ -271,16 +271,11 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		entrypoint = *e
 	}
 
-	hosts, err := c.clusterClient.Hosts()
+	client, err := c.pickOneOffHost(app)
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
-	if len(hosts) == 0 {
-		respondWithError(w, errors.New("no hosts found"))
-		return
-	}
-	client := hosts[random.Math.Intn(len(hosts))]
 
 	uuid := random.UUID()
 	hostID := client.ID()
@@ -363,10 +358,17 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		job.Partition = "system"
 	}
 	resource.SetDefaults(&job.Resources)
-	if err := c.enforceOneOffMemory(app, procType, job.Resources); err != nil {
+	cancelAdmit, err := c.admitOneOff(app, procType, uuid, job.Resources, job.Metadata)
+	if err != nil {
 		respondWithError(w, err)
 		return
 	}
+	scheduled := false
+	defer func() {
+		if !scheduled {
+			cancelAdmit()
+		}
+	}()
 	if len(newJob.Args) > 0 {
 		job.Config.Args = release.RunJobArgs(newJob.Args)
 	}
@@ -413,6 +415,7 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		})
 		return
 	}
+	scheduled = true
 
 	if attach {
 		// TODO(titanous): This Wait could block indefinitely if something goes
@@ -500,14 +503,10 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 	if e := utils.GetEntrypoint(artifacts, ""); e != nil {
 		entrypoint = *e
 	}
-	hosts, err := c.clusterClient.Hosts()
+	client, err := c.pickOneOffHost(app)
 	if err != nil {
 		return nil, err
 	}
-	if len(hosts) == 0 {
-		return nil, errors.New("no hosts found")
-	}
-	client := hosts[random.Math.Intn(len(hosts))]
 	uuid := random.UUID()
 	hostID := client.ID()
 	id := cluster.GenerateJobID(hostID, uuid)
@@ -559,7 +558,8 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 		job.Partition = "system"
 	}
 	resource.SetDefaults(&job.Resources)
-	if err := c.enforceOneOffMemory(app, procType, job.Resources); err != nil {
+	cancelAdmit, err := c.admitOneOff(app, procType, uuid, job.Resources, job.Metadata)
+	if err != nil {
 		return nil, err
 	}
 	if len(newJob.Args) > 0 {
@@ -569,6 +569,7 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 	if err := runJobAttempts.RunWithValidator(func() error {
 		return client.AddJob(job)
 	}, httphelper.IsRetryableError); err != nil {
+		cancelAdmit()
 		return nil, fmt.Errorf("schedule failed: %s", err.Error())
 	}
 	return &ct.Job{

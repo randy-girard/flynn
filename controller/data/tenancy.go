@@ -3,6 +3,7 @@ package data
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -674,6 +675,75 @@ func usageFromFormation(procRaw, formRaw []byte) (procs, memoryMB int) {
 		memoryMB += n * int((bytes+1024*1024-1)/(1024*1024))
 	}
 	return procs, memoryMB
+}
+
+// OneOffJob is a one-off job counted toward an account quota.
+type OneOffJob struct {
+	UUID     string
+	MemoryMB int64
+}
+
+// ActiveOneOffs lists the account's one-off jobs that still hold a process:
+// pending, starting, up, or stopping. A one-off is a job_cache row the
+// controller stamped with ct.JobMetaOneOffMemoryMB when it admitted the job.
+// Formation jobs never carry that key, and tenants cannot set it.
+func (r *TenancyRepo) ActiveOneOffs(account string) ([]OneOffJob, error) {
+	if r == nil || r.db == nil || account == "" {
+		return nil, nil
+	}
+	rows, err := r.db.Query(`
+		SELECT j.job_id::text, (j.meta ->> $2)::bigint
+		FROM job_cache j
+		JOIN apps a ON a.app_id = j.app_id
+		WHERE a.owner_account = $1 AND a.deleted_at IS NULL
+		  AND j.state IN ('pending', 'starting', 'up', 'stopping')
+		  AND (j.meta ->> $2) ~ '^[0-9]{1,12}$'`, account, ct.JobMetaOneOffMemoryMB)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OneOffJob
+	for rows.Next() {
+		var j OneOffJob
+		if err := rows.Scan(&j.UUID, &j.MemoryMB); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+var jobUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// KnownJobs reports which of these job UUIDs have a job_cache row in any
+// state. Malformed ids are skipped.
+func (r *TenancyRepo) KnownJobs(uuids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(uuids))
+	if r == nil || r.db == nil || len(uuids) == 0 {
+		return out, nil
+	}
+	ids := make([]string, 0, len(uuids))
+	for _, id := range uuids {
+		if jobUUIDPattern.MatchString(id) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(`SELECT job_id::text FROM job_cache WHERE job_id = ANY($1::text[]::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // RunnableFormation is a non-deleted formation whose process counts sum to
