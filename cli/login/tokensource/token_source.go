@@ -1,6 +1,7 @@
 package tokensource
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -110,6 +111,10 @@ func (s *tokenSource) Token() (*oauth2.Token, error) {
 	}
 	newToken, err := oauth.RefreshToken(s.httpClient, s.config, s.t, audience)
 	if err != nil {
+		if t := s.rotatedElsewhere(err, audience); t != nil {
+			s.t = t
+			return t, nil
+		}
 		return nil, fmt.Errorf("error refreshing token: %s", err)
 	}
 
@@ -118,4 +123,21 @@ func (s *tokenSource) Token() (*oauth2.Token, error) {
 	}
 	s.t = newToken
 	return newToken, nil
+}
+
+// rotatedElsewhere handles a lost refresh race. Refresh tokens are single
+// use, so when two flynn processes refresh at once the controller answers
+// invalid_grant to one of them. If the cache now holds a different refresh
+// token with a valid access token, the other process won and its tokens are
+// used.
+func (s *tokenSource) rotatedElsewhere(err error, audience string) *oauth2.Token {
+	var oe *oauth.Error
+	if !errors.As(err, &oe) || oe.Code != "invalid_grant" || s.cache == nil {
+		return nil
+	}
+	t, cerr := s.cache.GetToken(s.clusterName, s.config.ClientID, audience)
+	if cerr != nil || t == nil || t.RefreshToken == s.t.RefreshToken || !t.Valid() {
+		return nil
+	}
+	return t
 }

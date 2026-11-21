@@ -174,3 +174,64 @@ func TestDiscoverEmptyMetadataURLs(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// Refresh tokens are single use. When two flynn processes refresh the same
+// token at once, the loser gets invalid_grant; it must pick up the tokens
+// the winner wrote to the cache instead of failing.
+func TestTokenRefreshLostRaceUsesCachedRotation(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant", "error_description": "invalid refresh token"})
+	}))
+	defer srv.Close()
+
+	cache := NewTokenCache(t.TempDir())
+	// The winner already stored the rotated pair.
+	winner := (&oauth2.Token{
+		AccessToken:  "a-winner",
+		RefreshToken: "r-winner",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(time.Hour),
+	}).WithExtra(map[string]any{
+		oauth.RefreshTokenIssueTime: time.Now(),
+		oauth.RefreshTokenExpiry:    time.Now().Add(24 * time.Hour),
+		"audience":                  srv.URL,
+	})
+	if err := cache.SetToken("prod", "flynn-cli", winner); err != nil {
+		t.Fatal(err)
+	}
+	stale := (&oauth2.Token{
+		AccessToken:  "a-old",
+		RefreshToken: "r-old",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(-time.Minute),
+	}).WithExtra(map[string]any{"audience": srv.URL})
+	s := &tokenSource{
+		clusterName:   "prod",
+		controllerURL: srv.URL,
+		cache:         cache,
+		httpClient:    srv.Client(),
+		config:        &oauth2.Config{ClientID: "flynn-cli", Endpoint: oauth2.Endpoint{TokenURL: srv.URL + "/oauth/token"}},
+		t:             stale,
+	}
+	got, err := s.Token()
+	if err != nil {
+		t.Fatalf("lost refresh race was not recovered from the cache: %v", err)
+	}
+	if got.AccessToken != "a-winner" {
+		t.Fatalf("got %q", got.AccessToken)
+	}
+
+	// With nothing newer in the cache the refresh error is returned.
+	s.t = stale
+	if err := cache.SetToken("prod", "flynn-cli", stale.WithExtra(map[string]any{
+		oauth.RefreshTokenIssueTime: time.Now().Add(time.Hour), "audience": srv.URL,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Token(); err == nil || !strings.Contains(err.Error(), "invalid_grant") {
+		t.Fatalf("want invalid_grant, got %v", err)
+	}
+}
