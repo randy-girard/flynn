@@ -270,7 +270,11 @@ delete routes, mark jobs down, or drop firewall exposes.
 
 In `hosted` mode a route hostname outside the cluster domain needs a
 verified domain for the app's owner account, either the exact name or a
-parent. `self_hosted` does not check this. The flow is two API calls:
+parent. `self_hosted` does not check this. The rule covers the route
+`domain` and a `managed_certificate_domain` that differs from it, on create
+and on `PUT /apps/:id/routes/:type/:id` whenever the update changes either
+value. An update keeps the route on the app in the URL: `parent_ref` in the
+body is ignored. The flow is two API calls:
 
 1. `POST /domains/verify {"hostname":"example.com","owner_account":"user:<id>"}`
    returns a token and `txt_name` (`_flynn-verify.example.com`). The caller

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,8 @@ import (
 
 	. "github.com/flynn/go-check"
 	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/data"
+	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
@@ -634,4 +637,153 @@ func (s *S) TestHTTPRouteConcurrencyShared(c *C) {
 
 	tcp := s.createTestRoute(c, app.ID, (&router.TCPRoute{Service: "http-concurrency-tcp"}).ToRoute())
 	c.Assert(tcp.MaxConcurrentRequests, Equals, 0)
+}
+
+// TestUpdateRouteCannotChangeParentOrPath: CORE-27. PUT used to take
+// parent_ref from the body and skip the admin-only path rule, so an app
+// grant could move a route to another app (or to no app, hiding it from app
+// deletion) and turn a root route into a path route.
+func (s *S) TestUpdateRouteCannotChangeParentOrPath(c *C) {
+	suffix := core20Suffix()
+	app := s.createTestApp(c, &ct.App{Name: "core27-own-" + suffix})
+	other := s.createTestApp(c, &ct.App{Name: "core27-other-" + suffix})
+	scoped := s.scopedClient(c, app)
+	domain := "core27-" + suffix + ".example.com"
+
+	root := (&router.HTTPRoute{Domain: domain, Service: app.Name + "-web"}).ToRoute()
+	c.Assert(scoped.CreateRoute(app.ID, root), IsNil)
+	tcp := (&router.TCPRoute{Service: app.Name + "-web"}).ToRoute()
+	c.Assert(scoped.CreateRoute(app.ID, tcp), IsNil)
+
+	for _, route := range []*router.Route{root, tcp} {
+		for _, parent := range []string{routeParentRef(other.ID), ""} {
+			route.ParentRef = parent
+			c.Assert(scoped.UpdateRoute(app.ID, route.FormattedID(), route), IsNil)
+			c.Assert(route.ParentRef, Equals, routeParentRef(app.ID))
+			got, err := s.c.GetRoute(app.ID, route.FormattedID())
+			c.Assert(err, IsNil)
+			c.Assert(got.ParentRef, Equals, routeParentRef(app.ID))
+		}
+	}
+	otherRoutes, err := s.c.AppRouteList(other.ID)
+	c.Assert(err, IsNil)
+	for _, r := range otherRoutes {
+		c.Assert(r.ID, Not(Equals), root.ID)
+		c.Assert(r.ID, Not(Equals), tcp.ID)
+	}
+
+	// A root route may not become a path route without cluster admin.
+	root.ParentRef = ""
+	root.Path = "/admin/"
+	err = scoped.UpdateRoute(app.ID, root.FormattedID(), root)
+	c.Assert(httphelper.IsForbidden(err), Equals, true, Commentf("%v", err))
+	got, err := s.c.GetRoute(app.ID, root.FormattedID())
+	c.Assert(err, IsNil)
+	c.Assert(data.HTTPRoutePath(got.Path), Equals, "/")
+
+	// A path route an admin made stays editable for the app grant as long
+	// as the path is unchanged; changing the path still needs admin.
+	sub := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: domain, Service: app.Name + "-web", Path: "/api/"}).ToRoute())
+	sub.Service = app.Name + "-api-web"
+	c.Assert(scoped.UpdateRoute(app.ID, sub.FormattedID(), sub), IsNil)
+	c.Assert(sub.Path, Equals, "/api/")
+	sub.Path = "/other/"
+	err = scoped.UpdateRoute(app.ID, sub.FormattedID(), sub)
+	c.Assert(httphelper.IsForbidden(err), Equals, true, Commentf("%v", err))
+	sub.Path = "/other/"
+	c.Assert(s.c.UpdateRoute(app.ID, sub.FormattedID(), sub), IsNil)
+	c.Assert(sub.Path, Equals, "/other/")
+
+	// The body is validated against the route schema, as on create.
+	tcp.TLSMode = "bogus"
+	err = scoped.UpdateRoute(app.ID, tcp.FormattedID(), tcp)
+	c.Assert(httphelper.IsValidationError(err), Equals, true, Commentf("%v", err))
+}
+
+// TestUpdateTCPRouteDomainNeedsVerifiedHostname: CORE-27. In hosted mode a
+// TCP route created with no domain could be given any domain on update.
+func (s *S) TestUpdateTCPRouteDomainNeedsVerifiedHostname(c *C) {
+	defer s.restoreTenancyDefaults(c)
+	suffix := core20Suffix()
+	owner := "user:core27-" + suffix
+	verified := "core27-" + suffix + ".com"
+	c.Assert(s.hc.db.Exec(`INSERT INTO verified_domains (hostname, owner_account, token, verified_at) VALUES ($1, $2, 'x', now())`, verified, owner), IsNil)
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname = $1`, verified)
+	app := s.createTestApp(c, &ct.App{Name: "core27-tcp-" + suffix, OwnerAccount: owner})
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeHosted, nil), IsNil)
+	scoped := s.scopedClient(c, app)
+
+	tcp := (&router.TCPRoute{Service: app.Name + "-web"}).ToRoute()
+	c.Assert(scoped.CreateRoute(app.ID, tcp), IsNil)
+
+	tcp.Domain = "victim-core27-" + suffix + ".com"
+	err := scoped.UpdateRoute(app.ID, tcp.FormattedID(), tcp)
+	c.Assert(httphelper.IsValidationError(err), Equals, true, Commentf("%v", err))
+	c.Assert(err, ErrorMatches, ".*requires a verified domain.*")
+	got, err := s.c.GetRoute(app.ID, tcp.FormattedID())
+	c.Assert(err, IsNil)
+	c.Assert(got.Domain, Equals, "")
+
+	tcp.Domain = "db." + verified
+	c.Assert(scoped.UpdateRoute(app.ID, tcp.FormattedID(), tcp), IsNil)
+	c.Assert(tcp.Domain, Equals, "db."+verified)
+
+	// managed_certificate_domain follows the same hostname rule.
+	victim := "victim-core27-" + suffix + ".com"
+	tcp.ManagedCertificateDomain = &victim
+	err = scoped.UpdateRoute(app.ID, tcp.FormattedID(), tcp)
+	c.Assert(httphelper.IsValidationError(err), Equals, true, Commentf("%v", err))
+	c.Assert(err, ErrorMatches, ".*requires a verified domain.*")
+}
+
+// TestCreateRouteManagedCertificateDomainNeedsHostname: CORE-27. The
+// certificate domain was never checked against the hostname rule on create.
+func (s *S) TestCreateRouteManagedCertificateDomainNeedsHostname(c *C) {
+	defer s.restoreTenancyDefaults(c)
+	suffix := core20Suffix()
+	owner := "user:core27-" + suffix
+	verified := "core27-" + suffix + ".com"
+	c.Assert(s.hc.db.Exec(`INSERT INTO verified_domains (hostname, owner_account, token, verified_at) VALUES ($1, $2, 'x', now())`, verified, owner), IsNil)
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname = $1`, verified)
+	app := s.createTestApp(c, &ct.App{Name: "core27-mcd-" + suffix, OwnerAccount: owner})
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeHosted, nil), IsNil)
+	scoped := s.scopedClient(c, app)
+
+	victim := "victim-core27-" + suffix + ".com"
+	route := (&router.HTTPRoute{Domain: "www." + verified, Service: app.Name + "-web", ManagedCertificateDomain: &victim}).ToRoute()
+	err := scoped.CreateRoute(app.ID, route)
+	c.Assert(httphelper.IsValidationError(err), Equals, true, Commentf("%v", err))
+	c.Assert(err, ErrorMatches, ".*requires a verified domain.*")
+
+	// The flows that enable HTTPS (flynn route:https, acme:enable, the
+	// letsencrypt plugin) set the certificate domain to the route's own
+	// domain, which the domain check already covers. A value already
+	// stored on the route is kept on update.
+	ctx := context.Background()
+	own := route.Domain
+	for _, tc := range []struct {
+		mcd      string
+		existing *string
+		ok       bool
+	}{
+		{mcd: own, ok: true},
+		{mcd: strings.ToUpper(own) + ".", ok: true},
+		{mcd: "api." + verified, ok: true},
+		{mcd: victim, ok: false},
+		{mcd: victim, existing: &victim, ok: true},
+		{mcd: "", ok: true},
+	} {
+		mcd := tc.mcd
+		in := &router.Route{Type: "http", Domain: own, ManagedCertificateDomain: &mcd}
+		var existing *router.Route
+		if tc.existing != nil {
+			existing = &router.Route{Type: "http", Domain: own, ManagedCertificateDomain: tc.existing}
+		}
+		err := s.api.checkManagedCertificateDomain(ctx, app, in, existing)
+		if tc.ok {
+			c.Assert(err, IsNil, Commentf("%s", tc.mcd))
+		} else {
+			c.Assert(err, ErrorMatches, ".*requires a verified domain.*", Commentf("%s", tc.mcd))
+		}
+	}
 }

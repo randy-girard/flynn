@@ -468,7 +468,9 @@ sudo flynn-host route:add http --app myapp example.com/api
 ```
 
 `flynn route:add` rejects path-based routes. The user CLI can still list and
-remove them.
+remove them. An app token may update a path route an administrator made, for
+example its service, but only a cluster administrator can change the path or
+turn a root route into a path route.
 
 ### Cluster apex (root domain)
 

@@ -46,6 +46,10 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		respondWithError(w, err)
 		return
 	}
+	if err := c.checkManagedCertificateDomain(ctx, c.getApp(ctx), &route, nil); err != nil {
+		respondWithError(w, err)
+		return
+	}
 
 	// Check if ACME is enabled when managed certificate is requested
 	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
@@ -295,7 +299,34 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 		route.Path = existing.Path
 	}
 
+	// CORE-27: an update runs the create-time checks on every value it
+	// changes. The route stays with the app in the URL, whatever the body
+	// says, so it cannot be moved to another app or hidden from this one.
+	route.ParentRef = routeParentRef(app.ID)
+	if err := schema.Validate(&route); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if route.Type == "http" && router.HTTPPathRequiresClusterAdmin(route.Path) &&
+		normalizedRoutePath(route.Path) != normalizedRoutePath(existing.Path) {
+		tok := authz.TokenFromContext(ctx)
+		if tok == nil || !tok.HasClusterAdmin() {
+			httphelper.Forbidden(w, "path-based HTTP routes can only be created with flynn-host cluster administrator credentials")
+			return
+		}
+	}
+
 	if !c.enforceRouteServiceOwnership(ctx, w, c.getApp(ctx), route.Service) {
+		return
+	}
+	if !sameRouteHost(route.Domain, existing.Domain) {
+		if err := c.checkHostname(ctx, app, route.Domain); err != nil {
+			respondWithError(w, err)
+			return
+		}
+	}
+	if err := c.checkManagedCertificateDomain(ctx, app, &route, existing); err != nil {
+		respondWithError(w, err)
 		return
 	}
 	keepStoredRouteKey(&route, existing)
@@ -332,6 +363,48 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 	}
 	data.MarkIncludedRoutes(c.getApp(ctx), c.appRepo.DefaultDomain(), &route)
 	httphelper.JSON(w, 200, presentRoute(ctx, &route))
+}
+
+// sameRouteHost compares two route hostnames the way HostnameAllowed reads
+// them: case-insensitive, with any trailing dot ignored.
+func sameRouteHost(a, b string) bool {
+	norm := func(h string) string { return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".") }
+	return norm(a) == norm(b)
+}
+
+// normalizedRoutePath is the stored form of an HTTP route path: "/" when
+// empty and always with a trailing slash.
+func normalizedRoutePath(path string) string {
+	p := data.HTTPRoutePath(strings.TrimSpace(path))
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p
+}
+
+// checkManagedCertificateDomain applies the hostname rule to
+// managed_certificate_domain. A value equal to the route's own domain is
+// covered by the domain check, and a value already stored on the route
+// (existing) is kept as it is.
+func (c *controllerAPI) checkManagedCertificateDomain(ctx context.Context, app *ct.App, route, existing *router.Route) error {
+	if route == nil || route.ManagedCertificateDomain == nil {
+		return nil
+	}
+	domain := strings.TrimSpace(*route.ManagedCertificateDomain)
+	if domain == "" || sameRouteHost(domain, route.Domain) {
+		return nil
+	}
+	if existing != nil && existing.ManagedCertificateDomain != nil && sameRouteHost(domain, *existing.ManagedCertificateDomain) {
+		return nil
+	}
+	if err := c.checkHostname(ctx, app, domain); err != nil {
+		if verr, ok := err.(ct.ValidationError); ok {
+			verr.Field = "managed_certificate_domain"
+			return verr
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *controllerAPI) DeleteRoute(ctx context.Context, w http.ResponseWriter, req *http.Request) {
