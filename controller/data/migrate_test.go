@@ -1049,3 +1049,62 @@ func (MigrateSuite) TestMigrateScrubsAuditPasswords(c *C) {
 	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM core_audit WHERE action = 'user.create' AND data->>'handle' = 'core21'`).Scan(&n), IsNil)
 	c.Assert(n, Equals, 1)
 }
+
+// Migration 97 adds resources.instance_port with a unique index over live
+// rows (CORE-39). Ports two live resources already share must not crash it:
+// the oldest keeps the port, the others keep their env untouched. Deleted
+// rows, unparsable values and rows without a port get no allocation.
+func (MigrateSuite) TestMigrateInstancePortsKeepsOldestOfDuplicates(c *C) {
+	db := setupTestDB(c, "controllertest_instance_ports")
+	var before, rest postgres.Migrations
+	for _, m := range *migrations {
+		if m.ID < 97 {
+			before = append(before, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	c.Assert(before.Migrate(db), IsNil)
+	providerID := random.UUID()
+	c.Assert(db.Exec(`INSERT INTO providers (provider_id, name, url) VALUES ($1, 'c39', 'http://c39.example.com')`, providerID), IsNil)
+	add := func(ext, env, age string, deleted bool) string {
+		id := random.UUID()
+		var del *time.Time
+		if deleted {
+			t := time.Now()
+			del = &t
+		}
+		c.Assert(db.Exec(`INSERT INTO resources (resource_id, provider_id, external_id, env, created_at, deleted_at)
+			VALUES ($1, $2, $3, $4::jsonb, now() - $5::interval, $6)`, id, providerID, ext, env, age, del), IsNil)
+		return id
+	}
+	oldest := add("a", `{"FLYNN_INSTANCE_PORT":"3000"}`, "3 days", false)
+	dup := add("b", `{"FLYNN_INSTANCE_PORT":"3000","X":"y"}`, "2 days", false)
+	spaced := add("c", `{"FLYNN_INSTANCE_PORT":" 3002 "}`, "1 day", false)
+	gone := add("d", `{"FLYNN_INSTANCE_PORT":"3001"}`, "1 day", true)
+	junk := add("e", `{"FLYNN_INSTANCE_PORT":"abc"}`, "1 day", false)
+	huge := add("f", `{"FLYNN_INSTANCE_PORT":"99999999999"}`, "1 day", false)
+	none := add("g", `{"FOO":"bar"}`, "1 day", false)
+	null := add("h", `null`, "1 day", false)
+	c.Assert(rest.Migrate(db), IsNil)
+
+	port := func(id string) *int {
+		var p *int
+		c.Assert(db.QueryRow(`SELECT instance_port FROM resources WHERE resource_id = $1`, id).Scan(&p), IsNil)
+		return p
+	}
+	c.Assert(*port(oldest), Equals, 3000)
+	c.Assert(port(dup), IsNil)
+	c.Assert(*port(spaced), Equals, 3002)
+	for _, id := range []string{gone, junk, huge, none, null} {
+		c.Assert(port(id), IsNil)
+	}
+	var env string
+	c.Assert(db.QueryRow(`SELECT env->>'FLYNN_INSTANCE_PORT' FROM resources WHERE resource_id = $1`, dup).Scan(&env), IsNil)
+	c.Assert(env, Equals, "3000")
+
+	// Two live rows cannot hold one port; a deleted row does not block it.
+	err := db.Exec(`UPDATE resources SET instance_port = 3002 WHERE resource_id = $1`, none)
+	c.Assert(postgres.IsUniquenessError(err, "resources_instance_port_key"), Equals, true, Commentf("err=%v", err))
+	c.Assert(db.Exec(`UPDATE resources SET instance_port = 3001 WHERE resource_id = $1`, none), IsNil)
+}

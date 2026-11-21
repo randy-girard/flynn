@@ -1585,6 +1585,11 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 	migrations.Add(96,
 		`CREATE INDEX resources_owner_account_idx ON resources (owner_account) WHERE deleted_at IS NULL`,
 	)
+
+	// Instance ports are allocated atomically (CORE-39): each live resource
+	// holds its port in instance_port, unique over live rows. Existing
+	// duplicates keep the oldest holder (migrateInstancePorts).
+	migrations.Add(97, migrateInstancePorts...)
 }
 
 func MigrateDB(db *postgres.DB) error {

@@ -3,6 +3,7 @@ package data
 import (
 	"github.com/flynn/que-go"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/pkg/instanceport"
 )
 
 var preparedStatements = map[string]string{
@@ -104,6 +105,9 @@ var preparedStatements = map[string]string{
 	"resource_insert":                          resourceInsertQuery,
 	"resource_update":                          resourceUpdateQuery,
 	"resource_delete":                          resourceDeleteQuery,
+	"resource_instance_port_list":              resourceInstancePortListQuery,
+	"resource_instance_port_for_update":        resourceInstancePortForUpdateQuery,
+	"resource_instance_port_handover":          resourceInstancePortHandoverQuery,
 	"app_resource_insert_app_by_name":          appResourceInsertAppByNameQuery,
 	"app_resource_insert_app_by_name_or_id":    appResourceInsertAppByNameOrIDQuery,
 	"app_resource_delete_by_app":               appResourceDeleteByAppQuery,
@@ -915,16 +919,37 @@ SELECT resource_id, provider_id, external_id, env,
 FROM resources r
 WHERE resource_id = $1 AND deleted_at IS NULL`
 	resourceInsertQuery = `
-INSERT INTO resources (resource_id, provider_id, external_id, env, owner_account, owner_app)
-VALUES ($1, $2, $3, $4, $5, $6) RETURNING created_at`
+INSERT INTO resources (resource_id, provider_id, external_id, env, owner_account, owner_app, instance_port)
+VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING created_at`
 	resourceUpdateQuery = `
-UPDATE resources SET env = $2, external_id = $3
+UPDATE resources SET env = $2, external_id = $3, instance_port = $4
 WHERE resource_id = $1 AND deleted_at IS NULL
 RETURNING created_at`
+	// The instance ports live resources hold, with the external id of the
+	// holder. Only the allocated ports are read, not every resource env.
+	resourceInstancePortListQuery = `
+SELECT instance_port, external_id FROM resources
+WHERE instance_port IS NOT NULL AND deleted_at IS NULL`
+	resourceInstancePortForUpdateQuery = `
+SELECT env->>'` + instanceport.EnvPort + `', instance_port FROM resources
+WHERE resource_id = $1 AND deleted_at IS NULL FOR UPDATE`
+	// When the holder of a port is deleted, the oldest live resource whose
+	// env still names that port (one that shared it before allocation was
+	// atomic, CORE-39) takes the allocation, so the port is not handed out
+	// again while an instance still uses it.
+	resourceInstancePortHandoverQuery = `
+UPDATE resources SET instance_port = $1
+WHERE resource_id = (
+  SELECT resource_id FROM resources
+  WHERE deleted_at IS NULL AND instance_port IS NULL
+    AND ` + instancePortFromEnvSQL + ` = $1
+  ORDER BY created_at, resource_id LIMIT 1
+)`
 	resourceSetOwnerAppQuery = `
 UPDATE resources SET owner_app=$2 WHERE resource_id=$1 AND deleted_at IS NULL AND (owner_app IS NULL OR owner_app='')`
 	resourceDeleteQuery = `
-UPDATE resources SET deleted_at = now() WHERE resource_id = $1 AND deleted_at IS NULL`
+UPDATE resources SET deleted_at = now() WHERE resource_id = $1 AND deleted_at IS NULL
+RETURNING instance_port`
 	appResourceInsertAppByNameQuery = `
 INSERT INTO app_resources (app_id, resource_id)
 VALUES ((SELECT app_id FROM apps WHERE name = $1 AND deleted_at IS NULL), $2)

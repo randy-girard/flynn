@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
@@ -165,17 +164,11 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		}
 	}
 	data.Env = resname.ResourceEnv(c.appReleaseEnv(target), data.Env, provisionAs(config))
-	env, err := c.stampInstancePort(p, addon, data.ID, data.Env)
-	if err != nil {
-		rollbackProvision()
-		respondWithError(w, err)
-		return
-	}
 
 	res := &ct.Resource{
 		ProviderID:   p.ID,
 		ExternalID:   data.ID,
-		Env:          env,
+		Env:          data.Env,
 		Apps:         rr.Apps,
 		OwnerAccount: owner,
 	}
@@ -189,7 +182,7 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		return
 	}
 
-	if err := c.resourceRepo.Add(res); err != nil {
+	if err := c.addProvisionedResource(p, addon, res); err != nil {
 		rollbackProvision()
 		respondWithError(w, err)
 		return
@@ -626,38 +619,22 @@ func (c *controllerAPI) canAdminOwner(ctx context.Context, account string) bool 
 	return adminsAccount(c.accessForAccount(ctx, account))
 }
 
-var instancePortAssign sync.Mutex
-
-func (c *controllerAPI) stampInstancePort(p *ct.Provider, addon *plugin.AddonSpec, externalID string, env map[string]string) (map[string]string, error) {
-	if p == nil || c.resourceRepo == nil || !providerStampsInstancePort(p, addon) {
-		return env, nil
+// addProvisionedResource inserts res. A provider whose plugin asks for an
+// instance port gets the lowest free one, picked and inserted in one
+// transaction under the allocation lock (CORE-39), so concurrent provisions
+// on any number of controllers never share a port. Only the allocated
+// ports are read, not every resource (CORE-34-F2).
+func (c *controllerAPI) addProvisionedResource(p *ct.Provider, addon *plugin.AddonSpec, res *ct.Resource) error {
+	if !providerStampsInstancePort(p, addon) {
+		return c.resourceRepo.Add(res)
 	}
-	instancePortAssign.Lock()
-	defer instancePortAssign.Unlock()
-	list, err := c.resourceRepo.List()
-	if err != nil {
-		return nil, err
-	}
-	used := map[int]string{}
-	for _, r := range list {
-		if r == nil || r.Env == nil {
-			continue
+	return c.resourceRepo.AddWithInstancePort(res, func(used map[int]string) (map[string]string, error) {
+		assigned, err := instanceport.AssignEnv(res.ExternalID, res.Env, used)
+		if err != nil {
+			return nil, ct.ValidationError{Field: "env", Message: err.Error()}
 		}
-		port, ok := instanceport.ParsePort(r.Env[instanceport.EnvPort])
-		if !ok {
-			continue
-		}
-		id := r.ExternalID
-		if id == "" {
-			id = r.ID
-		}
-		used[port] = id
-	}
-	assigned, err := instanceport.AssignEnv(externalID, env, used)
-	if err != nil {
-		return nil, ct.ValidationError{Field: "env", Message: err.Error()}
-	}
-	return assigned, nil
+		return assigned, nil
+	})
 }
 
 // providerStampsInstancePort is true when the installed plugin asks for a

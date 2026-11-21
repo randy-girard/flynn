@@ -3,6 +3,7 @@ package data
 import (
 	"github.com/jackc/pgx"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/instanceport"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/random"
 )
@@ -16,12 +17,21 @@ func NewResourceRepo(db *postgres.DB) *ResourceRepo {
 }
 
 func (rr *ResourceRepo) Add(r *ct.Resource) error {
-	if r.ID == "" {
-		r.ID = random.UUID()
-	}
 	tx, err := rr.db.Begin()
 	if err != nil {
 		return err
+	}
+	if err := rr.add(tx, r); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// add inserts r in tx. The caller rolls back on error.
+func (rr *ResourceRepo) add(tx *postgres.DBTx, r *ct.Resource) error {
+	if r.ID == "" {
+		r.ID = random.UUID()
 	}
 	var owner *string
 	if r.OwnerAccount != "" {
@@ -31,10 +41,9 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 	if r.OwnerApp != "" {
 		ownerApp = &r.OwnerApp
 	}
-	err = tx.QueryRow("resource_insert", r.ID, r.ProviderID, r.ExternalID, r.Env, owner, ownerApp).Scan(&r.CreatedAt)
-	if err != nil {
-		tx.Rollback()
-		return err
+	port := envInstancePort(r.Env)
+	if err := tx.QueryRow("resource_insert", r.ID, r.ProviderID, r.ExternalID, r.Env, owner, ownerApp, port).Scan(&r.CreatedAt); err != nil {
+		return instancePortError(err, port)
 	}
 	for i, appID := range r.Apps {
 		var row postgres.Scanner
@@ -44,14 +53,12 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 			row = tx.QueryRow("app_resource_insert_app_by_name", appID, r.ID)
 		}
 		if err := row.Scan(&r.Apps[i]); err != nil {
-			tx.Rollback()
 			return err
 		}
 	}
 	if r.OwnerApp == "" && len(r.Apps) > 0 {
 		r.OwnerApp = r.Apps[0]
 		if err := tx.Exec("resource_set_owner_app", r.ID, r.OwnerApp); err != nil {
-			tx.Rollback()
 			return err
 		}
 	}
@@ -61,7 +68,6 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 			ObjectID:   r.ID,
 			ObjectType: ct.EventTypeResource,
 		}, r); err != nil {
-			tx.Rollback()
 			return err
 		}
 	}
@@ -71,22 +77,50 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 			ObjectID:   r.ID,
 			ObjectType: ct.EventTypeResource,
 		}, r); err != nil {
-			tx.Rollback()
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (rr *ResourceRepo) Update(r *ct.Resource) error {
 	if r == nil || r.ID == "" {
 		return ErrNotFound
 	}
-	err := rr.db.QueryRow("resource_update", r.ID, r.Env, r.ExternalID).Scan(&r.CreatedAt)
+	tx, err := rr.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var oldEnvPort *string
+	var held *int
+	err = tx.QueryRow("resource_instance_port_for_update", r.ID).Scan(&oldEnvPort, &held)
 	if err == pgx.ErrNoRows {
 		return ErrNotFound
+	} else if err != nil {
+		return err
 	}
-	return err
+	port := envInstancePort(r.Env)
+	if held == nil && port != nil && oldEnvPort != nil {
+		// A row that shared its port before allocation was atomic keeps
+		// sharing it; a plugin PUT that leaves the port alone still works.
+		if old, ok := instanceport.ParsePort(*oldEnvPort); ok && old == *port {
+			port = nil
+		}
+	}
+	if port != nil && (held == nil || *held != *port) {
+		// A new port waits for any allocation in flight.
+		if err := lockInstancePorts(tx); err != nil {
+			return err
+		}
+	}
+	err = tx.QueryRow("resource_update", r.ID, r.Env, r.ExternalID, port).Scan(&r.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return ErrNotFound
+	} else if err != nil {
+		return instancePortError(err, port)
+	}
+	return tx.Commit()
 }
 
 func (rr *ResourceRepo) AddApp(resourceID, appID string) (*ct.Resource, error) {
@@ -259,10 +293,17 @@ func (rr *ResourceRepo) Remove(r *ct.Resource) error {
 	if err != nil {
 		return err
 	}
-	err = tx.Exec("resource_delete", r.ID)
-	if err != nil {
+	var port *int
+	err = tx.QueryRow("resource_delete", r.ID).Scan(&port)
+	if err != nil && err != pgx.ErrNoRows {
 		tx.Rollback()
 		return err
+	}
+	if port != nil {
+		if err := tx.Exec("resource_instance_port_handover", *port); err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 	err = tx.Exec("app_resource_delete_by_resource", r.ID)
 	if err != nil {

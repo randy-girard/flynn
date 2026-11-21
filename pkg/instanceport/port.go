@@ -19,6 +19,11 @@ const (
 	MinPort = 3000
 	MaxPort = 3500
 
+	// AllocLock is the transaction advisory lock the controller holds from
+	// reading the allocated ports until the new resource commits. The
+	// unique index on resources.instance_port is the backstop.
+	AllocLock int64 = 83420090
+
 	// EnvPort and EnvID are stored on the resource and copied into the app env.
 	EnvPort = "FLYNN_INSTANCE_PORT"
 	EnvID   = "FLYNN_INSTANCE_ID"
