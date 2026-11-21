@@ -38,17 +38,19 @@ func NewRouteRepo(db *postgres.DB) *RouteRepo {
 }
 
 func (r *RouteRepo) Add(route *router.Route) error {
+	if route.Type != "http" && route.Type != "tcp" {
+		return ErrRouteInvalid
+	}
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	switch route.Type {
 	case "http":
 		err = r.addHTTP(tx, route)
 	case "tcp":
 		err = r.addTCP(tx, route)
-	default:
-		return ErrRouteInvalid
 	}
 	if postgres.IsUniquenessError(err, "") {
 		err = ErrRouteConflict

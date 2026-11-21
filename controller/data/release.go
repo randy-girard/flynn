@@ -249,6 +249,8 @@ func (r *ReleaseRepo) Delete(app *ct.App, release *ct.Release) error {
 	if err != nil {
 		return err
 	}
+	// Rollback after Commit is a no-op; this covers every early return.
+	defer tx.Rollback()
 
 	if err := tx.Exec("formation_delete", app.ID, release.ID); err != nil {
 		tx.Rollback()

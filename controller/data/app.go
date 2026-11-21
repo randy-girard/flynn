@@ -29,21 +29,29 @@ func NewAppRepo(db *postgres.DB, defaultDomain string, routes *RouteRepo) *AppRe
 
 func (r *AppRepo) Add(data interface{}) error {
 	app := data.(*ct.App)
+	// Reject a bad name before taking a pool connection.
+	if app.Name != "" {
+		if err := utils.ValidateAppName(app.Name, app.System() || app.Plugin()); err != nil {
+			return err
+		}
+	}
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
 	}
+	// Every return below must release the connection; Rollback after Commit
+	// is a no-op (CORE-22).
+	defer tx.Rollback()
 	if app.Name == "" {
 		var nameID int64
 		if err := tx.QueryRow("app_next_name_id").Scan(&nameID); err != nil {
-			tx.Rollback()
 			return err
 		}
 		// Safe cast because name_ids is limited to 32 bit size in schema
 		app.Name = name.Get(uint32(nameID))
-	}
-	if err := utils.ValidateAppName(app.Name, app.System() || app.Plugin()); err != nil {
-		return err
+		if err := utils.ValidateAppName(app.Name, app.System() || app.Plugin()); err != nil {
+			return err
+		}
 	}
 	if app.ID == "" {
 		app.ID = random.UUID()
