@@ -408,3 +408,115 @@ func (s *S) TestHostedRouteIgnoresStoredPublicSuffixVerification(c *C) {
 	c.Assert(err, NotNil)
 	c.Assert(err, ErrorMatches, ".*requires a verified domain.*")
 }
+
+func core30User(c *C, s *S, tag string) *ct.User {
+	r := core20Suffix()
+	return s.createLoginUser(c, "core30-"+tag+"-"+r+"@flynn.test", "c30"+tag+r, "pw-"+r, false)
+}
+
+func (s *S) core30CreateApp(c *C, auth string, body map[string]string) (int, *ct.App, []byte) {
+	raw, err := json.Marshal(body)
+	c.Assert(err, IsNil)
+	code, out := s.domainCall(c, auth, "/apps", string(raw))
+	if code != 200 {
+		return code, nil, out
+	}
+	app := &ct.App{}
+	c.Assert(json.Unmarshal(out, app), IsNil)
+	return code, app, out
+}
+
+func (s *S) core30AppCount(c *C, name string) int {
+	var n int
+	c.Assert(s.hc.db.QueryRow(`SELECT COUNT(*) FROM apps WHERE name = $1 AND deleted_at IS NULL`, name).Scan(&n), IsNil)
+	return n
+}
+
+// TestPrepareNewAppRejectsForeignOwner: CORE-30. POST /apps kept any
+// owner_account the caller sent, so a tenant could create apps in another
+// user's or org's account (their quota, their app list, their hostnames, and
+// the CORE-37 datastore guard's "same account" rule). A non-admin may name
+// only an account it administers. created_by always comes from the token.
+func (s *S) TestPrepareNewAppRejectsForeignOwner(c *C) {
+	a := core30User(c, s, "a")
+	victim := core30User(c, s, "victim")
+	tokA := s.signUser(c, a.ID, nil)
+
+	for _, owner := range []string{"user:" + victim.ID, "org:core30-" + core20Suffix(), "user:" + random.UUID()} {
+		name := "core30-" + core20Suffix()
+		code, _, raw := s.core30CreateApp(c, tokA, map[string]string{"name": name, "owner_account": owner})
+		c.Assert(code, Equals, 403, Commentf("%s: %s", owner, raw))
+		c.Assert(s.core30AppCount(c, name), Equals, 0, Commentf("%s", owner))
+	}
+
+	// An org member that is not owner/admin cannot create apps in the org.
+	member := "org:core30-" + core20Suffix()
+	c.Assert(s.api.tenancy.PutMembership(ct.Membership{UserID: a.ID, Subject: member, Role: "member"}), IsNil)
+	code, _, raw := s.core30CreateApp(c, tokA, map[string]string{"name": "core30-" + core20Suffix(), "owner_account": member})
+	c.Assert(code, Equals, 403, Commentf("%s", raw))
+
+	// Accounts the caller administers still work: its own, an org it admins,
+	// and a user account where it is an admin collaborator.
+	org := "org:core30-" + core20Suffix()
+	c.Assert(s.api.tenancy.PutMembership(ct.Membership{UserID: a.ID, Subject: org, Role: "admin"}), IsNil)
+	shared := core30User(c, s, "shared")
+	c.Assert(s.api.tenancy.UpsertAccountCollaborator("user:"+shared.ID, a.ID, "admin"), IsNil)
+	for _, owner := range []string{"", "user:" + a.ID, org, "user:" + shared.ID} {
+		code, app, raw := s.core30CreateApp(c, tokA, map[string]string{"name": "core30-" + core20Suffix(), "owner_account": owner})
+		c.Assert(code, Equals, 200, Commentf("%q: %s", owner, raw))
+		want := owner
+		if want == "" {
+			want = "user:" + a.ID
+		}
+		c.Assert(app.OwnerAccount, Equals, want)
+		c.Assert(app.CreatedBy, Equals, a.ID)
+	}
+}
+
+// TestPrepareNewAppCreatedByFromToken: CORE-30. A tenant could name any
+// existing user in created_by. The token's user wins for non-admins.
+func (s *S) TestPrepareNewAppCreatedByFromToken(c *C) {
+	a := core30User(c, s, "a")
+	victim := core30User(c, s, "victim")
+	tokA := s.signUser(c, a.ID, nil)
+	for _, by := range []string{victim.ID, "user:" + victim.ID} {
+		code, app, raw := s.core30CreateApp(c, tokA, map[string]string{"name": "core30-" + core20Suffix(), "created_by": by})
+		c.Assert(code, Equals, 200, Commentf("%s", raw))
+		c.Assert(app.CreatedBy, Equals, a.ID)
+		got, err := s.api.appRepo.Get(app.ID)
+		c.Assert(err, IsNil)
+		c.Assert(got.(*ct.App).CreatedBy, Equals, a.ID)
+	}
+}
+
+// TestPrepareNewAppClusterKeyKeepsOwner: bootstrap, plugins on the controller
+// key (pipeline review apps, datastore instance apps) and `flynn import` as
+// an operator still create apps for any account and keep created_by.
+func (s *S) TestPrepareNewAppClusterKeyKeepsOwner(c *C) {
+	victim := core30User(c, s, "victim")
+	creator := core30User(c, s, "creator")
+	code, app, raw := s.core30CreateApp(c, authKey, map[string]string{
+		"name": "core30-" + core20Suffix(), "owner_account": "user:" + victim.ID, "created_by": creator.ID,
+	})
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	c.Assert(app.OwnerAccount, Equals, "user:"+victim.ID)
+	c.Assert(app.CreatedBy, Equals, creator.ID)
+}
+
+// TestPrepareNewAppHostedForeignOwnerNotCounted: CORE-30 in hosted mode. The
+// victim's max_apps must not be used up by another tenant's creates.
+func (s *S) TestPrepareNewAppHostedForeignOwnerNotCounted(c *C) {
+	defer s.restoreTenancyDefaults(c)
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeHosted, nil), IsNil)
+	a := core30User(c, s, "a")
+	victim := core30User(c, s, "victim")
+	tokA := s.signUser(c, a.ID, nil)
+	code, _, raw := s.core30CreateApp(c, tokA, map[string]string{"name": "core30-" + core20Suffix(), "owner_account": "user:" + victim.ID})
+	c.Assert(code, Equals, 403, Commentf("%s", raw))
+	n, err := s.api.tenancy.CountOwnedApps("user:" + victim.ID)
+	c.Assert(err, IsNil)
+	c.Assert(n, Equals, 0)
+	code, app, raw := s.core30CreateApp(c, tokA, map[string]string{"name": "core30-" + core20Suffix()})
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	c.Assert(app.OwnerAccount, Equals, "user:"+a.ID)
+}

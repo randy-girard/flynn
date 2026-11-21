@@ -20,6 +20,13 @@ func (c *controllerAPI) prepareNewApp(ctx context.Context, app *ct.App) error {
 		return nil
 	}
 	tok := authz.TokenFromContext(ctx)
+	// Only the cluster key and cluster admins (bootstrap, plugins, operator
+	// imports) may create an app for another account or name its creator
+	// (CORE-30).
+	operator := tok == nil || tok.ClusterKey || tok.HasClusterAdmin()
+	if !operator {
+		app.CreatedBy = tok.UserID
+	}
 	if tok != nil && tok.UserID != "" && app.CreatedBy == "" {
 		app.CreatedBy = tok.UserID
 	}
@@ -41,8 +48,15 @@ func (c *controllerAPI) prepareNewApp(ctx context.Context, app *ct.App) error {
 	if app.OwnerAccount == "" && tok != nil && !tok.ClusterKey && tok.UserID != "" {
 		app.OwnerAccount = "user:" + tok.UserID
 	}
+	app.OwnerAccount = strings.TrimSpace(app.OwnerAccount)
 	if app.OwnerAccount == "" {
 		return nil
+	}
+	if !operator && app.OwnerAccount != "user:"+tok.UserID && !c.canCreateAppIn(ctx, app.OwnerAccount) {
+		return httphelper.JSONError{
+			Code:    httphelper.ForbiddenErrorCode,
+			Message: "you can create apps only in your own account or an account you administer",
+		}
 	}
 	if err := c.rejectIfSuspended(app.OwnerAccount); err != nil {
 		return err
@@ -52,6 +66,15 @@ func (c *controllerAPI) prepareNewApp(ctx context.Context, app *ct.App) error {
 		return err
 	}
 	return c.quotaAllows(app.OwnerAccount, usage.Apps+1, 0, 0, 0, 0)
+}
+
+// canCreateAppIn reports whether the caller may put a new app in account: an
+// org owner or admin, or an admin collaborator on the account. Org members
+// and billing roles may not.
+func (c *controllerAPI) canCreateAppIn(ctx context.Context, account string) bool {
+	res := c.accessForAccount(ctx, account)
+	return res.ImplicitOwner || res.OrgManager ||
+		access.Has(res.Permissions, access.PermAppAdmin) || access.Has(res.Permissions, access.PermOrgAppsCreate)
 }
 
 func (c *controllerAPI) listVisibleAppsPage(ctx context.Context, includeAll bool, page *listPage) ([]*ct.App, error) {
