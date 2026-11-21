@@ -3429,7 +3429,10 @@ step_install_flynn() {
 }
 
 step_init_cluster() {
-  local i node ip
+  local i node ip join_token
+  # CORE-40: a keyless node lets node1's bootstrap set its key only with this
+  # shared one-time token. bootstrap reads it from node1's host.json.
+  join_token="$(openssl rand -hex 16)"
   for i in "${!NODES[@]}"; do
     node="${NODES[$i]}"
     ip="${NODE_IPS[$i]}"
@@ -3438,7 +3441,7 @@ step_init_cluster() {
     info "configuring ${node} (external-ip=${ip}, peer-ips=${PEER_IPS})"
     node_root_script "${node}" <<EOF
 set -euo pipefail
-flynn-host init --peer-ips "${PEER_IPS}" --external-ip "${ip}"
+FLYNN_HOST_JOIN_TOKEN="${join_token}" flynn-host init --peer-ips "${PEER_IPS}" --external-ip "${ip}"
 systemctl enable flynn-host.service
 systemctl restart flynn-host.service
 EOF

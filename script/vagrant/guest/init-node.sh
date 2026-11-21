@@ -2,6 +2,9 @@
 # Run on a cluster node as root after install-node.sh.
 # PEER_IPS is the comma-separated host-only addresses of every cluster node.
 # EXTERNAL_IP is this node's host-only address.
+# FLYNN_HOST_JOIN_TOKEN (same on every node) lets the bootstrap coordinator
+# set this node's auth key from another node (CORE-40); flynn-host init
+# reads it from the environment (not argv) and writes it into host.json.
 set -euo pipefail
 : "${PEER_IPS:?PEER_IPS is required}"
 : "${EXTERNAL_IP:?EXTERNAL_IP is required}"

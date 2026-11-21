@@ -526,6 +526,13 @@ if ! grep -Fq 'if [[ ! -e "${dest}" ]]' "${mod}/guest/restore-layers.sh"; then
   echo "restore-layers must skip existing layer blobs without GNU cp -n" >&2
   exit 1
 fi
+# CORE-40: a keyless node accepts a remote POST /host/auth-key only with the
+# join token, so dev setup and smoke must give every node the same token.
+if ! grep -Fq 'FLYNN_HOST_JOIN_TOKEN=${join_token}' "${script}" \
+  || ! grep -Fq 'FLYNN_HOST_JOIN_TOKEN="${join_token}" flynn-host init' "${mod}/suite.sh"; then
+  echo "dev setup and smoke init must pass one FLYNN_HOST_JOIN_TOKEN to flynn-host init on every node" >&2
+  exit 1
+fi
 if ! grep -Fq 'sudo mkdir -p /etc/flynn' "${ROOT}/script/start-flynn-host"; then
   echo "start-flynn-host must mkdir /etc/flynn before flynn-host so configure-host-auth can write host.json" >&2
   exit 1

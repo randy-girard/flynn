@@ -413,11 +413,17 @@ install_and_bootstrap_nodes() {
   domain="$(flynn_vagrant_cluster_domain)"
   cluster_ip="$(flynn_vagrant_cluster_ip)"
   echo "installing Flynn on cluster nodes ${nodes[*]} (peer-ips=${peers})"
+  # One join token for this setup (CORE-40): a keyless node lets the
+  # bootstrap coordinator on ${nodes[0]} set its key only with this token.
+  # bootstrap reads it from node1's host.json; each node deletes it once
+  # its key is set. Never echoed.
+  local join_token
+  join_token="$(openssl rand -hex 16)"
   for name in "${nodes[@]}"; do
     ip="$(flynn_vagrant_node_ip "${name}")"
     run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/install-node.sh"
     run_as_root_on "${name}" "cd ${SRC} && CLUSTER_IP=${cluster_ip} CLUSTER_DOMAIN=${domain} script/vagrant/guest/node-dns.sh"
-    run_as_root_on "${name}" "cd ${SRC} && PEER_IPS=${peers} EXTERNAL_IP=${ip} script/vagrant/guest/init-node.sh"
+    run_as_root_on "${name}" "cd ${SRC} && FLYNN_HOST_JOIN_TOKEN=${join_token} PEER_IPS=${peers} EXTERNAL_IP=${ip} script/vagrant/guest/init-node.sh"
   done
   echo "bootstrapping Layer 1 on ${nodes[0]} (min-hosts=${min_hosts})"
   run_as_root_on "${nodes[0]}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} MIN_HOSTS=${min_hosts} PEER_IPS=${peers} script/vagrant/guest/bootstrap-node.sh"
