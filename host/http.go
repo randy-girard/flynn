@@ -647,6 +647,14 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		h.addJobRateLimitBucket.Put()
 		return
 	}
+	// The reference passes to the run goroutine below. Every other return
+	// must drop it, or CloseDB (flynn-host update, shutdown) waits forever.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			h.host.state.Release()
+		}
+	}()
 
 	if err := h.host.state.AddJob(job); err != nil {
 		log.Error("error adding job to state database", "err", err)
@@ -659,6 +667,7 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		return
 	}
 
+	handedOff = true
 	go func() {
 		log.Info("running job")
 		err := h.host.backend.Run(job, nil, h.addJobRateLimitBucket)

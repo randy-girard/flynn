@@ -277,6 +277,11 @@ func (s *State) CloseDB() error {
 	if s.stateDB == nil {
 		return nil
 	}
+	if s.dbUsers > 0 {
+		stop := make(chan struct{})
+		defer close(stop)
+		go s.logCloseDBWait(stop)
+	}
 	for s.dbUsers > 0 {
 		s.dbCond.Wait()
 	}
@@ -285,6 +290,27 @@ func (s *State) CloseDB() error {
 	}
 	s.stateDB = nil
 	return nil
+}
+
+// closeDBWaitLogInterval is how often CloseDB logs while it waits for users.
+var closeDBWaitLogInterval = 10 * time.Second
+
+// logCloseDBWait logs the open reference count until stop is closed, so a
+// CloseDB that never returns names its cause in the host log.
+func (s *State) logCloseDBWait(stop chan struct{}) {
+	t := time.NewTicker(closeDBWaitLogInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			s.dbCond.L.Lock()
+			n := s.dbUsers
+			s.dbCond.L.Unlock()
+			log.Printf("closing state DB: still waiting for %d user(s) to release it", n)
+		}
+	}
 }
 
 var ErrDBClosed = errors.New("state DB closed")

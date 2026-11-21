@@ -1,9 +1,21 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 
 	. "github.com/flynn/go-check"
+	"github.com/inconshreveable/log15"
+	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/host/types"
 )
 
@@ -149,5 +161,146 @@ func (SystemJobSuite) TestIsSystemJob(c *C) {
 		if got := isSystemJob(tc.job); got != tc.want {
 			c.Errorf("isSystemJob(%s) = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func postAddJob(t *testing.T, api *jobAPI, job *host.Job) int {
+	t.Helper()
+	body, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/host/jobs/"+job.ID, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	api.AddJob(rr, req, httprouter.Params{{Key: "id", Value: job.ID}})
+	if rr.Code != 200 {
+		t.Logf("%s: %d %s", job.ID, rr.Code, rr.Body.String())
+	}
+	return rr.Code
+}
+
+func stateDBUsers(s *State) int {
+	s.dbCond.L.Lock()
+	defer s.dbCond.L.Unlock()
+	return s.dbUsers
+}
+
+// TestAddJobConflictReleasesStateDB: every AddJob that the state rejects must
+// release its state DB reference, or CloseDB (run by flynn-host update and
+// shutdown) waits forever.
+func TestAddJobConflictReleasesStateDB(t *testing.T) {
+	state := NewState("host-test", filepath.Join(t.TempDir(), "host-state-db"))
+	if err := state.OpenDB(); err != nil {
+		t.Fatal(err)
+	}
+	h := &Host{id: "host-test", state: state, backend: MockBackend{}, log: log15.New()}
+	h.log.SetHandler(log15.DiscardHandler())
+	api := &jobAPI{host: h, addJobRateLimitBucket: NewRateLimitBucket(10)}
+
+	vol := []host.VolumeBinding{{Target: "/data", VolumeID: "b43681a9-835e-41f5-80e1-30d457eeaca6"}}
+	newJob := func(id string) *host.Job {
+		return &host.Job{
+			ID:         id,
+			Mountspecs: []*host.Mountspec{{}},
+			Config:     host.ContainerConfig{Volumes: vol},
+		}
+	}
+
+	if code := postAddJob(t, api, newJob("job-a")); code != 200 {
+		t.Fatalf("first add: status %d", code)
+	}
+	// A repeat of the same job is a 409.
+	if code := postAddJob(t, api, newJob("job-a")); code != 409 {
+		t.Fatalf("duplicate add: status %d, want 409", code)
+	}
+	// A second job on the volume job-a is using fails with ErrVolumesInUse.
+	if code := postAddJob(t, api, newJob("job-b")); code < 400 {
+		t.Fatalf("volume in use: status %d, want an error", code)
+	}
+	// A job rejected by validation, before the state is touched.
+	bad := newJob("job-c")
+	bad.Mountspecs = nil
+	if code := postAddJob(t, api, bad); code != 400 {
+		t.Fatalf("no mountspecs: status %d, want 400", code)
+	}
+
+	// The accepted job's runner goroutine releases its own reference.
+	deadline := time.Now().Add(time.Second)
+	for stateDBUsers(state) != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := stateDBUsers(state); n != 0 {
+		t.Fatalf("state DB users after rejected jobs = %d, want 0", n)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- state.CloseDB() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseDB still waiting on a reference left by a rejected AddJob")
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// TestCloseDBLogsWhileWaiting: a CloseDB held up by an open reference says so
+// in the log, then returns once the reference is released.
+func TestCloseDBLogsWhileWaiting(t *testing.T) {
+	state := NewState("host-test", filepath.Join(t.TempDir(), "host-state-db"))
+	if err := state.OpenDB(); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	oldInterval := closeDBWaitLogInterval
+	closeDBWaitLogInterval = 10 * time.Millisecond
+	defer func() { closeDBWaitLogInterval = oldInterval }()
+	var buf syncBuffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	done := make(chan error, 1)
+	go func() { done <- state.CloseDB() }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(buf.String(), "still waiting for 1 user(s)") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no wait log line, got %q", buf.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-done:
+		t.Fatal("CloseDB returned while a reference was held")
+	default:
+	}
+	state.Release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseDB did not return after Release")
 	}
 }
