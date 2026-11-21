@@ -221,6 +221,20 @@ func runDelete(args *docopt.Args, client controller.Client) error {
 	return nil
 }
 
+// deletionStatus describes a delete that failed and is being retried. The app
+// deletion worker sets ct.AppMetaDeletionError on each failed attempt; the
+// app row is removed once an attempt succeeds.
+func deletionStatus(app *ct.App) string {
+	if app == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(app.Meta[ct.AppMetaDeletionError])
+	if msg == "" {
+		return ""
+	}
+	return "failed, retrying: " + msg
+}
+
 func runApps(args *docopt.Args, client controller.Client) error {
 	apps, err := listApps(client, args.Bool["--all"])
 	if err != nil {
@@ -282,8 +296,13 @@ func runInfo(_ *docopt.Args, client controller.Client) error {
 		}
 	}
 
-	if app, err := client.GetApp(appName); err == nil && (app.Building || ct.AppMetaIsBuilding(app.Meta, time.Now())) {
-		listRec(w, "Build:", "running")
+	if app, err := client.GetApp(appName); err == nil {
+		if app.Building || ct.AppMetaIsBuilding(app.Meta, time.Now()) {
+			listRec(w, "Build:", "running")
+		}
+		if status := deletionStatus(app); status != "" {
+			listRec(w, "Delete:", status)
+		}
 	}
 
 	if deps, err := client.DeploymentList(appName); err == nil {
