@@ -93,7 +93,7 @@ chaos_bridge_check() {
       continue
     fi
     set +e
-    out="$(chaos_exec_on "${name}" "timeout 20 python3 ${SRC}/script/vagrant/guest/bridge-ips.py" 2>&1 | grep -v '^Connection to .* closed' | grep -v '^Warning: Permanently added')"
+    out="$(chaos_exec_on "${name}" "timeout 20 python3 ${SRC}/script/vagrant/guest/bridge-ips.py" < /dev/null 2>&1 | grep -v '^Connection to .* closed' | grep -v '^Warning: Permanently added')"
     st=$?
     set -e
     if grep -q '^duplicate ' <<<"${out}"; then

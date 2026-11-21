@@ -892,6 +892,25 @@ if ! grep -Fq "ok bridge dev-node1: answered=12 duplicates=0" <<<"${bridge}"; th
   printf '%s\n' "${bridge}" >&2
   exit 1
 fi
+# ssh reads stdin: the per-node loop must not let it eat the node list.
+greedy="$(bash -c 'set -euo pipefail
+SRC=/src
+flynn_vagrant_running_cluster_nodes() { printf "dev-node1\ndev-node2\ndev-node3\n"; }
+flynn_vagrant_cluster_nodes() { printf "dev-node1\ndev-node2\ndev-node3\n"; }
+flynn_vagrant_node_ip() { echo 10.0.0.1; }
+flynn_vagrant_cluster_domain() { echo d; }
+flynn_vagrant_get_nodes() { echo 3; }
+run_as_root_on() { cat >/dev/null; echo "answered=1 duplicates=0"; }
+source "$1"
+CHAOS_HEALTH_OUT=""; chaos_bridge_check || true
+printf "%s\n" "${CHAOS_HEALTH_OUT}"' _ "${mod}/lib/chaos.sh" 2>&1)" || true
+for n in dev-node1 dev-node2 dev-node3; do
+  if ! grep -Fq "ok bridge ${n}:" <<<"${greedy}"; then
+    echo "chaos_bridge_check must check every node even when the remote command reads stdin (missing ${n})" >&2
+    printf '%s\n' "${greedy}" >&2
+    exit 1
+  fi
+done
 if grep -Fq "bridge dev-node3" <<<"${bridge}"; then
   echo "chaos_health must not run the bridge check on the node under fault" >&2
   printf '%s\n' "${bridge}" >&2
