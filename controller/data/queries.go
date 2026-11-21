@@ -93,6 +93,7 @@ var preparedStatements = map[string]string{
 	"resource_list_by_provider":                resourceListByProviderQuery,
 	"resource_list_by_app":                     resourceListByAppQuery,
 	"resource_env_list_by_apps":                resourceEnvListByAppsQuery,
+	"datastore_guard_app_refs":                 datastoreGuardAppRefsQuery,
 	"resource_select":                          resourceSelectQuery,
 	"resource_insert":                          resourceInsertQuery,
 	"resource_update":                          resourceUpdateQuery,
@@ -823,6 +824,19 @@ SELECT resource_id, provider_id, external_id, env,
 FROM resources r
 WHERE provider_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC`
+	// One row per live app: owner, current release env, and the env of each
+	// attached resource. The app-deletion datastore guard reads this once
+	// per delete instead of one release per app.
+	datastoreGuardAppRefsQuery = `
+SELECT a.app_id, a.name, COALESCE(a.owner_account, ''), r.env,
+  (SELECT jsonb_agg(res.env)
+   FROM app_resources ar
+   JOIN resources res USING (resource_id)
+   WHERE ar.app_id = a.app_id AND ar.deleted_at IS NULL
+     AND res.deleted_at IS NULL AND res.env IS NOT NULL)
+FROM apps a
+LEFT JOIN releases r ON r.release_id = a.release_id AND r.deleted_at IS NULL
+WHERE a.deleted_at IS NULL`
 	resourceEnvListByAppsQuery = `
 SELECT a.app_id, r.env
 FROM app_resources a

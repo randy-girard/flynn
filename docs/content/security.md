@@ -338,6 +338,14 @@ deploys); one-off jobs read the current list. Jobs started by a controller from
 before this rule (still running after an update) keep the list read from
 their env until they are next deployed.
 
+The controller refuses to delete an app while another app still points at
+it (a consumer's `REDIS_URL`, a follower's `FLYNN_REDIS_LEADER`). Release env
+is tenant input, so only an app of the same owner account, or one attached
+to a resource whose env names the datastore, can hold back that delete.
+Another tenant setting `X=redis-harbor-48291` in its own env does not block
+your `addons:destroy` or `flynn delete`. The check reads every app's owner,
+current release env and attachments in one database query.
+
 These rules match ipsets that hold the overlay IPs of each job class
 (`flynn-net-user`, `flynn-net-build`, `flynn-net-data`, `flynn-net-sys`) and
 the cluster node IPs (`flynn-net-nodes`). flynn-host adds a job's IP when it

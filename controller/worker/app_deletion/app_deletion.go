@@ -10,6 +10,7 @@ import (
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
 	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/datastoreguard"
@@ -48,7 +49,7 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 			name = strings.TrimSpace(got.Name)
 		}
 	}
-	if err := datastoreguard.RefuseIfReferenced(c.client, name); err != nil {
+	if err := datastoreguard.RefuseIfReferenced(data.NewDatastoreRefSource(c.db), name); err != nil {
 		log.Error("refusing to delete referenced datastore", "err", err)
 		return err
 	}

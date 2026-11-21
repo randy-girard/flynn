@@ -6,20 +6,31 @@ package datastoreguard
 import (
 	"fmt"
 	"strings"
-
-	ct "github.com/randy-girard/flynn/controller/types"
 )
 
-// ReleaseSource lists apps and their current releases.
-type ReleaseSource interface {
-	AppList() ([]*ct.App, error)
-	GetAppRelease(string) (*ct.Release, error)
+// AppRef is one live app as the guard sees it.
+type AppRef struct {
+	ID           string
+	Name         string
+	OwnerAccount string
+	// Env is the app's current release env; nil when it has no release.
+	Env map[string]string
+	// ResourceEnvs is the env of each resource attached to the app. Only a
+	// provider or the cluster key writes resource rows, so a tenant cannot
+	// add one that points at another account's datastore.
+	ResourceEnvs []map[string]string
+}
+
+// Source returns every live app with its current release env and the env of
+// its attached resources, in one read.
+type Source interface {
+	AppRefs() ([]AppRef, error)
 }
 
 // RefuseIfReferenced returns an error when any app other than appName still
 // points at that datastore. A lookup failure also refuses the delete: an
 // unknown reference is not proof that the data is unused.
-func RefuseIfReferenced(src ReleaseSource, appName string) error {
+func RefuseIfReferenced(src Source, appName string) error {
 	appName = strings.TrimSpace(appName)
 	if src == nil || appName == "" {
 		return fmt.Errorf("refusing to delete datastore %q: cannot check references", appName)
@@ -36,37 +47,56 @@ func RefuseIfReferenced(src ReleaseSource, appName string) error {
 
 // ReferencingApp is the other app whose current release still points at
 // appName. The datastore's own release is ignored.
-func ReferencingApp(src ReleaseSource, appName string) (string, error) {
+//
+// Release env is tenant input, so an env match alone does not count. The app
+// must also be owned by the datastore's owner account (empty for the
+// operator and plugin apps, such as a follower datastore), or be attached to
+// a resource whose env points at the datastore. Otherwise any tenant could
+// hold back another account's delete by setting X=<datastore name>. When
+// appName is not in the snapshot its owner is unknown and every env match
+// counts, so the delete fails closed.
+func ReferencingApp(src Source, appName string) (string, error) {
 	appName = strings.TrimSpace(appName)
 	if src == nil || appName == "" {
 		return "", fmt.Errorf("missing datastore name")
 	}
-	apps, err := src.AppList()
+	refs, err := src.AppRefs()
 	if err != nil {
 		return "", err
 	}
-	for _, app := range apps {
-		if app == nil || strings.EqualFold(app.Name, appName) {
-			continue
-		}
-		rel, err := src.GetAppRelease(app.ID)
-		if err != nil {
-			if notFound(err) {
-				continue
-			}
-			return "", err
-		}
-		if rel == nil {
-			continue
-		}
-		if References(rel.Env, appName) {
-			if app.Name != "" {
-				return app.Name, nil
-			}
-			return app.ID, nil
+	var target *AppRef
+	for i := range refs {
+		if strings.EqualFold(refs[i].Name, appName) {
+			target = &refs[i]
+			break
 		}
 	}
+	for _, ref := range refs {
+		if strings.EqualFold(ref.Name, appName) {
+			continue
+		}
+		if !References(ref.Env, appName) {
+			continue
+		}
+		if target != nil && ref.OwnerAccount != target.OwnerAccount && !attachedTo(ref, appName) {
+			continue
+		}
+		if ref.Name != "" {
+			return ref.Name, nil
+		}
+		return ref.ID, nil
+	}
 	return "", nil
+}
+
+// attachedTo reports whether one of the app's resources points at appName.
+func attachedTo(ref AppRef, appName string) bool {
+	for _, env := range ref.ResourceEnvs {
+		if References(env, appName) {
+			return true
+		}
+	}
+	return false
 }
 
 // References reports whether env still points at a datastore app. It matches
@@ -141,12 +171,4 @@ func isBoundary(c byte) bool {
 	default:
 		return false
 	}
-}
-
-func notFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "not found") || strings.Contains(msg, "404")
 }
