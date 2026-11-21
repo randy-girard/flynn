@@ -23,8 +23,11 @@ import (
 	"github.com/randy-girard/flynn/pkg/stream"
 )
 
-// StreamBufferSize is the size of the channel buffer used for event subscription.
-const StreamBufferSize = 64 // TODO: Figure out how big this buffer should be.
+// StreamBufferSize is the size of the channel buffer used for event
+// subscription, and the number of live events a subscriber may fall behind
+// before the store drops it. The initial snapshot sent by Subscribe does not
+// count against it (CORE-23).
+const StreamBufferSize = 64
 
 func loggerFn(handler http.Handler, logger log.Logger, clientIP string, rw *hh.ResponseWriter, req *http.Request) {
 	start := time.Now()

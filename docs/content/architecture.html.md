@@ -89,6 +89,14 @@ registered instances of each service. A compare-and-swap metadata store is also
 available for each service, which provides consistent, linearizable storage of
 high value configuration values.
 
+Watchers (`GET /services/:service` or `/instances` with
+`Accept: text/event-stream`) first receive every current instance, the leader,
+the metadata and a `current` marker, then live events. That snapshot is taken
+under the store lock but sent outside it, so a service with many instances,
+such as `flynn-net-user` with one per user job, does not stall writes, DNS or
+other watchers. A watcher that falls more than 64 live events behind is
+disconnected and has to reconnect.
+
 The Raft algorithm is used to ensure that data is consistent and stays as available
 as possible during failures. A discoverd instance runs on every host in the
 cluster, and all instances provide reads. Instances that are not part of the

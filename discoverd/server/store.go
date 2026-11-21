@@ -1232,13 +1232,70 @@ func (s *Store) catchingUp() bool {
 }
 
 // Subscribe creates a subscription to events on a given service.
+//
+// The current instances, leader, meta and `current` marker are snapshotted
+// and the subscription registered under the store lock, so no live event is
+// lost or reordered around the snapshot. They are queued on a per-subscription
+// buffer sized for the snapshot plus StreamBufferSize of live events, and a
+// goroutine forwards that buffer to ch outside the lock. Subscribe therefore
+// never blocks, however many instances the service has or however slowly ch is
+// read (CORE-23). A subscriber that falls more than StreamBufferSize live
+// events behind is dropped with ErrSendBlocked, as before. ch is closed when
+// the subscription ends.
 func (s *Store) Subscribe(service string, sendCurrent bool, kinds discoverd.EventKind, ch chan *discoverd.Event) stream.Stream {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.catchingUp() {
 		close(ch)
-		return &subscription{ch: ch, err: ErrCatchingUp, closed: true}
+		return &subscription{out: ch, err: ErrCatchingUp, closed: true}
+	}
+
+	var initial []*discoverd.Event
+	if sendCurrent {
+		// Current instances.
+		if kinds.Any(discoverd.EventKindUp) {
+			for _, inst := range s.instances(service) {
+				initial = append(initial, &discoverd.Event{
+					Service:  service,
+					Kind:     discoverd.EventKindUp,
+					Instance: inst,
+				})
+			}
+		}
+
+		// Current leader.
+		if leader := s.serviceLeader(service); kinds&discoverd.EventKindLeader != 0 && leader != nil {
+			initial = append(initial, &discoverd.Event{
+				Service:  service,
+				Kind:     discoverd.EventKindLeader,
+				Instance: leader,
+			})
+		}
+
+		// Current service meta data.
+		if meta := s.serviceMeta(service); kinds.Any(discoverd.EventKindServiceMeta) && meta != nil {
+			initial = append(initial, &discoverd.Event{
+				Service:     service,
+				Kind:        discoverd.EventKindServiceMeta,
+				ServiceMeta: meta,
+			})
+		}
+
+		// Current service marker.
+		if kinds.Any(discoverd.EventKindCurrent) {
+			initial = append(initial, &discoverd.Event{
+				Service: service,
+				Kind:    discoverd.EventKindCurrent,
+			})
+		}
+	}
+
+	// The queue always has room for the whole snapshot, so these sends
+	// cannot block while the lock is held.
+	queue := make(chan *discoverd.Event, len(initial)+StreamBufferSize)
+	for _, ev := range initial {
+		queue <- ev
 	}
 
 	// Create service subscription list if it doesn't exist yet.
@@ -1249,49 +1306,13 @@ func (s *Store) Subscribe(service string, sendCurrent bool, kinds discoverd.Even
 	// Create and add subscription.
 	sub := &subscription{
 		kinds:   kinds,
-		ch:      ch,
+		ch:      queue,
+		out:     ch,
 		store:   s,
 		service: service,
 	}
 	sub.el = s.subscribers[service].PushBack(sub)
-
-	// Send current instances.
-	if sendCurrent && kinds.Any(discoverd.EventKindUp) {
-		for _, inst := range s.instances(service) {
-			ch <- &discoverd.Event{
-				Service:  service,
-				Kind:     discoverd.EventKindUp,
-				Instance: inst,
-			}
-			// TODO: add a timeout to sends so that clients can't slow things down too much
-		}
-	}
-
-	// Send current leader.
-	if leader := s.serviceLeader(service); sendCurrent && kinds&discoverd.EventKindLeader != 0 && leader != nil {
-		ch <- &discoverd.Event{
-			Service:  service,
-			Kind:     discoverd.EventKindLeader,
-			Instance: leader,
-		}
-	}
-
-	// Send current service meta data.
-	if meta := s.serviceMeta(service); sendCurrent && kinds.Any(discoverd.EventKindServiceMeta) && meta != nil {
-		ch <- &discoverd.Event{
-			Service:     service,
-			Kind:        discoverd.EventKindServiceMeta,
-			ServiceMeta: meta,
-		}
-	}
-
-	// Send current service.
-	if sendCurrent && kinds.Any(discoverd.EventKindCurrent) {
-		ch <- &discoverd.Event{
-			Service: service,
-			Kind:    discoverd.EventKindCurrent,
-		}
-	}
+	go sub.forward()
 
 	return sub
 }
@@ -1466,8 +1487,12 @@ func (d *raftData) ServiceInstances(service string) []*discoverd.Instance {
 // subscription represents a listener to one or more kinds of events.
 type subscription struct {
 	kinds discoverd.EventKind
-	ch    chan *discoverd.Event
-	err   error
+	// ch is the subscription's queue. broadcast and Subscribe write to it
+	// under store.mu without blocking; forward copies it to out.
+	ch chan *discoverd.Event
+	// out is the subscriber's channel, closed once ch is closed and drained.
+	out chan *discoverd.Event
+	err error
 
 	// the following fields are used by Close to clean up
 	el      *list.Element
@@ -1476,12 +1501,28 @@ type subscription struct {
 	closed  bool
 }
 
-func (s *subscription) Err() error { return s.err }
+func (s *subscription) Err() error {
+	if s.store == nil {
+		return s.err
+	}
+	s.store.mu.RLock()
+	defer s.store.mu.RUnlock()
+	return s.err
+}
+
+// forward copies queued events to the subscriber's channel outside the store
+// lock, and closes that channel once the subscription is closed.
+func (s *subscription) forward() {
+	defer close(s.out)
+	for ev := range s.ch {
+		s.out <- ev
+	}
+}
 
 func (s *subscription) Close() error {
 	go func() {
 		// drain channel to prevent deadlocks
-		for range s.ch {
+		for range s.out {
 		}
 	}()
 
@@ -1490,6 +1531,10 @@ func (s *subscription) Close() error {
 }
 
 func (s *subscription) close() {
+	if s.store == nil {
+		// Refused subscription (ErrCatchingUp): out is already closed.
+		return
+	}
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
 
