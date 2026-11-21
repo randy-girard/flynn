@@ -184,8 +184,15 @@ in [Production — Firewalling](production.html.md#firewalling).
 
 `flynn addons:create` for the tenant Postgres plugin, Redis, MariaDB (`mysql`),
 MongoDB, Kafka, and ClickHouse stores a TCP port from 3000–3500 on that
-resource. Allocation refuses a port another resource already owns. The
-platform Postgres appliance does not get one. The port is
+resource. The controller picks the lowest free port and inserts the resource
+in one database transaction under an advisory lock, and a unique index keeps
+two live resources from holding one port, so concurrent `addons:create` calls,
+on one controller or several, get different ports. A `PUT` that gives a
+resource another resource's port is refused. Deleting the resource frees its
+port. The range is shared by every instance-port provider, so the cluster
+holds at most 501 such instances at once; the next `addons:create` fails with
+`instance port range exhausted` until one is destroyed. The platform Postgres
+appliance does not get one. The port is
 `FLYNN_INSTANCE_PORT`. `FLYNN_INSTANCE_ID` is the resource's external id.
 Both are returned in the app environment with the connection URL.
 
