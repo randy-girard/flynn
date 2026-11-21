@@ -118,6 +118,17 @@ IPs from the block are allocated to each job that is started by flynn-host.
 Routes are configured by flannel that route all inter-container communication to
 the correct host.
 
+When a job ends, flynn-host deletes its veth from the `flynnbr0` bridge and
+keeps the job's IP out of the pool for two more minutes, so clients that still
+hold the old address do not reach a new job. The kernel can keep a finished
+job's network namespace, and so its veth, for minutes while closed TCP
+connections retransmit. If flynn-host cannot delete the veth, the IP stays
+allocated until the veth is gone. After a flynn-host restart, the IPs of jobs
+that ended in the last two minutes (from the host state database) and the IPs
+still in use behind bridge ports that no running job owns are held the same
+way. When no other IP in the block is free, the held IP whose time is
+closest to running out is reused, rather than refusing to start the job.
+
 This combined with discoverd's DNS service discovery allows well-known ports to
 be used, avoiding complicated port allocation and NAT.
 

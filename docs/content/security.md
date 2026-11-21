@@ -364,7 +364,10 @@ current release env and attachments in one database query.
 These rules match ipsets that hold the overlay IPs of each job class
 (`flynn-net-user`, `flynn-net-build`, `flynn-net-data`, `flynn-net-sys`) and
 the cluster node IPs (`flynn-net-nodes`). flynn-host adds a job's IP when it
-starts the job and learns other hosts' jobs from discoverd. A user or build
+starts the job and learns other hosts' jobs from discoverd. A finished job's IP
+is not given to another job until its veth is off the bridge and two minutes
+have passed, so traffic still addressed to the old job is not matched to a
+new job's set (see [architecture](architecture.html.md#flannel)). A user or build
 job does not start when its IP cannot be added to its set, because a job
 outside the set would match no isolation rule. A failed discoverd
 registration is retried every 15 seconds. The 15-second resync rebuilds each

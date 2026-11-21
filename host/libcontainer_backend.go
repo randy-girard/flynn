@@ -153,6 +153,8 @@ type LibcontainerBackend struct {
 	factory libcontainer.Factory
 	host    *Host
 	ipalloc *ipallocator.IPAllocator
+	// links looks up and deletes host veths; nil means netlink.
+	links bridgeLinks
 
 	bridgeAddr net.IP
 	bridgeNet  *net.IPNet
@@ -377,10 +379,19 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 	l.resolvConf = "/etc/flynn/resolv.conf"
 
 	// Allocate IPs for running jobs
+	persistedJobs := l.State.Get()
 	l.containersMtx.Lock()
 	defer l.containersMtx.Unlock()
+	ownedIPs := make(map[string]bool)
+	knownVeths := make(map[string]bool)
 	for _, container := range l.containers {
 		if !container.job.Config.HostNetwork {
+			if container.IP != nil {
+				ownedIPs[container.IP.String()] = true
+			}
+			for _, name := range container.hostVeths() {
+				knownVeths[name] = true
+			}
 			b := random.Bytes(5)
 			container.MAC = fmt.Sprintf("fe:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4])
 			if _, err := l.ipalloc.RequestIP(l.bridgeNet, container.IP); err != nil {
@@ -393,6 +404,21 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 			}
 		}
 	}
+
+	// Keep addresses that the previous process released recently, or that
+	// a bridge port no restored container owns still answers for, out of
+	// the fresh allocator's pool.
+	var strays []strayIP
+	if ports, fdb, neigh, err := scanBridgePorts(bridge); err != nil {
+		log.Warn("error scanning bridge ports", "err", err)
+	} else {
+		var unknown []bridgePort
+		strays, unknown = strayBridgeIPs(ports, knownVeths, fdb, neigh)
+		for _, p := range unknown {
+			log.Warn("bridge port owned by no running container, address unknown", "port", p.Name)
+		}
+	}
+	l.restoreIPHolds(log, persistedJobs, ownedIPs, strays)
 
 	if l.EnableDHCP {
 		go func() {
@@ -1770,7 +1796,14 @@ func (c *Container) cleanup() error {
 		if c.l.netpol != nil {
 			c.l.netpol.Untrack(c.job, c.IP)
 		}
-		c.l.ipalloc.ReleaseIP(c.l.bridgeNet, c.IP)
+		// Delete the host veth before the address can be reused: the
+		// namespace (and so the veth) can outlive the job by minutes.
+		c.l.releaseContainerIP(log, c.job.ID, c.IP, c.hostVeths())
+	} else {
+		// A restored container that failed to reconnect is cleaned up before
+		// networking is configured. Drop its veth; ConfigureNetworking holds
+		// its address from the job's persisted end time.
+		c.l.deleteHostVeths(log, c.IP, c.hostVeths())
 	}
 	for _, v := range c.job.Config.Volumes {
 		if !v.DeleteOnStop {
