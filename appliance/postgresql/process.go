@@ -48,6 +48,11 @@ var (
 	// "waiting for WAL to become available" instead of FATAling. Do not
 	// burn opTimeout (5m) before reseeding.
 	standbyReuseStartupTimeout = 45 * time.Second
+	// standbyStallTimeout bounds how long a running standby may go without a
+	// streaming walreceiver and without replaying any WAL, while its upstream
+	// answers as online, before it is reseeded from that upstream.
+	standbyStallTimeout       = standbyReuseStartupTimeout
+	standbyStallCheckInterval = 5 * time.Second
 )
 
 type Config struct {
@@ -143,6 +148,21 @@ type Process struct {
 	upstreamWaitMtx    sync.Mutex
 	stoppedVal         atomic.Value // bool
 
+	// upstreamStatus fetches an upstream peer's sirenia /status. Tests
+	// replace it; the test processes do not serve the sirenia HTTP API.
+	upstreamStatus func(addr string) (*client.Status, error)
+	// stalledVal is set by watchStandbyProgress while this standby is stuck
+	// (see stalled_standby.go) and reported in /status as standby_stalled.
+	stalledVal           atomic.Bool
+	progressWatchStarted atomic.Bool
+	// stallTimeout and stallCheckInterval are copied from the package
+	// defaults so a test can shorten them without racing other watchdogs.
+	stallTimeout       time.Duration
+	stallCheckInterval time.Duration
+	// startGen counts postgres starts so the watchdog can tell a restart
+	// happened between its samples and its reseed.
+	startGen atomic.Uint64
+
 	// mtx ensures that only one operation happens at a time
 	mtx sync.Mutex
 }
@@ -169,6 +189,9 @@ func NewProcess(c Config) *Process {
 		events:             make(chan state.DatabaseEvent, 1),
 		cancelSyncWait:     func() {},
 		cancelUpstreamWait: func() {},
+		upstreamStatus:     func(addr string) (*client.Status, error) { return client.NewClient(addr).Status() },
+		stallTimeout:       standbyStallTimeout,
+		stallCheckInterval: standbyStallCheckInterval,
 	}
 	p.setRunning(false)
 	p.setConfig(nil)
@@ -274,6 +297,7 @@ func (p *Process) Info() (*client.DatabaseInfo, error) {
 		Running:          p.running(),
 		SyncedDownstream: p.syncedDownstream(),
 		Basebackup:       p.basebackup.Load(),
+		StandbyStalled:   p.standbyStalled(),
 	}
 	xlog, err := p.XLogPosition()
 	res.XLog = string(xlog)
@@ -622,6 +646,9 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error {
 	log := p.log.New("fn", "assumeStandby", "upstream", upstream.Addr)
 	log.Info("starting up as standby")
+	// Keep watching after this returns: a standby that starts fine can
+	// still never stream again (CORE-25-F1-F3).
+	p.startStandbyProgressWatch()
 
 	// TODO(titanous): investigate using a DNS name, proxy, or iptables rule for
 	// the upstream. (perhaps DNS plus some postgres magic like terminating
@@ -805,9 +832,15 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 }
 
 func (p *Process) verifyOrReseedStandby(log log15.Logger, upstream *discoverd.Instance) error {
-	status, err := client.NewClient(upstream.Addr).Status()
+	status, err := p.upstreamStatus(upstream.Addr)
 	if skipStandbyHealthWhenUpstreamDown(status, err) {
-		log.Warn("upstream unreachable, skipping standby replication health check", "err", err)
+		log.Warn("upstream unreachable, skipping standby replication health check; the progress watchdog rechecks once it is online", "err", err)
+		return nil
+	}
+	if status.Database.StandbyStalled {
+		// Copying from a stuck standby only gives this peer the same dead
+		// WAL. Wait for the upstream to reseed itself; the watchdog retries.
+		log.Warn("upstream standby is stalled, not re-seeding from it")
 		return nil
 	}
 	if p.needsReseed() || p.walRecycled() {
@@ -1267,8 +1300,6 @@ var upstreamTimeout = 90 * time.Second
 func (p *Process) waitForUpstream(upstream *discoverd.Instance) error {
 	log := p.log.New("fn", "waitForUpstream", "upstream", upstream.Addr)
 	log.Info("waiting for upstream to come online")
-	upstreamClient := client.NewClient(upstream.Addr)
-
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	p.upstreamWaitMtx.Lock()
@@ -1285,10 +1316,11 @@ func (p *Process) waitForUpstream(upstream *discoverd.Instance) error {
 		err    error
 	}
 	timeout := time.After(upstreamTimeout)
+	warnedStalled := false
 	for {
 		resCh := make(chan statusResult, 1)
 		go func() {
-			s, err := upstreamClient.Status()
+			s, err := p.upstreamStatus(upstream.Addr)
 			resCh <- statusResult{s, err}
 		}()
 		var res statusResult
@@ -1301,9 +1333,12 @@ func (p *Process) waitForUpstream(upstream *discoverd.Instance) error {
 		status, err := res.status, res.err
 		if err != nil {
 			log.Error("error getting upstream status", "err", err)
-		} else if status.Database != nil && status.Database.Running && status.Database.XLog != "" && status.Database.UserExists {
+		} else if ok, reason := upstreamOnline(status, nil); ok && status.Database.UserExists {
 			log.Info("upstream is online")
 			return nil
+		} else if status != nil && status.Database != nil && status.Database.StandbyStalled && !warnedStalled {
+			log.Warn("upstream is not usable for a basebackup, waiting", "reason", reason)
+			warnedStalled = true
 		}
 		select {
 		case <-stop:
@@ -1371,6 +1406,7 @@ func (p *Process) start() error {
 	defer func() { p.justBasebackup = false }()
 	p.inStart.Store(true)
 	defer p.inStart.Store(false)
+	p.startGen.Add(1)
 
 	// clear stale pid if it exists
 	os.Remove(filepath.Join(p.dataDir, "postmaster.pid"))

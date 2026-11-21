@@ -50,6 +50,10 @@ type DatabaseInfo struct {
 	ReadWrite        bool                `json:"read_write"`
 	// Basebackup is set while this peer pulls pg_basebackup from its upstream.
 	Basebackup *BasebackupProgress `json:"basebackup,omitempty"`
+	// StandbyStalled is set on a standby that has neither streamed nor
+	// replayed WAL for the stall budget while its upstream was online. It is
+	// about to reseed, and downstream peers must not copy from it.
+	StandbyStalled bool `json:"standby_stalled,omitempty"`
 }
 
 // BasebackupProgress is the latest pg_basebackup --progress report.
