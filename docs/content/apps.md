@@ -57,6 +57,28 @@ A page shorter than `count` is the end. `flynn apps` follows those pages.
 
 See [Security](security.md#app-catalog) and [CLI — Apps](cli.md).
 
+## Deleting
+
+`flynn delete` (`apps:destroy`) queues the deletion and waits up to 60
+seconds for the result. The controller worker removes the app in this
+order:
+
+1. deprovision the add-ons only this app uses (an add-on shared with
+   another app is detached, not deprovisioned)
+2. delete the app's git repo and build cache from the blobstore
+3. delete its routes
+4. delete its releases, and through them its slugs
+5. delete the app record
+
+The add-on and blobstore steps call other services and are the ones that can
+fail, so they come first. If a provider refuses or is down, or the blobstore
+does not answer within 30 seconds, the app keeps its routes, releases and
+current release, and it keeps running (add-ons deprovisioned before the
+failure stay deprovisioned). `flynn delete` prints the error, and
+`flynn apps:info` shows a `Delete: failed, retrying: <time>: <error>` line.
+The worker retries in the background. Each retry does only what is left,
+and the app record goes away once a retry gets through.
+
 ## Configuration
 
 As suggested in [_The Twelve-Factor App_](http://12factor.net/config), Flynn

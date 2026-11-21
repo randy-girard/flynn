@@ -132,6 +132,11 @@ func NormalizeBuildLimits(cluster, account int) (int, int) {
 // when that push finishes (success or fail). Value is RFC3339 start time.
 const MetaAppBuilding = "flynn-controller.building"
 
+// AppMetaDeletionError is set by the app deletion worker when an attempt
+// fails. The app row stays until a retry succeeds, and `flynn apps:info`
+// shows the value. It is a reserved key, so a tenant cannot clear it.
+const AppMetaDeletionError = "flynn-controller.deletion-error"
+
 // AppBuildingMetaTTL is how long a git-push building mark stays valid if
 // gitreceive is killed before it can clear the key.
 const AppBuildingMetaTTL = 30 * time.Minute

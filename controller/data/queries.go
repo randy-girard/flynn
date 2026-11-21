@@ -18,6 +18,7 @@ var preparedStatements = map[string]string{
 	"app_update_strategy":                      appUpdateStrategyQuery,
 	"app_update_name":                          appUpdateNameQuery,
 	"app_update_meta":                          appUpdateMetaQuery,
+	"app_set_deletion_error":                   appSetDeletionErrorQuery,
 	"app_update_release":                       appUpdateReleaseQuery,
 	"app_update_deploy_timeout":                appUpdateDeployTimeoutQuery,
 	"app_delete":                               appDeleteQuery,
@@ -266,6 +267,9 @@ UPDATE apps SET strategy = $2, updated_at = now() WHERE app_id = $1`
 UPDATE apps SET name = $2, updated_at = now() WHERE app_id = $1`
 	appUpdateMetaQuery = `
 UPDATE apps SET meta = $2, updated_at = now() WHERE app_id = $1`
+	appSetDeletionErrorQuery = `
+UPDATE apps SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('flynn-controller.deletion-error', $2::text), updated_at = now()
+WHERE app_id = $1 AND deleted_at IS NULL`
 	appUpdateReleaseQuery = `
 UPDATE apps SET release_id = $2, updated_at = now() WHERE app_id = $1
 RETURNING updated_at`

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
@@ -17,16 +18,48 @@ import (
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
+// blobstoreTimeout bounds each app cache DELETE so a stalled blobstore fails
+// the attempt (and que retries it) instead of holding a worker forever.
+const blobstoreTimeout = 30 * time.Second
+
 type context struct {
-	db     *postgres.DB
-	client controller.Client
-	logger log15.Logger
+	db           *postgres.DB
+	client       controller.Client
+	logger       log15.Logger
+	http         *http.Client
+	blobstoreURL string
+}
+
+func newContext(db *postgres.DB, client controller.Client, logger log15.Logger) *context {
+	return &context{
+		db:           db,
+		client:       client,
+		logger:       logger,
+		http:         &http.Client{Timeout: blobstoreTimeout},
+		blobstoreURL: "http://blobstore.discoverd",
+	}
 }
 
 func JobHandler(db *postgres.DB, client controller.Client, logger log15.Logger) func(*que.Job) error {
-	return (&context{db, client, logger}).HandleAppDeletion
+	return newContext(db, client, logger).HandleAppDeletion
 }
 
+// HandleAppDeletion deletes an app. The steps that can fail and that call
+// other services come first, and what cannot be rebuilt goes last:
+//
+//  1. deprovision the app's own resources (provider calls)
+//  2. delete the app's git repo and build cache from the blobstore
+//  3. delete the app's routes
+//  4. unset the current release and delete every release (their slugs go
+//     through release_cleanup)
+//  5. delete the app row, formations and resource attachments
+//
+// A failed step leaves the later ones untouched: the app keeps its routes,
+// releases and current release while a provider or the blobstore is down.
+// Each step lists what is left, so a retry only does the remaining work.
+// Every failed attempt writes an app_deletion event with the error and puts
+// the error on the app (ct.AppMetaDeletionError, shown by `flynn apps:info`),
+// and que retries the job.
 func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 	log := c.logger.New("fn", "HandleAppDeletion")
 	log.Info("handling app deletion", "job_id", job.ID, "error_count", job.ErrorCount)
@@ -38,14 +71,27 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 	}
 	log = log.New("app_id", app.ID)
 
+	ref := app.ID
+	if ref == "" {
+		ref = app.Name
+	}
+	got, getErr := c.client.GetApp(ref)
+	if getErr == controller.ErrNotFound {
+		// An earlier job (a second DELETE, or an attempt whose commit
+		// landed before the worker stopped) already deleted it.
+		log.Info("app already deleted")
+		return nil
+	}
+	if getErr != nil {
+		log.Error("error loading app before deletion", "err", getErr)
+		return getErr
+	}
 	name := strings.TrimSpace(app.Name)
-	if name == "" && app.ID != "" {
-		got, getErr := c.client.GetApp(app.ID)
-		if getErr != nil {
-			log.Error("error loading app before deletion", "err", getErr)
-			return getErr
+	if got != nil {
+		if app.ID == "" {
+			app.ID = got.ID
 		}
-		if got != nil {
+		if name == "" {
 			name = strings.TrimSpace(got.Name)
 		}
 	}
@@ -55,91 +101,24 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 	}
 
 	a := ct.AppDeletion{AppID: app.ID}
-	defer func() { c.createEvent(&a, err) }()
-
-	log.Info("getting app routes")
-	routes, err := c.client.AppRouteList(app.ID)
-	if err != nil {
-		log.Error("error getting app routes", "err", err)
-		return err
-	}
-	for _, route := range routes {
-		log.Info("deleting route", "route_id", route.FormattedID())
-		if err := deleteAppRoute(c.client, app.ID, route.FormattedID()); err != nil {
-			log.Info("error deleting route", "route_id", route.FormattedID(), "err", err)
-			return err
-		}
-		a.DeletedRoutes = append(a.DeletedRoutes, route)
-	}
-	log.Info(fmt.Sprintf("deleted %d routes", len(a.DeletedRoutes)))
-
-	log.Info("getting app releases")
-	releases, err := c.client.AppReleaseList(app.ID)
-	if err != nil {
-		log.Error("error getting app releases", "err", err)
-		return err
-	}
-
-	// unset the app release so it doesn't prevent deleting it
-	log.Info("unsetting app release")
-	if err := c.db.Exec("app_update_release", app.ID, nil); err != nil {
-		log.Error("error unsetting app release", "err", err)
-		return err
-	}
-
-	for _, release := range releases {
-		log.Info("deleting release", "release_id", release.ID)
-		if _, err := c.client.DeleteRelease(app.ID, release.ID); err != nil {
-			log.Error("error deleting release", "release_id", release.ID, "err", err)
-			return err
-		}
-		a.DeletedReleases = append(a.DeletedReleases, release)
-	}
-	log.Info(fmt.Sprintf("deleted %d releases", len(a.DeletedReleases)))
-
-	log.Info("getting app resources")
-	resources, err := c.client.AppResourceList(app.ID)
-	if err != nil {
-		log.Error("error getting app resources", "err", err)
-		return err
-	}
-	for _, resource := range resources {
-		// don't delete resources still in use by other apps.
-		if len(resource.Apps) > 1 {
-			continue
-		}
-		log.Info("deleting resource", "provider_id", resource.ProviderID, "resource_id", resource.ID)
-		if _, err := c.client.DeleteResource(resource.ProviderID, resource.ID); err != nil {
-			log.Error("error deleting resource", "provider_id", resource.ProviderID, "resource_id", resource.ID, "err", err)
-			return err
-		}
-		a.DeletedResources = append(a.DeletedResources, resource)
-	}
-	log.Info(fmt.Sprintf("deleted %d resources", len(a.DeletedResources)))
-
-	log.Info("cleaning app cache")
-	// TODO: share URL construction with gitreceive / flynn-receive
-	for _, cacheURL := range []string{
-		fmt.Sprintf("http://blobstore.discoverd/repos/%s.tar", app.ID),
-		fmt.Sprintf("http://blobstore.discoverd/%s-cache.tgz", app.ID),
-	} {
-		req, err := http.NewRequest("DELETE", cacheURL, nil)
+	defer func() {
 		if err != nil {
-			log.Error("error creating app cache delete request", "err", err)
-			return err
+			c.recordFailure(log, app.ID, err)
 		}
-		blobstoreauth.ApplyIfBlobstore(req)
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.Error("error performing app cache delete request", "err", err)
-			return err
-		}
-		res.Body.Close()
-		if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusNotFound {
-			e := fmt.Sprintf("unexpected status code %d cleaning cache URL %s", res.StatusCode, cacheURL)
-			log.Error(e)
-			return errors.New(e)
-		}
+		c.createEvent(&a, err)
+	}()
+
+	if err := c.deleteResources(log, &a); err != nil {
+		return err
+	}
+	if err := c.deleteCache(log, app.ID); err != nil {
+		return err
+	}
+	if err := c.deleteRoutes(log, &a); err != nil {
+		return err
+	}
+	if err := c.deleteReleases(log, &a); err != nil {
+		return err
 	}
 
 	log.Info("deleting app")
@@ -167,6 +146,131 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 		return err
 	}
 	return tx.Commit()
+}
+
+// deleteResources deprovisions the resources only this app uses. A resource
+// another app is attached to stays; the app row deletion detaches it.
+func (c *context) deleteResources(log log15.Logger, a *ct.AppDeletion) error {
+	log.Info("getting app resources")
+	resources, err := c.client.AppResourceList(a.AppID)
+	if err != nil {
+		log.Error("error getting app resources", "err", err)
+		return err
+	}
+	for _, resource := range resources {
+		if len(resource.Apps) > 1 {
+			continue
+		}
+		log.Info("deleting resource", "provider_id", resource.ProviderID, "resource_id", resource.ID)
+		if _, err := c.client.DeleteResource(resource.ProviderID, resource.ID); err != nil {
+			if err == controller.ErrNotFound {
+				// removed since the list (another delete, or an
+				// earlier attempt): nothing left to do for it
+				log.Info("resource already removed", "resource_id", resource.ID)
+				continue
+			}
+			log.Error("error deleting resource", "provider_id", resource.ProviderID, "resource_id", resource.ID, "err", err)
+			return err
+		}
+		a.DeletedResources = append(a.DeletedResources, resource)
+	}
+	log.Info(fmt.Sprintf("deleted %d resources", len(a.DeletedResources)))
+	return nil
+}
+
+// deleteCache removes the app's git repo tarball and build cache. A 404 is
+// success, so a retry that already removed them passes.
+func (c *context) deleteCache(log log15.Logger, appID string) error {
+	log.Info("cleaning app cache")
+	// TODO: share URL construction with gitreceive / flynn-receive
+	for _, cacheURL := range []string{
+		fmt.Sprintf("%s/repos/%s.tar", c.blobstoreURL, appID),
+		fmt.Sprintf("%s/%s-cache.tgz", c.blobstoreURL, appID),
+	} {
+		req, err := http.NewRequest("DELETE", cacheURL, nil)
+		if err != nil {
+			log.Error("error creating app cache delete request", "err", err)
+			return err
+		}
+		blobstoreauth.ApplyIfBlobstore(req)
+		res, err := c.http.Do(req)
+		if err != nil {
+			log.Error("error performing app cache delete request", "err", err)
+			return err
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusNotFound {
+			e := fmt.Sprintf("unexpected status code %d cleaning cache URL %s", res.StatusCode, cacheURL)
+			log.Error(e)
+			return errors.New(e)
+		}
+	}
+	return nil
+}
+
+func (c *context) deleteRoutes(log log15.Logger, a *ct.AppDeletion) error {
+	log.Info("getting app routes")
+	routes, err := c.client.AppRouteList(a.AppID)
+	if err != nil {
+		log.Error("error getting app routes", "err", err)
+		return err
+	}
+	for _, route := range routes {
+		log.Info("deleting route", "route_id", route.FormattedID())
+		if err := deleteAppRoute(c.client, a.AppID, route.FormattedID()); err != nil {
+			if err == controller.ErrNotFound {
+				continue
+			}
+			log.Info("error deleting route", "route_id", route.FormattedID(), "err", err)
+			return err
+		}
+		a.DeletedRoutes = append(a.DeletedRoutes, route)
+	}
+	log.Info(fmt.Sprintf("deleted %d routes", len(a.DeletedRoutes)))
+	return nil
+}
+
+func (c *context) deleteReleases(log log15.Logger, a *ct.AppDeletion) error {
+	log.Info("getting app releases")
+	releases, err := c.client.AppReleaseList(a.AppID)
+	if err != nil {
+		log.Error("error getting app releases", "err", err)
+		return err
+	}
+
+	// unset the app release so it doesn't prevent deleting it
+	log.Info("unsetting app release")
+	if err := c.db.Exec("app_update_release", a.AppID, nil); err != nil {
+		log.Error("error unsetting app release", "err", err)
+		return err
+	}
+
+	for _, release := range releases {
+		log.Info("deleting release", "release_id", release.ID)
+		if _, err := c.client.DeleteRelease(a.AppID, release.ID); err != nil {
+			if err == controller.ErrNotFound {
+				continue
+			}
+			log.Error("error deleting release", "release_id", release.ID, "err", err)
+			return err
+		}
+		a.DeletedReleases = append(a.DeletedReleases, release)
+	}
+	log.Info(fmt.Sprintf("deleted %d releases", len(a.DeletedReleases)))
+	return nil
+}
+
+// recordFailure puts the error on the app so `flynn apps:info` shows that a
+// delete is pending and why it failed. The app row is gone once a retry
+// succeeds, so the key needs no clearing.
+func (c *context) recordFailure(log log15.Logger, appID string, cause error) {
+	if appID == "" {
+		return
+	}
+	msg := fmt.Sprintf("%s: %s", time.Now().UTC().Format(time.RFC3339), cause)
+	if err := c.db.Exec("app_set_deletion_error", appID, msg); err != nil {
+		log.Error("error recording deletion failure on app", "err", err)
+	}
 }
 
 func (c *context) createEvent(a *ct.AppDeletion, err error) error {
