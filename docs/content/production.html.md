@@ -1305,6 +1305,12 @@ value keeps the default. There is no off switch.
 so the status app does not go unhealthy when the install-key budget is
 spent.
 
+Failed password sign-ins have a separate throttle (see
+[Security](security.md#sign-in-attempts-and-password-changes)). If many
+users sign in from behind one NAT, raise the per-address burst:
+
+    flynn -a controller env:set CONTROLLER_LOGIN_IP_BURST=200
+
 ## Controller Keys
 
 The Flynn CLI requires a controller authentication key to interact with

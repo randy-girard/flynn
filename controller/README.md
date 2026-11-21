@@ -53,6 +53,17 @@ token counts. Scaling `web` multiplies both budgets. Set
 An empty or non-positive value keeps the default. The same limits apply
 on a hosted cluster and a self-hosted one.
 
+Password sign-in (`POST /oauth/token` `grant_type=password` and the `POST
+/oauth/authorize` form) has its own throttle on failed attempts: per account
+and address, per account, and per address, each a refilling bucket that
+answers 429 with `Retry-After` (`login_limit.go`; numbers in
+[security](../docs/content/security.md#sign-in-attempts-and-password-changes)).
+`CONTROLLER_LOGIN_IP_BURST` raises the per-address burst for users behind
+one NAT. A password change through `PATCH /users/:id` revokes the user's
+refresh tokens, codes, `/oauth/authorize` sessions and personal access
+tokens, and login tokens signed before `users.tokens_valid_after` are
+refused. Expired `oauth_*` rows are purged hourly.
+
 The leader loop owns that in-memory state. Listing jobs or volumes, checking
 a host, and streaming a new host all happen off the loop; the loop only
 applies the result. A slow host blocks work for that host. Placement of other

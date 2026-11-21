@@ -194,6 +194,59 @@ browser marks it cross-site or same-site (`Sec-Fetch-Site`) or when
 domain cannot submit it. The dashboard's own `/oauth/authorize` applies
 the same redirect rule.
 
+## Sign-in attempts and password changes
+
+Password sign-in (`POST /oauth/token` with `grant_type=password`, which
+`flynn login` and the dashboard use, and the form on `POST
+/oauth/authorize`) is throttled in each controller `web` process. The
+budgets are per process, so `web=2` doubles them. Only
+failed attempts count; a correct password gives its attempt back. Three
+budgets apply, each refilling at a steady rate, so a client that keeps
+failing is slowed down but never locked out for good:
+
+| Budget | Burst | Refill |
+| --- | --- | --- |
+| One account from one address | 5 failures | 1 per minute |
+| One account from all addresses | 20 failures | 1 per 2 minutes |
+| One address, all accounts | 30 failures | 1 per 20 seconds |
+
+An address that signed in to the account in the last 24 hours skips the
+account-wide budget, so failures from other addresses cannot keep the
+owner out from where they usually sign in. Unknown emails are counted the
+same way as real ones. A request over a budget is HTTP 429 with
+`Retry-After`; the token endpoint answers `{"error":"too_many_attempts"}`
+and the authorize form shows the wait. The address is the last
+`X-Forwarded-For` entry (the one the router appends) or the TCP peer. The
+dashboard signs browser users in with the cluster key and forwards the
+browser's address, so users behind the dashboard do not share one
+address budget; a cluster-key caller that forwards no address is counted
+per account only. Users behind one NAT share the address budget; raise it
+with `flynn -a controller env:set CONTROLLER_LOGIN_IP_BURST=200`. The cluster
+key, personal access tokens and service tokens never go through password
+sign-in and are not affected. A caller inside the cluster that reaches the
+controller directly can choose its `X-Forwarded-For`, so only the account
+budgets hold against it.
+
+Changing a user's password with `PATCH /users/:id` (the dashboard,
+`flynn-host user:bootstrap-admin`) signs that user out everywhere: their
+refresh tokens, authorization codes and `/oauth/authorize` sessions are
+deleted, their personal access tokens are revoked, and login tokens signed
+more than a second before the change are refused with HTTP 401 (the second
+covers clock skew with the dashboard, which signs its own login tokens). This includes the session of
+the person making the change; the CLI has to `flynn login` again. The
+dashboard keeps its own session and mints new tokens, so a user who
+changes their password there stays signed in to the dashboard. Setting the
+password a user already has (the dashboard re-sends it when it syncs a
+user) is not a change and revokes nothing. The `user.update` audit row
+records `password_changed` and `credentials_revoked`.
+
+Authorization codes and refresh tokens are single use: the controller
+deletes the row as it reads it, so two concurrent requests with one code or
+one refresh token cannot both succeed. If two `flynn` processes refresh at
+the same moment, the one that loses picks up the tokens the other wrote to
+`~/.flynn`. Expired codes, refresh tokens and sessions are deleted every
+hour.
+
 ## App catalog
 
 `GET /apps` is scoped to the caller:
