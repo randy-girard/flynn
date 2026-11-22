@@ -1,6 +1,7 @@
 package data
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -535,4 +536,65 @@ func scanScaleRequest(s postgres.Scanner) (*ct.ScaleRequest, error) {
 		return nil, err
 	}
 	return sr, nil
+}
+
+// ListCrossApp lists formations with running processes and apps.release_id
+// values whose release was minted for another app (CORE-52).
+//
+// Controllers before CORE-18 let any caller with deploy or scale rights on its
+// own app point a formation or the app's current release at another app's
+// release; newer controllers refuse that but keep accepting the app's current
+// release, so such rows persist until an operator clears them. Formations
+// scaled to zero, deleted formations and deleted apps are skipped. Rows are
+// ordered by app name, then kind.
+func (r *FormationRepo) ListCrossApp() ([]*ct.CrossAppRelease, error) {
+	rows, err := r.db.Query(`
+		SELECT kind, app_id, app_name, app_system, release_id, release_app_id, release_app_name, processes
+		FROM (
+		  SELECT 'formation' AS kind, a.app_id::text AS app_id, a.name AS app_name,
+		         COALESCE(a.meta->>'flynn-system-app', '') = 'true' AS app_system,
+		         f.release_id::text AS release_id, COALESCE(r.app_id::text, '') AS release_app_id,
+		         COALESCE(ra.name, '') AS release_app_name, f.processes AS processes
+		  FROM formations f
+		  JOIN apps a ON a.app_id = f.app_id AND a.deleted_at IS NULL
+		  JOIN releases r ON r.release_id = f.release_id
+		  LEFT JOIN apps ra ON ra.app_id = r.app_id
+		  WHERE f.deleted_at IS NULL
+		    AND r.app_id IS DISTINCT FROM f.app_id
+		    AND f.processes IS NOT NULL AND f.processes != 'null'
+		    AND EXISTS (
+		      SELECT 1 FROM json_each_text(f.processes::json) p
+		      WHERE p.value ~ '^[0-9]+$' AND p.value::bigint > 0
+		    )
+		  UNION ALL
+		  SELECT 'current_release', a.app_id::text, a.name,
+		         COALESCE(a.meta->>'flynn-system-app', '') = 'true',
+		         a.release_id::text, COALESCE(r.app_id::text, ''),
+		         COALESCE(ra.name, ''), NULL
+		  FROM apps a
+		  JOIN releases r ON r.release_id = a.release_id
+		  LEFT JOIN apps ra ON ra.app_id = r.app_id
+		  WHERE a.deleted_at IS NULL
+		    AND r.app_id IS DISTINCT FROM a.app_id
+		) cross_app
+		ORDER BY app_name, kind, release_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ct.CrossAppRelease
+	for rows.Next() {
+		var row ct.CrossAppRelease
+		var procRaw []byte
+		if err := rows.Scan(&row.Kind, &row.AppID, &row.AppName, &row.System, &row.ReleaseID, &row.ReleaseAppID, &row.ReleaseAppName, &procRaw); err != nil {
+			return nil, err
+		}
+		if len(procRaw) > 0 {
+			if err := json.Unmarshal(procRaw, &row.Processes); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, &row)
+	}
+	return out, rows.Err()
 }

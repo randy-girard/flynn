@@ -741,6 +741,31 @@ type Formation struct {
 	UpdatedAt *time.Time                   `json:"updated_at,omitempty"`
 }
 
+// CrossAppRelease kinds.
+const (
+	// CrossAppKindFormation is a formation with running processes whose
+	// release was minted for another app.
+	CrossAppKindFormation = "formation"
+	// CrossAppKindCurrentRelease is an app whose current release
+	// (apps.release_id) was minted for another app.
+	CrossAppKindCurrentRelease = "current_release"
+)
+
+// CrossAppRelease is one row of GET /cluster/cross-app-releases: an app that
+// runs (formation) or serves (current release) a release minted for another
+// app. Controllers before CORE-18 let a tenant deploy or scale any release id;
+// newer ones refuse it, but rows made earlier stay until cleared.
+type CrossAppRelease struct {
+	Kind           string         `json:"kind"`
+	AppID          string         `json:"app"`
+	AppName        string         `json:"app_name"`
+	ReleaseID      string         `json:"release"`
+	ReleaseAppID   string         `json:"release_app,omitempty"`
+	ReleaseAppName string         `json:"release_app_name,omitempty"`
+	System         bool           `json:"system,omitempty"`
+	Processes      map[string]int `json:"processes,omitempty"`
+}
+
 type Job struct {
 	// ID is the job's full cluster ID (i.e. hostID-UUID) and can be empty
 	// if the job is pending
