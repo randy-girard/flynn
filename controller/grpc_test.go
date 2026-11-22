@@ -42,6 +42,8 @@ type GRPCSuite struct {
 	grpc                api.ControllerClient
 	grpcNoAuth          api.ControllerClient
 	httpSrv             *httptest.Server
+	tokenKey            *ecdsa.PrivateKey
+	dial                func(opts ...grpc.DialOption) api.ControllerClient
 	tearDownFns         []func()
 	scaleRequestNameMap map[string]string
 }
@@ -70,6 +72,7 @@ func (s *GRPCSuite) SetUpSuite(c *C) {
 	authKeys := []string{"test-3bebef7a2bed81017fb2bfa411a6a0a2"}
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	c.Assert(err, IsNil)
+	s.tokenKey = priv
 	bearer := mintGRPCBearerToken(c, priv)
 
 	handler, grpcServer, ctrlAPI := appHandler(handlerConfig{
@@ -100,6 +103,7 @@ func (s *GRPCSuite) SetUpSuite(c *C) {
 		s.onTeardown(func() { conn.Close() })
 		return api.NewControllerClient(conn)
 	}
+	s.dial = grpcClient
 
 	// Set up an authenticated connection to the server
 	s.grpc = grpcClient(grpc.WithPerRPCCredentials(&grpcBearerCreds{token: bearer}))

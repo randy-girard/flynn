@@ -72,6 +72,28 @@ func (g *grpcAPI) authorizeWithToken(ctx context.Context) (context.Context, *aut
 	return ctx, token, nil
 }
 
+// expandToken applies the user row to a login token, as the HTTP middleware
+// does: admin comes from users.cluster_admin, a disabled or suspended user or
+// account is refused, and a token signed before a password change is revoked.
+// It runs after limitBearer so it is counted before the user lookup, like
+// HTTP.
+func (g *grpcAPI) expandToken(ctx context.Context, tok *authorizer.Token) error {
+	if g == nil || g.controllerAPI == nil {
+		return nil
+	}
+	if err := g.controllerAPI.expandToken(tok); err != nil {
+		if err == errCredentialRevoked {
+			return status.Error(codes.Unauthenticated, err.Error())
+		}
+		g.logger(ctx).Error("error expanding gRPC token", "err", err)
+		return status.Error(codes.Unavailable, "could not check the caller's account, try again")
+	}
+	if tok != nil && tok.Blocked {
+		return status.Error(codes.PermissionDenied, "this account is suspended")
+	}
+	return nil
+}
+
 func (g *grpcAPI) logger(ctx context.Context) log.Logger {
 	log, ok := ctxhelper.LoggerFromContext(ctx)
 	if !ok {
@@ -185,6 +207,9 @@ func (g *grpcAPI) streamInterceptor(srv interface{}, stream grpc.ServerStream, i
 	if err := g.limitBearer(ctx, tok); err != nil {
 		return err
 	}
+	if err := g.expandToken(ctx, tok); err != nil {
+		return err
+	}
 	if !authz.GRPCAllowed(tok, info.FullMethod) {
 		return status.Error(codes.PermissionDenied, "insufficient scopes for this gRPC method (dashboard app-scoped tokens use controller HTTP)")
 	}
@@ -226,6 +251,9 @@ func (g *grpcAPI) unaryInterceptor(ctx context.Context, req interface{}, info *g
 		return nil, err
 	}
 	if err := g.limitBearer(ctx, tok); err != nil {
+		return nil, err
+	}
+	if err := g.expandToken(ctx, tok); err != nil {
 		return nil, err
 	}
 	if !authz.GRPCAllowed(tok, info.FullMethod) {

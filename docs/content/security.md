@@ -113,6 +113,13 @@ session token, or a personal access token), admin comes only from that
 user's `cluster_admin` flag. The controller drops `cluster:admin` and `*` from
 the token and adds `cluster:admin` back when the user is an admin, so a
 demoted admin loses admin at once, before the login token expires.
+The gRPC API (`StreamApps` and the other controller RPCs, including
+grpc-web) checks the user row the same way on every call: a demoted admin
+gets `PermissionDenied`, a disabled or suspended user or account gets
+`PermissionDenied` ("this account is suspended"), and a login token signed
+before a password change gets `Unauthenticated`. A stream is checked when it
+opens; one already open keeps running until it ends. gRPC does not accept
+personal access tokens.
 
 Personal access tokens (`POST /tokens`, `flynn token:create`) accept only the
 scope `user` (or none). `cluster:admin`, `*`, `account:quota`, `acme:issue`,
