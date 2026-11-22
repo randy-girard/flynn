@@ -192,12 +192,15 @@ wait_cluster_stable() {
   return 1
 }
 
+# list_tenant_apps prints the tenant HTTP apps that have jobs now. It fails
+# when discoverd or any host cannot be asked: an empty list from a failed read
+# would make the post-reboot wait miss apps whose jobs died with the node.
 list_tenant_apps() {
   local node domain ip
   node="${FLYNN_VAGRANT_NODE_PREFIX}1"
   domain="$(flynn_vagrant_cluster_domain)"
   ip="$(flynn_vagrant_cluster_ip)"
-  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} LIST_ONLY=1 script/vagrant/guest/wait-tenant-http.sh" || true
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} LIST_ONLY=1 script/vagrant/guest/wait-tenant-http.sh"
 }
 
 wait_tenant_http() {
@@ -211,10 +214,61 @@ wait_tenant_http() {
   run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} TENANT_APPS=$(printf '%q' "${apps}") TRIES=60 script/vagrant/guest/wait-tenant-http.sh"
 }
 
+# reload_preflight runs before the first cluster node is rebooted. A
+# bootstrapped, running cluster must pass the same gate each reboot waits for
+# (hosts, controller, status, postgres peers caught up, every service at its
+# formation count); otherwise this exits without touching a node. The gate is
+# skipped (RELOAD_STRICT=0, tenant list best effort) when no cluster node is
+# running or dev-node1 is not bootstrapped, since nothing is served then, and
+# when FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT=1 asks to reboot a cluster that is
+# already broken.
+reload_preflight() {
+  local node="${FLYNN_VAGRANT_NODE_PREFIX}1" running boot
+  if [[ "${FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT:-0}" == "1" ]]; then
+    echo "FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT=1: rebooting without the health preflight" >&2
+    RELOAD_STRICT=0
+    return 0
+  fi
+  running="$(flynn_vagrant_running_cluster_nodes)"
+  if [[ -z "${running}" ]]; then
+    echo "no cluster node is running; skipping the health preflight"
+    RELOAD_STRICT=0
+    return 0
+  fi
+  if ! printf '%s\n' "${running}" | grep -Fxq "${node}"; then
+    echo "not rebooting any cluster node: ${node} is not running but other cluster nodes are" >&2
+    echo "start it first (script/vagrant.sh up) or set FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT=1" >&2
+    exit 1
+  fi
+  boot="$(run_as_root_on "${node}" "if test -f /etc/flynn/host.json; then echo bootstrapped; else echo none; fi" | tr -d '\r' | tail -n 1)" || boot=""
+  case "${boot}" in
+    bootstrapped) ;;
+    none)
+      echo "${node} is not bootstrapped; skipping the health preflight"
+      RELOAD_STRICT=0
+      return 0
+      ;;
+    *)
+      echo "not rebooting any cluster node: could not tell whether ${node} is bootstrapped" >&2
+      exit 1
+      ;;
+  esac
+  if ! wait_cluster_stable "preflight" "${RELOAD_PREFLIGHT_TRIES:-60}" 1; then
+    echo "not rebooting any cluster node: the cluster is not healthy before the reload" >&2
+    echo "(a host missing, postgres sync behind, or a service below its formation count; see the probe output above)" >&2
+    echo "fix it first, or set FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT=1 to reboot anyway" >&2
+    exit 1
+  fi
+}
+
 # reload_cluster_rolling reboots one VM at a time like a node crash. The
 # builder is compile-only so it reloads first (no Flynn wait). Each cluster
 # node is killed without draining; remaining hosts plus cluster-monitor
 # recover jobs. After the VM is back, flynn-host starts and the node rejoins.
+# Before the first cluster node goes down the cluster must already be at the
+# state each step waits for (postgres peers caught up, every service at its
+# formation count) and the tenant app list must be readable. Otherwise the
+# reload could take down the only good copy, and fails instead.
 reload_cluster_rolling() {
   flynn_vagrant_collect_existing "$@"
   if [[ ${#FLYNN_VAGRANT_TARGETS[@]} -eq 0 ]]; then
@@ -230,15 +284,30 @@ reload_cluster_rolling() {
       nodes+=("${name}")
     fi
   done
+  local i=0 n="${#nodes[@]}" st=0
+  local TENANT_APPS="" apps=""
+  # Check before any reboot, the builder included: booting it first only
+  # delays the check and lets a degraded cluster drift further.
   # bash 3.2 + set -u: empty "${arr[@]}" is unbound (make vagrant-reload VM=dev-node2).
+  if [[ ${#nodes[@]} -gt 0 ]]; then
+    RELOAD_STRICT=1
+    reload_preflight
+    if ! apps="$(list_tenant_apps)"; then
+      if [[ "${RELOAD_STRICT}" == "1" ]]; then
+        echo "not rebooting any cluster node: could not list tenant apps before the reload" >&2
+        exit 1
+      fi
+      echo "could not list tenant apps; the tenant wait re-lists after each node" >&2
+      apps=""
+    fi
+    TENANT_APPS="$(printf '%s\n' "${apps}" | tr -d '\r' | tr '\n' ' ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    echo "tenant apps to wait for after each node: ${TENANT_APPS:-none}"
+  fi
   if [[ ${#builders[@]} -gt 0 ]]; then
     for name in "${builders[@]}"; do
       flynn_vagrant_reload_one "${name}"
     done
   fi
-  local i=0 n="${#nodes[@]}" st=0
-  local TENANT_APPS=""
-  TENANT_APPS="$(list_tenant_apps 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
   if [[ ${#nodes[@]} -eq 0 ]]; then
     return 0
   fi
@@ -586,6 +655,19 @@ update_running_cluster() {
   done
 }
 
+update_dev_cluster() {
+  run_as_root "cd ${SRC} && FLYNN_VAGRANT_FORCE_BUILD=${FLYNN_VAGRANT_FORCE_BUILD} script/vagrant/guest/update.sh"
+  halt_builder
+  update_running_cluster
+  # Blobstore (and other Layer 1 apps) can be briefly unhealthy after the
+  # rolling deploy even though flynn-host update already printed success.
+  # Wait for full strength too (postgres peers caught up, every service at its
+  # formation count) so the next command (reload, chaos) starts from there.
+  # 180 tries: a replaced postgres peer may need a basebackup first.
+  wait_cluster_stable "update" "${UPDATE_STABLE_TRIES:-180}" 1
+  probe_live_cluster_retry "update"
+}
+
 cmd="${1:-}"
 case "${cmd}" in
   -h|--help|help|"")
@@ -622,13 +704,7 @@ case "${cmd}" in
     connect_laptop
     ;;
   update)
-    run_as_root "cd ${SRC} && FLYNN_VAGRANT_FORCE_BUILD=${FLYNN_VAGRANT_FORCE_BUILD} script/vagrant/guest/update.sh"
-    halt_builder
-    update_running_cluster
-    # Blobstore (and other Layer 1 apps) can be briefly unhealthy after the
-    # rolling deploy even though flynn-host update already printed success.
-    wait_cluster_stable "update"
-    probe_live_cluster_retry "update"
+    update_dev_cluster
     ;;
   plugin)
     plugin_install_or_update "${2:-}"

@@ -253,11 +253,16 @@ if ! grep -Fq 'formations?active=true' "${mod}/guest/probe-cluster.sh" \
   echo "probe-cluster.sh PROBE_FULL_STRENGTH must compare discoverd instances with active formations" >&2
   exit 1
 fi
-if ! grep -E '^  update\)' -A20 "${script}" | grep -Fq 'wait_cluster_stable'; then
+update_fn="$(sed -n '/^update_dev_cluster() {/,/^}/p' "${script}")"
+if ! grep -E '^  update\)' -A2 "${script}" | grep -Fq 'update_dev_cluster'; then
+  echo "vagrant.sh update must run update_dev_cluster" >&2
+  exit 1
+fi
+if ! grep -Fq 'wait_cluster_stable' <<<"${update_fn}"; then
   echo "vagrant-update must wait for cluster status after flynn-host update (blobstore can be briefly unhealthy)" >&2
   exit 1
 fi
-if ! grep -E '^  update\)' -A25 "${script}" | grep -Fq 'probe_live_cluster_retry'; then
+if ! grep -Fq 'probe_live_cluster_retry' <<<"${update_fn}"; then
   echo "vagrant-update final probe must retry; a one-shot probe races a blobstore flap" >&2
   exit 1
 fi
@@ -694,7 +699,7 @@ if grep -E 'build\)' -A3 "${script}" | grep -Fq 'build_images' && ! grep -E 'bui
   echo "vagrant.sh build must halt the builder after images are built" >&2
   exit 1
 fi
-if grep -E 'update\)' -A4 "${script}" | grep -Fq 'update_running_cluster' && ! grep -E 'update\)' -A5 "${script}" | grep -Fq 'halt_builder'; then
+if ! sed -n '/^update_dev_cluster() {/,/^}/p' "${script}" | grep -B1 'update_running_cluster' | grep -Fq 'halt_builder'; then
   echo "vagrant.sh update must halt the builder after compile before cluster update" >&2
   exit 1
 fi

@@ -29,6 +29,8 @@ make vagrant-setup YES=1 NODES=3
 
 `update` builds on `dev-builder` when source changed, halts the builder, then updates running nodes. Plugin images are a separate `plugin` subcommand.
 
+`update` returns only when the cluster is at full strength: postgres peers caught up and every service at its formation count (`UPDATE_STABLE_TRIES`, default 180 five-second tries), then the full probe. `reload` refuses to reboot any cluster node unless the same check passes first (`RELOAD_PREFLIGHT_TRIES`, default 60) and the tenant app list can be read. A halted or unbootstrapped cluster skips that gate. To reboot a cluster that is already broken, set `FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT=1`.
+
 `dev-builder` has the `flynn-default` ZFS pool and no `/dev/kvm`. Nested hardware virtualization does not change that. Do not run `script/run-integration-tests` on it. A full run spends 15 minutes per nested host and ends with `timed out waiting for hosts to start`. Filter to suites that do not call `bootCluster` if you need the builder's own cluster. `make test-integration` belongs on a Linux host that has `/dev/kvm`.
 
 Chaos defaults: `CHAOS_ROUNDS=10`, `CHAOS_TIMEOUT=900`, `CHAOS_SETTLE=20`, `CHAOS_NODE_DOWN=60`. Report: `flynn-logs/chaos/<UTC>/report.txt`.
