@@ -232,6 +232,10 @@ type DomainVerification struct {
 	Token        string     `json:"token"`
 	TXTName      string     `json:"txt_name"`
 	VerifiedAt   *time.Time `json:"verified_at"`
+	// ClaimedAt is when this owner first claimed the name. Another account
+	// may replace an unverified claim only once it is older than the
+	// controller's claim hold (7 days).
+	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
 }
 
 // DomainCheck is the body of POST /domains/verify/:hostname/check. Records

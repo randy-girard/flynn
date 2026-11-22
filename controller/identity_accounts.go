@@ -679,6 +679,10 @@ func (c *controllerAPI) TransferApp(ctx context.Context, w http.ResponseWriter, 
 	httphelper.JSON(w, 200, app)
 }
 
+// domainClaimTTL is how long an unverified claim holds a hostname against
+// other accounts (CORE-55). After that another account may claim it.
+const domainClaimTTL = 7 * 24 * time.Hour
+
 func (c *controllerAPI) VerifyDomain(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		Hostname     string `json:"hostname"`
@@ -702,13 +706,70 @@ func (c *controllerAPI) VerifyDomain(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	token := random.Hex(16)
-	if err := c.tenancy.InsertDomain(body.Hostname, body.OwnerAccount, token); err != nil {
+	if err := c.tenancy.InsertDomain(body.Hostname, body.OwnerAccount, token, domainClaimTTL); err != nil {
+		if err == data.ErrDomainClaimed {
+			httphelper.ConflictError(w, "hostname is already claimed by another account; an unverified claim can be replaced 7 days after it was made")
+			return
+		}
 		respondWithError(w, err)
 		return
 	}
-	httphelper.JSON(w, 200, ct.DomainVerification{
-		Hostname: body.Hostname, OwnerAccount: body.OwnerAccount, Token: token, TXTName: tenancy.TXTName(body.Hostname),
+	_ = c.tenancy.Audit(c.actor(ctx), "domain.claim", body.OwnerAccount, "", map[string]string{"hostname": body.Hostname})
+	d, err := c.tenancy.GetDomain(body.Hostname)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	d.TXTName = tenancy.TXTName(body.Hostname)
+	httphelper.JSON(w, 200, d)
+}
+
+// ListDomains is GET /domains?owner_account=<account>: the account's claims,
+// with their tokens, for its admins. With no owner_account only the cluster
+// key or a cluster admin may list, and gets every claim.
+func (c *controllerAPI) ListDomains(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	owner := strings.TrimSpace(req.URL.Query().Get("owner_account"))
+	if owner == "" {
+		if tok := authz.TokenFromContext(ctx); tok == nil || !(tok.ClusterKey || tok.HasClusterAdmin()) {
+			httphelper.ValidationError(w, "owner_account", "is required")
+			return
+		}
+	} else if !c.canAdminAccount(ctx, w, owner) {
+		return
+	}
+	list, err := c.tenancy.ListDomains(owner)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	for _, d := range list {
+		d.TXTName = tenancy.TXTName(d.Hostname)
+	}
+	httphelper.JSON(w, 200, list)
+}
+
+// DeleteDomain is DELETE /domains/:hostname, for an admin of the owning
+// account or the cluster key. Routes already added under the name stay;
+// new ones need the name claimed and verified again.
+func (c *controllerAPI) DeleteDomain(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	params, _ := ctxhelper.ParamsFromContext(ctx)
+	hostname := strings.TrimSuffix(strings.ToLower(params.ByName("hostname")), ".")
+	d, err := c.tenancy.GetDomain(hostname)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if !c.canAdminAccount(ctx, w, d.OwnerAccount) {
+		return
+	}
+	if err := c.tenancy.DeleteDomain(hostname); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	_ = c.tenancy.Audit(c.actor(ctx), "domain.delete", d.OwnerAccount, "", map[string]interface{}{
+		"hostname": hostname, "verified": d.VerifiedAt != nil,
 	})
+	w.WriteHeader(200)
 }
 
 func (c *controllerAPI) CheckDomain(ctx context.Context, w http.ResponseWriter, req *http.Request) {

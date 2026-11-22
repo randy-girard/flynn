@@ -374,7 +374,8 @@ parent. `self_hosted` does not check this. The rule covers the route
 `domain` and a `managed_certificate_domain` that differs from it, on create
 and on `PUT /apps/:id/routes/:type/:id` whenever the update changes either
 value. An update keeps the route on the app in the URL: `parent_ref` in the
-body is ignored. The flow is two API calls:
+body is ignored. The flow is two API calls
+(`flynn domain:claim` and `flynn domain:check` in the CLI):
 
 1. `POST /domains/verify {"hostname":"example.com","owner_account":"user:<id>"}`
    returns a token and `txt_name` (`_flynn-verify.example.com`). The caller
@@ -383,6 +384,27 @@ body is ignored. The flow is two API calls:
    `POST /domains/verify/example.com/check`. The controller looks the record
    up itself, with a 5 second timeout, and marks the domain verified only
    when one TXT value equals the token.
+
+A claim holds its hostname for 7 days from when that account first claimed
+it. During that time a claim for the same name by another account (the
+cluster key included) is `409` and the stored owner and token do not change.
+After 7 days another account may replace a claim that is still unverified. A
+verified claim is never replaced; it stays with its account until it is
+deleted. The owner may claim again at any time to get a new token; that
+clears verification and does not restart the 7 days. Before controller
+migration 99 any account could overwrite an unverified claim and its token,
+so it could keep the real owner from verifying. Migration 99 adds
+`claimed_at`, set to the upgrade time for existing claims.
+
+`GET /domains?owner_account=<account>` lists that account's claims
+(hostname, owner, token, `txt_name`, `verified_at`, `claimed_at`) for an
+admin of the account (`flynn domain:list`). Without `owner_account` only the
+cluster key or a cluster admin may list, and gets every claim
+(`flynn domain:list --all`). `DELETE /domains/<hostname>` removes a claim,
+verified or not, for an admin of the owning account or the cluster key
+(`flynn domain:remove`). Routes already added under a deleted name stay; new
+routes under it need the name claimed and verified again. Claims and deletes
+are written to the audit log (`domain.claim`, `domain.delete`).
 
 The claim is refused when the name is a single label, an IP address, a
 wildcard, not a valid DNS name, a special-use name (`localhost`, `.local`,

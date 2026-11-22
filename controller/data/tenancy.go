@@ -563,24 +563,81 @@ func (r *TenancyRepo) CountResources(account string) (int, error) {
 	return n, err
 }
 
-func (r *TenancyRepo) InsertDomain(hostname, owner, token string) error {
-	err := r.db.Exec(`
-		INSERT INTO verified_domains (hostname, owner_account, token, verified_at)
-		VALUES ($1, $2, $3, NULL)
-		ON CONFLICT (hostname) DO UPDATE SET owner_account=EXCLUDED.owner_account, token=EXCLUDED.token, verified_at=NULL
-		WHERE verified_domains.verified_at IS NULL OR verified_domains.owner_account=EXCLUDED.owner_account`,
-		hostname, owner, token)
+// ErrDomainClaimed is returned by InsertDomain when another account holds
+// the hostname: its claim is verified, or unverified and younger than the
+// hold.
+var ErrDomainClaimed = errors.New("hostname is already claimed by another account")
+
+// InsertDomain stores a claim with a new token. The owner may always
+// re-claim (a new token, verification cleared); that keeps the first
+// claimed_at while the hold is running, so an owner cannot extend it by
+// claiming again. Another account may replace only an unverified claim
+// whose claimed_at is older than hold (CORE-55).
+func (r *TenancyRepo) InsertDomain(hostname, owner, token string, hold time.Duration) error {
+	err := r.db.QueryRow(`
+		INSERT INTO verified_domains (hostname, owner_account, token, verified_at, claimed_at)
+		VALUES ($1, $2, $3, NULL, now())
+		ON CONFLICT (hostname) DO UPDATE SET owner_account=EXCLUDED.owner_account, token=EXCLUDED.token, verified_at=NULL,
+			claimed_at = CASE
+				WHEN verified_domains.owner_account=EXCLUDED.owner_account
+					AND verified_domains.claimed_at >= now() - $4::bigint * interval '1 second'
+				THEN verified_domains.claimed_at ELSE now() END
+		WHERE verified_domains.owner_account=EXCLUDED.owner_account
+			OR (verified_domains.verified_at IS NULL AND verified_domains.claimed_at < now() - $4::bigint * interval '1 second')
+		RETURNING hostname`,
+		hostname, owner, token, int64(hold/time.Second)).Scan(&hostname)
+	if err == pgx.ErrNoRows {
+		return ErrDomainClaimed
+	}
 	return err
 }
 
-func (r *TenancyRepo) GetDomain(hostname string) (*ct.DomainVerification, error) {
+const domainColumns = `hostname, owner_account, token, verified_at, claimed_at`
+
+func scanDomain(s postgres.Scanner) (*ct.DomainVerification, error) {
 	d := &ct.DomainVerification{}
-	err := r.db.QueryRow(`SELECT hostname, owner_account, token, verified_at FROM verified_domains WHERE hostname=$1`, hostname).
-		Scan(&d.Hostname, &d.OwnerAccount, &d.Token, &d.VerifiedAt)
+	var claimed time.Time
+	if err := s.Scan(&d.Hostname, &d.OwnerAccount, &d.Token, &d.VerifiedAt, &claimed); err != nil {
+		return nil, err
+	}
+	d.ClaimedAt = &claimed
+	return d, nil
+}
+
+func (r *TenancyRepo) GetDomain(hostname string) (*ct.DomainVerification, error) {
+	d, err := scanDomain(r.db.QueryRow(`SELECT `+domainColumns+` FROM verified_domains WHERE hostname=$1`, hostname))
 	if err == pgx.ErrNoRows {
 		return nil, ErrNotFound
 	}
 	return d, err
+}
+
+// ListDomains returns the claims of owner, or every claim when owner is
+// empty, sorted by hostname.
+func (r *TenancyRepo) ListDomains(owner string) ([]*ct.DomainVerification, error) {
+	rows, err := r.db.Query(`SELECT `+domainColumns+` FROM verified_domains WHERE $1 = '' OR owner_account = $1 ORDER BY hostname`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*ct.DomainVerification{}
+	for rows.Next() {
+		d, err := scanDomain(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// DeleteDomain removes a claim, verified or not.
+func (r *TenancyRepo) DeleteDomain(hostname string) error {
+	err := r.db.QueryRow(`DELETE FROM verified_domains WHERE hostname=$1 RETURNING hostname`, hostname).Scan(&hostname)
+	if err == pgx.ErrNoRows {
+		return ErrNotFound
+	}
+	return err
 }
 
 func (r *TenancyRepo) MarkDomainVerified(hostname string, at time.Time) error {

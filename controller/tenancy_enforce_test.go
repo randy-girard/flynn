@@ -260,7 +260,11 @@ func TestValidUserUUID(t *testing.T) {
 }
 
 func (s *S) domainCall(c *C, auth, path, body string) (int, []byte) {
-	req, err := http.NewRequest(http.MethodPost, s.srv.URL+path, strings.NewReader(body))
+	return s.domainReq(c, http.MethodPost, auth, path, body)
+}
+
+func (s *S) domainReq(c *C, method, auth, path, body string) (int, []byte) {
+	req, err := http.NewRequest(method, s.srv.URL+path, strings.NewReader(body))
 	c.Assert(err, IsNil)
 	req.Header.Set("Content-Type", "application/json")
 	if auth == authKey {
@@ -363,6 +367,153 @@ func (s *S) TestCheckDomainClusterKeyMaySupplyRecords(c *C) {
 	code, raw := s.domainCall(c, authKey, "/domains/verify/"+host+"/check", fmt.Sprintf(`{"records":[%q]}`, d.Token))
 	c.Assert(code, Equals, 200, Commentf("%s", raw))
 	c.Assert(s.domainVerifiedAt(c, host), NotNil)
+}
+
+func (s *S) domainRow(c *C, hostname string) (owner, token string, verified bool) {
+	var at *time.Time
+	c.Assert(s.hc.db.QueryRow(`SELECT owner_account, token, verified_at FROM verified_domains WHERE hostname = $1`, hostname).Scan(&owner, &token, &at), IsNil)
+	return owner, token, at != nil
+}
+
+func (s *S) countDomainRows(c *C, hostname string) int {
+	var n int
+	c.Assert(s.hc.db.QueryRow(`SELECT COUNT(*) FROM verified_domains WHERE hostname = $1`, hostname).Scan(&n), IsNil)
+	return n
+}
+
+// TestVerifyDomainDoesNotReplaceOtherAccountClaim: CORE-55. Another account
+// used to overwrite an unverified claim (owner and token) and could keep
+// replacing the token so the real owner never verified. A claim now holds
+// for domainClaimTTL. After that an unverified claim may be taken over; a
+// verified one never.
+func (s *S) TestVerifyDomainDoesNotReplaceOtherAccountClaim(c *C) {
+	a := "core55-a-" + core20Suffix()
+	b := "core55-b-" + core20Suffix()
+	tokA, tokB := s.signUser(c, a, nil), s.signUser(c, b, nil)
+	host := "shop." + a + ".example.com"
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname = $1`, host)
+
+	first := s.claimDomain(c, tokA, host, "user:"+a)
+	for _, auth := range []string{tokB, authKey} {
+		code, raw := s.domainCall(c, auth, "/domains/verify", fmt.Sprintf(`{"hostname":%q,"owner_account":%q}`, host, "user:"+b))
+		c.Assert(code, Equals, 409, Commentf("%s", raw))
+		c.Assert(strings.Contains(string(raw), "token"), Equals, false, Commentf("%s", raw))
+	}
+	owner, token, _ := s.domainRow(c, host)
+	c.Assert(owner, Equals, "user:"+a)
+	c.Assert(token, Equals, first.Token)
+
+	// The owner may re-claim (new token) without extending the hold.
+	var claimedBefore, claimedAfter time.Time
+	c.Assert(s.hc.db.QueryRow(`SELECT claimed_at FROM verified_domains WHERE hostname = $1`, host).Scan(&claimedBefore), IsNil)
+	again := s.claimDomain(c, tokA, host, "user:"+a)
+	c.Assert(again.Token, Not(Equals), first.Token)
+	c.Assert(s.hc.db.QueryRow(`SELECT claimed_at FROM verified_domains WHERE hostname = $1`, host).Scan(&claimedAfter), IsNil)
+	c.Assert(claimedAfter.Equal(claimedBefore), Equals, true)
+
+	// An unverified claim older than the TTL may be replaced.
+	c.Assert(s.hc.db.Exec(`UPDATE verified_domains SET claimed_at = now() - $2::bigint * interval '1 second' WHERE hostname = $1`,
+		host, int64((domainClaimTTL+time.Hour)/time.Second)), IsNil)
+	taken := s.claimDomain(c, tokB, host, "user:"+b)
+	owner, token, _ = s.domainRow(c, host)
+	c.Assert(owner, Equals, "user:"+b)
+	c.Assert(token, Equals, taken.Token)
+
+	// A verified claim is never replaced by another account, however old.
+	c.Assert(s.hc.db.Exec(`UPDATE verified_domains SET verified_at = now(), claimed_at = now() - interval '365 days' WHERE hostname = $1`, host), IsNil)
+	code, raw := s.domainCall(c, tokA, "/domains/verify", fmt.Sprintf(`{"hostname":%q,"owner_account":%q}`, host, "user:"+a))
+	c.Assert(code, Equals, 409, Commentf("%s", raw))
+	owner, token, verified := s.domainRow(c, host)
+	c.Assert(owner, Equals, "user:"+b)
+	c.Assert(token, Equals, taken.Token)
+	c.Assert(verified, Equals, true)
+}
+
+// TestDeleteDomainClaimOwnerOnly: CORE-55. An admin of the owning account or
+// the cluster key may delete a claim; nobody else may.
+func (s *S) TestDeleteDomainClaimOwnerOnly(c *C) {
+	a := "core55-a-" + core20Suffix()
+	b := "core55-b-" + core20Suffix()
+	tokA, tokB := s.signUser(c, a, nil), s.signUser(c, b, nil)
+	host := a + ".example.net"
+	other := "www." + a + ".example.net"
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname IN ($1, $2)`, host, other)
+	s.claimDomain(c, tokA, host, "user:"+a)
+	s.claimDomain(c, tokA, other, "user:"+a)
+
+	code, raw := s.domainReq(c, http.MethodDelete, tokB, "/domains/"+host, "")
+	c.Assert(code, Equals, 403, Commentf("%s", raw))
+	c.Assert(s.countDomainRows(c, host), Equals, 1)
+
+	code, raw = s.domainReq(c, http.MethodDelete, tokA, "/domains/"+strings.ToUpper(host)+".", "")
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	c.Assert(s.countDomainRows(c, host), Equals, 0)
+
+	code, _ = s.domainReq(c, http.MethodDelete, tokA, "/domains/"+host, "")
+	c.Assert(code, Equals, 404)
+
+	// Operators clear claims with the cluster key; the name is free again.
+	code, raw = s.domainReq(c, http.MethodDelete, authKey, "/domains/"+other, "")
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	c.Assert(s.countDomainRows(c, other), Equals, 0)
+	s.claimDomain(c, tokB, other, "user:"+b)
+	var n int
+	c.Assert(s.hc.db.QueryRow(`SELECT COUNT(*) FROM core_audit WHERE action = 'domain.delete' AND data->>'hostname' IN ($1, $2)`, host, other).Scan(&n), IsNil)
+	c.Assert(n, Equals, 2)
+}
+
+// TestListDomainsOwnerOnly: CORE-55. GET /domains?owner_account= lists an
+// account's claims for its admins. With no owner only the cluster key or a
+// cluster admin may list every claim.
+func (s *S) TestListDomainsOwnerOnly(c *C) {
+	a := "core55-a-" + core20Suffix()
+	b := "core55-b-" + core20Suffix()
+	tokA, tokB := s.signUser(c, a, nil), s.signUser(c, b, nil)
+	hostsA := []string{"b." + a + ".example.com", "a." + a + ".example.com"}
+	hostB := b + ".example.com"
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname IN ($1, $2, $3)`, hostsA[0], hostsA[1], hostB)
+	claimA := map[string]string{}
+	for _, h := range hostsA {
+		claimA[h] = s.claimDomain(c, tokA, h, "user:"+a).Token
+	}
+	s.claimDomain(c, tokB, hostB, "user:"+b)
+
+	list := func(auth, query string) (int, []ct.DomainVerification, []byte) {
+		code, raw := s.domainReq(c, http.MethodGet, auth, "/domains"+query, "")
+		var out []ct.DomainVerification
+		if code == 200 {
+			c.Assert(json.Unmarshal(raw, &out), IsNil, Commentf("%s", raw))
+		}
+		return code, out, raw
+	}
+
+	code, got, raw := list(tokA, "?owner_account="+url.QueryEscape("user:"+a))
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	c.Assert(got, HasLen, 2)
+	c.Assert(got[0].Hostname, Equals, hostsA[1]) // sorted by hostname
+	c.Assert(got[1].Hostname, Equals, hostsA[0])
+	for _, d := range got {
+		c.Assert(d.OwnerAccount, Equals, "user:"+a)
+		c.Assert(d.Token, Equals, claimA[d.Hostname])
+		c.Assert(d.TXTName, Equals, "_flynn-verify."+d.Hostname)
+		c.Assert(d.ClaimedAt, NotNil)
+		c.Assert(d.VerifiedAt, IsNil)
+	}
+
+	code, _, raw = list(tokA, "?owner_account="+url.QueryEscape("user:"+b))
+	c.Assert(code, Equals, 403, Commentf("%s", raw))
+	code, _, raw = list(tokA, "")
+	c.Assert(code, Equals, 400, Commentf("%s", raw))
+
+	code, got, raw = list(authKey, "")
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	seen := map[string]bool{}
+	for _, d := range got {
+		seen[d.Hostname] = true
+	}
+	for _, h := range append(hostsA, hostB) {
+		c.Assert(seen[h], Equals, true, Commentf("%s", h))
+	}
 }
 
 // TestVerifyDomainRejectsPublicSuffix: CORE-20. A claim on "com" (or co.uk,

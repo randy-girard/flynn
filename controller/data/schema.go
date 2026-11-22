@@ -1599,6 +1599,14 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 		`UPDATE personal_access_tokens SET expires_at = now() + interval '365 days'
 		WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now() + interval '365 days')`,
 	)
+
+	// A custom-domain claim holds its hostname for a while (CORE-55). Before
+	// 99 any account could overwrite an unverified claim and its token.
+	// claimed_at starts the hold; existing claims start it at the upgrade.
+	migrations.Add(99,
+		`ALTER TABLE verified_domains ADD COLUMN claimed_at timestamptz NOT NULL DEFAULT now()`,
+		`CREATE INDEX verified_domains_owner_account_idx ON verified_domains (owner_account)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

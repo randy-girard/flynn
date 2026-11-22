@@ -464,6 +464,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.ListAppCollaborators)))
 	httpRouter.POST("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.AddAppCollaborator)))
 	httpRouter.DELETE("/apps/:apps_id/collaborators/:users_id", httphelper.WrapHandler(api.appLookup(api.DeleteAppCollaborator)))
+	httpRouter.GET("/domains", httphelper.WrapHandler(api.ListDomains))
+	httpRouter.DELETE("/domains/:hostname", httphelper.WrapHandler(api.DeleteDomain))
 	httpRouter.POST("/domains/verify", httphelper.WrapHandler(api.VerifyDomain))
 	httpRouter.POST("/domains/verify/:hostname/check", httphelper.WrapHandler(api.CheckDomain))
 
