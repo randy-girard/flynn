@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -9,6 +12,7 @@ import (
 	"time"
 
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/controller/data"
 	"github.com/randy-girard/flynn/pkg/random"
 )
 
@@ -167,6 +171,57 @@ func (s *S) TestOAuthAuthorizeConsentRejectsCrossSiteAndNoSession(c *C) {
 	res.Body.Close()
 	c.Assert(res.Header.Get("Location"), Equals, "")
 	c.Assert(strings.Contains(string(body), `name="password"`), Equals, true)
+}
+
+// CORE-54: a code is bound to the client it was issued for (RFC 6749
+// 4.1.3). Exchanging it under another client_id is invalid_grant and burns
+// the code; the flynn CLI sends the same client_id at authorize and token
+// time, and a request with no client_id still works for old clients.
+func (s *S) TestOAuthTokenRejectsClientMismatch(c *C) {
+	u := s.createLoginUser(c, "core54@example.com", "core54", "core54-pw-ok", false)
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	sum := sha256.Sum256([]byte(verifier))
+	newCode := func() string {
+		code := random.Hex(32)
+		c.Assert(s.api.tenancy.SaveOAuthCode(&data.OAuthCode{
+			Code: code, ClientID: "flynn-cli", RedirectURI: "http://127.0.0.1:8085/",
+			CodeChallenge: base64.RawURLEncoding.EncodeToString(sum[:]), UserID: u.ID,
+			ExpiresAt: time.Now().Add(time.Minute), CreatedAt: time.Now(),
+		}), IsNil)
+		return code
+	}
+	exchange := func(code, clientID string) (int, map[string]interface{}) {
+		form := url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {code},
+			"redirect_uri":  {"http://127.0.0.1:8085/"},
+			"code_verifier": {verifier},
+		}
+		if clientID != "" {
+			form.Set("client_id", clientID)
+		}
+		res, err := http.PostForm(s.srv.URL+"/oauth/token", form)
+		c.Assert(err, IsNil)
+		defer res.Body.Close()
+		var body map[string]interface{}
+		b, _ := io.ReadAll(res.Body)
+		_ = json.Unmarshal(b, &body)
+		return res.StatusCode, body
+	}
+
+	code := newCode()
+	status, body := exchange(code, "other")
+	c.Assert(status, Equals, http.StatusBadRequest, Commentf("%v", body))
+	c.Assert(body["error"], Equals, "invalid_grant")
+	c.Assert(body["access_token"], IsNil)
+	status, body = exchange(code, "flynn-cli")
+	c.Assert(status, Equals, http.StatusBadRequest, Commentf("code reused after a mismatch: %v", body))
+
+	for _, cid := range []string{"flynn-cli", ""} {
+		status, body := exchange(newCode(), cid)
+		c.Assert(status, Equals, http.StatusOK, Commentf("client_id %q: %v", cid, body))
+		c.Assert(body["access_token"], Not(Equals), "")
+	}
 }
 
 func TestOAuthRedirectURIAllowed(t *testing.T) {

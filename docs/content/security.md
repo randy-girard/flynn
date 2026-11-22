@@ -233,6 +233,13 @@ the signed-in email and redirect target, and the code is issued only by a
 POST of that page from the dashboard host (a missing `Origin` and `Referer`
 is refused too).
 
+`POST /oauth/token` with `grant_type=authorization_code`, on the controller
+and on the dashboard, checks the code against the `redirect_uri`, the PKCE
+`code_verifier` and the `client_id` it was issued for. A different
+`client_id` is HTTP 400 `invalid_grant`, and the code cannot be used again.
+A request with no `client_id` is still accepted so older clients keep
+working; `flynn login` sends `client_id=flynn-cli` at both steps.
+
 ## Sign-in attempts and password changes
 
 Password sign-in (`POST /oauth/token` with `grant_type=password`, which

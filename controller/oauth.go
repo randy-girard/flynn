@@ -360,6 +360,13 @@ func (c *controllerAPI) oauthTokenAuthCode(w http.ResponseWriter, req *http.Requ
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "invalid code_verifier")
 		return
 	}
+	// A code is bound to the client it was issued for (RFC 6749 4.1.3).
+	// ConsumeOAuthCode already deleted it, so a mismatch burns the code.
+	// A request with no client_id is still accepted for older clients.
+	if oauthClientMismatch(req.FormValue("client_id"), oc.ClientID) {
+		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "client_id does not match the authorization code")
+		return
+	}
 	u, err := c.tenancy.GetUser(oc.UserID)
 	if err != nil || u == nil {
 		oauthTokenError(w, http.StatusBadRequest, "invalid_grant", "user not found")
@@ -527,6 +534,14 @@ func (c *controllerAPI) lookupLoginUser(identifier string) (*ct.User, error) {
 
 func loginThrottledMessage(retry time.Duration) string {
 	return fmt.Sprintf("too many failed sign-in attempts; try again in %d seconds", retryAfterSeconds(retry))
+}
+
+// oauthClientMismatch reports whether a token request names a client other
+// than the one the code was issued for. An empty value on either side (an
+// old client that sends none, or a code stored before client_id was
+// recorded) is not a mismatch.
+func oauthClientMismatch(requested, issued string) bool {
+	return requested != "" && issued != "" && requested != issued
 }
 
 func oauthTokenError(w http.ResponseWriter, status int, code, desc string) {
