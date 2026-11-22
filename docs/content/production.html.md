@@ -749,6 +749,50 @@ sudo flynn-host blobstore:migrate --delete
 ```
 
 
+## Upload limits
+
+Pushes, Docker image layers and blobstore objects have size limits, and
+tarreceive converts only a few layers at once. They stop one build token or
+push from filling the gitreceive, tarreceive or blobstore disk (by default the
+blobstore is the system Postgres volume) or pinning every CPU with parallel
+`mksquashfs` runs. The defaults are generous so large images and repositories
+still deploy. Lower them to fit your disks, or raise them for very large
+images.
+
+| Setting | App | Default | Limits |
+| --- | --- | --- | --- |
+| `MAX_PUSH_SIZE` | `gitreceive` | `8g` | The data one `git push` sends (the pack). |
+| `MAX_LAYER_SIZE` | `tarreceive` | `32g` | The layer tar one upload sends. `flynn docker:push` sends the whole image as one uncompressed tar, so this is the largest image you can push. |
+| `MAX_CONCURRENT_LAYERS` | `tarreceive` | `2` | Layers that unpack and run `mksquashfs` at the same time. Others wait for a slot. |
+| `MAX_OBJECT_SIZE` | `blobstore` | `32g` | One stored object: a slug, a squashfs layer, a build cache, a repo archive. An append counts the bytes already stored. |
+| `APP_QUOTA` | `blobstore` | `100g` | The live bytes stored for one app: its `/slugs/apps/<app>/` and `/tarreceive/apps/<app>/` objects, its build caches and its repo archive. Shared Docker layers under `/tarreceive/layers/` are not counted. |
+
+Sizes are bytes or a number with a binary unit (`512m`, `32g`, `1t`). `0`
+or `off` turns a limit off. Set them on the system app; the new release
+restarts it and `flynn-host update` keeps the value:
+
+```text
+flynn -a gitreceive env:set MAX_PUSH_SIZE=4g
+flynn -a tarreceive env:set MAX_LAYER_SIZE=16g MAX_CONCURRENT_LAYERS=1
+flynn -a blobstore env:set MAX_OBJECT_SIZE=16g APP_QUOTA=50g
+```
+
+Each component logs its limits when it starts. An upload over a limit is
+refused as soon as its declared length is known, before anything is written,
+and otherwise when the limit is passed:
+
+- `git push` fails with `error: RPC failed; HTTP 413`, the branch does not
+  move and the gitreceive log names the limit.
+- `flynn docker:push` fails with `layer exceeds the tarreceive limit ...`.
+- A build whose slug is over `MAX_OBJECT_SIZE` fails with
+  `blobstore refused the slug (413 ...)`, and one over `APP_QUOTA` with
+  `507 Insufficient Storage`; a refused overwrite leaves the old object in
+  place.
+
+The app quota counts only finished uploads, so uploads running at the same
+time can pass it by up to one object each. Blob GC (`gc.max_inactive_slug_releases`,
+default 10 releases kept) frees an app's old slugs.
+
 ## DNS and Load Balancing
 
 Flynn has a built-in router that handles all incoming HTTP, HTTPS and TCP
