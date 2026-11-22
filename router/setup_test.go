@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -359,4 +361,92 @@ func allocatePort() int {
 func allocatePortRange(count int) (int, int) {
 	max := int(atomic.AddUint32(&portAlloc, uint32(count)))
 	return max - (count - 1), max
+}
+
+// stallingListener accepts TCP connections and never answers them, like a
+// page host that has hung or a proxy that holds the connection open.
+// If headers is set it sends response headers and part of a body first.
+func stallingListener(t *testing.T, headers string) (string, func()) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mtx sync.Mutex
+	var conns []net.Conn
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			mtx.Lock()
+			conns = append(conns, conn)
+			mtx.Unlock()
+			if headers != "" {
+				conn.Write([]byte(headers))
+			}
+		}
+	}()
+	return "http://" + l.Addr().String() + "/503.html", func() {
+		l.Close()
+		mtx.Lock()
+		defer mtx.Unlock()
+		for _, conn := range conns {
+			conn.Close()
+		}
+	}
+}
+
+func fetchError503PageWithin(t *testing.T, url string, timeout, bound time.Duration) []byte {
+	t.Helper()
+	prev := error503PageTimeout
+	error503PageTimeout = timeout
+	defer func() { error503PageTimeout = prev }()
+	done := make(chan []byte, 1)
+	start := time.Now()
+	go func() { done <- fetchError503Page(url) }()
+	select {
+	case page := <-done:
+		t.Logf("fetch returned after %s", time.Since(start))
+		return page
+	case <-time.After(bound):
+		t.Fatalf("fetching ERROR_503_PAGE_URL still blocked after %s (timeout %s): the router would never open its listeners", bound, timeout)
+		return nil
+	}
+}
+
+func TestError503PageFetchTimesOut(t *testing.T) {
+	url, cleanup := stallingListener(t, "")
+	defer cleanup()
+	if page := fetchError503PageWithin(t, url, 200*time.Millisecond, 5*time.Second); page != nil {
+		t.Fatalf("expected no custom page (built-in fallback), got %q", page)
+	}
+}
+
+func TestError503PageFetchTimesOutOnStalledBody(t *testing.T) {
+	url, cleanup := stallingListener(t, "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n<html>partial")
+	defer cleanup()
+	if page := fetchError503PageWithin(t, url, 200*time.Millisecond, 5*time.Second); page != nil {
+		t.Fatalf("expected no custom page for a truncated body, got %q", page)
+	}
+}
+
+func TestError503PageFetch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/503.html" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte("<html>down for maintenance</html>"))
+	}))
+	defer srv.Close()
+
+	page := fetchError503PageWithin(t, srv.URL+"/503.html", time.Second, 5*time.Second)
+	if string(page) != "<html>down for maintenance</html>" {
+		t.Fatalf("unexpected page %q", page)
+	}
+	if page := fetchError503PageWithin(t, srv.URL+"/missing", time.Second, 5*time.Second); page != nil {
+		t.Fatalf("expected no custom page for a 404, got %q", page)
+	}
 }

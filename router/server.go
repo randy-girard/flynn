@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
@@ -180,25 +181,7 @@ func main() {
 
 	var error503Page []byte
 	if error503PageURL := os.Getenv("ERROR_503_PAGE_URL"); error503PageURL != "" {
-		func() {
-			res, err := http.Get(error503PageURL)
-			if err != nil {
-				log.Error("error getting ERROR_503_PAGE_URL", "err", err)
-				return
-			}
-			defer res.Body.Close()
-			if res.StatusCode != 200 {
-				log.Error("unexpected status code getting ERROR_503_PAGE_URL", "status", res.StatusCode)
-				return
-			}
-			error503Page, err = ioutil.ReadAll(&io.LimitedReader{R: res.Body, N: 1000000})
-			if err != nil {
-				log.Error("error reading ERROR_503_PAGE_URL", "err", err)
-				return
-			}
-			return
-
-		}()
+		error503Page = fetchError503Page(error503PageURL)
 	}
 
 	log.Info("initializing the controller route store")
@@ -276,6 +259,35 @@ func main() {
 	}
 	log.Info("serving API requests")
 	shutdown.Fatal(http.Serve(listener, apiHandler(&r, apiKeys)))
+}
+
+// error503PageTimeout bounds the whole ERROR_503_PAGE_URL fetch (connect,
+// headers and body). main runs it before any listener is opened, so a page
+// host that stalls must not stop the router from serving.
+var error503PageTimeout = 10 * time.Second
+
+// fetchError503Page downloads the custom 503 page. It returns nil on any
+// error, including a fetch that takes longer than error503PageTimeout, so the
+// router falls back to its built-in page and goes on to open its listeners.
+func fetchError503Page(url string) []byte {
+	log := logger.New("fn", "fetchError503Page", "url", url)
+	client := &http.Client{Timeout: error503PageTimeout}
+	res, err := client.Get(url)
+	if err != nil {
+		log.Error("error getting ERROR_503_PAGE_URL, using the built-in page", "err", err)
+		return nil
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		log.Error("unexpected status code getting ERROR_503_PAGE_URL, using the built-in page", "status", res.StatusCode)
+		return nil
+	}
+	page, err := ioutil.ReadAll(&io.LimitedReader{R: res.Body, N: 1000000})
+	if err != nil {
+		log.Error("error reading ERROR_503_PAGE_URL, using the built-in page", "err", err)
+		return nil
+	}
+	return page
 }
 
 type listenErr struct {
