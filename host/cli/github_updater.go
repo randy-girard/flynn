@@ -1644,6 +1644,11 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		fmt.Println("System apps and container images updated successfully")
 	}
 	seedControllerDBRuntimesFromHostFile()
+	// CORE-52: cross-app formations and current releases made before
+	// CORE-18 stay in place. Warn only; the update has already succeeded.
+	if api, ok := client.(crossAppAPI); ok {
+		warnCrossAppReleases(os.Stdout, api)
+	}
 	return nil
 }
 

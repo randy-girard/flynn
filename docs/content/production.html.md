@@ -1201,6 +1201,44 @@ When the update will pull container images, it first garbage-collects unused vol
 
 While platform postgres peers are replaced, the update logs a `deployment progress` line every 10 seconds with each peer's replication state. A replica copying from its upstream shows `pg_basebackup 45% (5.1 GB of 11.3 GB)`. Once it streams WAL it shows `streaming WAL, catching up 80%, 12.0 MB behind`, where the percent is measured against the largest lag seen during that wait, until `WAL caught up`. After a host reboot, a replica whose checkpoint is on a timeline that is not a child of the primary's exits immediately and takes a new basebackup instead of retrying that data directory. A replica whose upstream host disappears mid-copy (a node reboot during a rolling `reload`) gives up within about 30 seconds (libpq keepalives and `tcp_user_timeout`), and a copy that reports no progress for 3 minutes is killed; once sirenia names a new upstream, a copy from the old one is canceled immediately and the replica reseeds from the new primary. A running replica that neither streams nor replays WAL for 45 seconds while its upstream answers as online (seen after a remaster, when the replica's local WAL ran past the new primary's timeline switch and postgres retried `waiting for WAL to become available` forever) is marked `standby_stalled` in its status, logs `standby made no replication progress while its upstream was online, re-seeding from upstream`, and takes a new basebackup from that upstream. A streaming replica, one still replaying local WAL, and one whose upstream is down or restarting are left alone. A new replica does not copy its basebackup from a stalled standby; it waits until that standby has reseeded. `pg:status` and the update's progress lines show such a peer as `stalled`. Outside an update (after `flynn-host restart`, a node reboot, or a replica reseed), run `flynn-host pg:status` for the same view, or `flynn-host pg:wait` to watch it until every replica has caught up. With the dashboard plugin installed, Cluster → System apps shows the same peers and percentages in a Platform Postgres card.
 
+### Cross-app releases left by older controllers
+
+Controllers before the CORE-18 fix let a caller with deploy or scale rights on
+its own app point that app at any release id (`POST /apps/<app>/deploy` or
+`PUT /apps/<app>/formations/<release>`). The app then ran the other app's image
+with that app's env, and `GET /apps/<app>/release` returned the env. Current
+controllers refuse new cross-app deploys and formations, but keep accepting an
+app's current release, so rows made earlier stay until an operator clears them.
+
+`flynn-host cross-app:check` lists them from `GET /cluster/cross-app-releases`
+(cluster key or cluster admin). A `formation` row is a formation with at least
+one process whose release belongs to another app. A `current_release` row is an
+app whose current release belongs to another app. Formations scaled to zero and
+deleted apps are not listed. System apps are hidden unless `--all` is passed
+and never fail the check. The command exits 1 when a non-system row is found
+and prints the commands that clear each row:
+
+```text
+# formation: scale the other app's release to zero on this app
+flynn -a <app> scale --release <release> web=0
+# current_release: deploy one of the app's own releases (flynn -a <app> release)
+flynn -a <app> release:rollback -y <own-release-id>
+```
+
+Run these as a cluster admin: the tenant can no longer scale another app's
+release unless it is the app's current release. If the app has no release of
+its own, push a new build. Do not clear a `current_release` row with `env:set`,
+`release:update`, or `release:add`: those copy the current (other app's) env
+into a new release owned by the app. Treat the other app's env as exposed to
+the app's owner and rotate its credentials. Run the check before `flynn-host
+update --recycle-user-apps`, which redeploys a user app from its current
+release the same way.
+
+`flynn-host update --all-nodes` runs the same check after system apps are
+deployed and prints a `WARNING` line naming how many apps are affected. It
+does not fail the update, and it prints nothing against a controller that does
+not have the route yet.
+
 ### Rollback after a bad upgrade
 
 In-place rollback is the same updater pointed at an **older published GitHub

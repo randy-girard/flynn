@@ -154,6 +154,9 @@ var subAliases = map[string]map[string]string{
 		"credentials": "blobstore:credentials",
 		"migrate":     "blobstore:migrate",
 	},
+	"cross-app": {
+		"check": "cross-app:check",
+	},
 	"production": {
 		"check":     "production:check",
 		"configure": "production:configure",

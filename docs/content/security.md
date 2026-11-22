@@ -800,7 +800,11 @@ unknown id. `PUT /apps/:id/formations/:release`, `PUT
 /apps/:id/scale/:release`, `DELETE /apps/:id/formations/:release`, and
 `DELETE /apps/:id/releases/:release` answer 404 for another app's release
 unless the caller is cluster-admin (operators may still place a formation
-across apps). The app's current release is always accepted. One-off jobs (`POST /apps/:id/jobs`) may still *run* another
+across apps). The app's current release is always accepted, so a
+cross-app formation or current release made by an older controller stays
+until it is cleared; `flynn-host cross-app:check` (`GET
+/cluster/cross-app-releases`) lists them (see [Production — Cross-app
+releases](production.html.md#cross-app-releases-left-by-older-controllers)). One-off jobs (`POST /apps/:id/jobs`) may still *run* another
 app's release when the caller is cluster-admin, or when that release is
 the image of a resource attached to this app (`flynn redis:cli` and the
 other plugin consoles).
