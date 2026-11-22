@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,8 +27,10 @@ import (
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/appmanifest"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
+	"github.com/randy-girard/flynn/pkg/buildlock"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/dockerimage"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/version"
@@ -77,6 +80,63 @@ func markAppBuilding(store appBuildingStore, app *ct.App) error {
 	app.Meta = ct.MarkAppBuildingMeta(app.Meta)
 	delete(app.Meta, metaAppBuildFailed)
 	return store.UpdateAppMeta(app)
+}
+
+// buildStore is the controller for one build: app meta and the build lease.
+type buildStore interface {
+	appBuildingStore
+	buildlock.Store
+}
+
+// beginBuild takes the app's build lease, unless gitreceive holds it for
+// this push (buildlock.HolderEnv), then marks the app building (EDGE-09). A
+// GitHub deploy or a preview push while another build runs is refused before
+// it touches the app, so it cannot clear that build's marker or race its
+// release. finish clears the marker and then drops the lease; it runs once.
+func beginBuild(store buildStore, app *ct.App, meta map[string]string) (finish func(failed bool), err error) {
+	var lease *buildlock.Lease
+	if strings.TrimSpace(os.Getenv(buildlock.HolderEnv)) == "" {
+		lease, err = buildlock.Acquire(store, app.ID, buildDescription(meta), buildlock.DefaultTTL)
+		var held *ct.BuildLockHeldError
+		var jsonErr httphelper.JSONError
+		switch {
+		case err == nil:
+		case errors.As(err, &held):
+			return nil, fmt.Errorf("%s. Wait for it to finish, then deploy again", held)
+		case errors.Is(err, buildlock.ErrUnsupported),
+			errors.As(err, &jsonErr) && jsonErr.Code == httphelper.ForbiddenErrorCode:
+			// an older controller, or a credential without the lease
+			fmt.Printf("-----> WARN: building without the app's build lock: %s\n", err)
+		default:
+			return nil, fmt.Errorf("could not take the build lock for %s: %s", app.Name, err)
+		}
+	}
+	if err := markAppBuilding(store, app); err != nil {
+		fmt.Printf("-----> WARN: could not mark app as building: %s\n", err)
+	}
+	var once sync.Once
+	return func(failed bool) {
+		once.Do(func() {
+			if err := finishAppBuild(store, app, failed); err != nil {
+				fmt.Printf("-----> WARN: could not update build status: %s\n", err)
+			}
+			lease.Release()
+		})
+	}, nil
+}
+
+// buildDescription names a build in the message a refused push prints.
+func buildDescription(meta map[string]string) string {
+	switch {
+	case meta["github"] == "true":
+		return "a GitHub deploy"
+	case meta["flynn-preview"] == "true":
+		return "a preview deploy"
+	case meta["git"] == "true":
+		return "a git push"
+	default:
+		return "a deploy"
+	}
 }
 
 func clearAppBuilding(store appBuildingStore, app *ct.App) error {
@@ -299,17 +359,14 @@ Options:
 	// the git client hangs up (Ctrl+C), so the dashboard drops "compiling".
 	// A push that does not deploy leaves a failed timestamp for the card.
 	buildOK := false
-	finishBuild := func() {
-		if err := finishAppBuild(client, app, !buildOK); err != nil {
-			fmt.Printf("-----> WARN: could not update build status: %s\n", err)
-		}
+	finish, err := beginBuild(client, app, meta)
+	if err != nil {
+		return err
 	}
+	finishBuild := func() { finish(!buildOK) }
 	shutdown.BeforeExit(finishBuild)
 	watchGitHangup()
 	defer finishBuild()
-	if err := markAppBuilding(client, app); err != nil {
-		fmt.Printf("-----> WARN: could not mark app as building: %s\n", err)
-	}
 	progress := openAppProgressLog(app.ID, os.Stdout)
 	defer progress.Close()
 	prevOut := receiveOut

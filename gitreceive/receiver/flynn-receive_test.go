@@ -831,11 +831,12 @@ func TestRunMarksBuildingBeforeCompile(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := string(body)
-	mark := strings.Index(src, "markAppBuilding(client, app)")
+	// beginBuild takes the build lease and marks the app (EDGE-09)
+	mark := strings.Index(src, "beginBuild(client, app, meta)")
 	pack := strings.Index(src, "deployBuildpack(")
 	container := strings.Index(src, "deployContainer(")
 	if mark < 0 || pack < 0 || container < 0 {
-		t.Fatal("missing markAppBuilding or deploy calls")
+		t.Fatal("missing beginBuild or deploy calls")
 	}
 	if mark > pack || mark > container {
 		t.Fatal("building mark must run before compile")
