@@ -28,13 +28,15 @@ sample. See [Apps — Routes](../docs/content/apps.md#routes).
 
 When no backend can serve a request the router returns its built-in 503
 page. Set `ERROR_503_PAGE_URL` on the router app to serve your own page
-instead. The router downloads it once at start, before it opens any listener,
-and allows 10 seconds for the whole fetch (connect, headers and body, up to
-1 MB). If the fetch fails, times out, or returns a status other than 200, the
-router logs `using the built-in page` and starts with the built-in page. The
-page is not fetched again while the router runs: `flynn -a router env:set
-ERROR_503_PAGE_URL=...` deploys a new router release, one host at a time, and
-each new router fetches the page when it starts.
+instead. The router fetches it once, in the background, after its listeners
+are up, so a slow or unreachable page host never delays ingress. Until the
+fetch finishes the built-in page is served. The fetch has 10 seconds in all
+(connect, headers and body, up to 1 MB). If it fails, times out, or returns a
+status other than 200, the router logs `using the built-in page` and keeps
+it; on success it logs `using the custom 503 page`. The page is not fetched
+again while the router runs: `flynn -a router env:set ERROR_503_PAGE_URL=...`
+deploys a new router release, one host at a time, and each new router
+fetches the page when it starts.
 
 TCP routes may store a hostname and a TLS mode:
 
