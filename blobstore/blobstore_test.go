@@ -141,7 +141,7 @@ func TestAzureFilesystem(t *testing.T) {
 }
 
 func testList(r *data.FileRepo, t *testing.T) {
-	srv := httptest.NewServer(handler(r))
+	srv := httptest.NewServer(handler(r, putLimits{}))
 	defer srv.Close()
 
 	assertList := func(dir string, expected []string) {
@@ -298,7 +298,7 @@ func testExternalBackendReplace(r *data.FileRepo, t *testing.T) {
 }
 
 func testOffset(r *data.FileRepo, t *testing.T, checkEtags bool) {
-	srv := httptest.NewServer(handler(r))
+	srv := httptest.NewServer(handler(r, putLimits{}))
 	defer srv.Close()
 
 	put := func(path, data string, offset int) {
@@ -351,7 +351,7 @@ func testOffset(r *data.FileRepo, t *testing.T, checkEtags bool) {
 const concurrency = 5
 
 func testFilesystem(r *data.FileRepo, testMeta bool, t *testing.T) {
-	srv := httptest.NewServer(handler(r))
+	srv := httptest.NewServer(handler(r, putLimits{}))
 	defer srv.Close()
 
 	var wg sync.WaitGroup

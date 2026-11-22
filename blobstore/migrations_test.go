@@ -67,7 +67,7 @@ func TestMultiBackendMigration(t *testing.T) {
 
 	// check that the file can be read successfully
 	r := data.NewFileRepo(db, []backend.Backend{backend.Postgres}, "postgres")
-	srv := httptest.NewServer(handler(r))
+	srv := httptest.NewServer(handler(r, putLimits{}))
 	defer srv.Close()
 	res, err := http.Get(srv.URL + "/bar.txt")
 	if err != nil {

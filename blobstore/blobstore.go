@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -33,7 +34,7 @@ func errorResponse(w http.ResponseWriter, err error) {
 	http.Error(w, "Internal Server Error", 500)
 }
 
-func handler(r *data.FileRepo) http.Handler {
+func handler(r *data.FileRepo, lim putLimits) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		path := path.Clean(req.URL.Path)
 
@@ -89,7 +90,13 @@ func handler(r *data.FileRepo) http.Handler {
 						return
 					}
 				}
-				err = r.Put(path, req.Body, offset, req.Header.Get("Content-Type"))
+				var handled bool
+				handled, err = lim.limitPut(w, req, path, offset, func(body io.Reader) error {
+					return r.Put(path, body, offset, req.Header.Get("Content-Type"))
+				})
+				if handled {
+					return
+				}
 			}
 			if err != nil {
 				errorResponse(w, err)
@@ -184,7 +191,12 @@ func runServer(_ *docopt.Args) error {
 			keys = []string{k}
 		}
 	}
-	mux.Handle("/", protect(handler(repo), keys, clusterAuthorizer(keys), repoExists(repo)))
+	lim, err := putLimitsFromEnv(repo)
+	if err != nil {
+		return err
+	}
+	log.Printf("PUT limits: MAX_OBJECT_SIZE=%d APP_QUOTA=%d (0 is unlimited)", lim.maxObject, lim.appQuota)
+	mux.Handle("/", protect(handler(repo, lim), keys, clusterAuthorizer(keys), repoExists(repo)))
 	mux.Handle(status.Path, status.Handler(func() status.Status {
 		if err := db.Exec("SELECT 1"); err != nil {
 			return status.Unhealthy

@@ -28,6 +28,18 @@ content addressed, so a scoped PUT over one that already exists is refused
 with `409 Conflict` and nothing is written. The cluster key may still replace
 any object.
 
+Every PUT is bounded, whatever the credential. `MAX_OBJECT_SIZE` (default
+`32g`) caps one object, counting the bytes already stored when the PUT
+appends with `Blobstore-Offset`; a larger PUT gets `413 Request Entity Too
+Large`. `APP_QUOTA` (default `100g`) caps the live bytes stored under one
+app's names (`/slugs/apps/<app>/`, `/tarreceive/apps/<app>/`,
+`/<app>-cache.tgz`, `/<app>-docker-cache.tgz`, `/repos/<app>.tar`); a PUT that
+would pass it gets `507 Insufficient Storage`. A request with a
+`Content-Length` over the limit is refused before a byte is stored; a chunked
+one is cut off when it passes the limit and its transaction rolls back, so an
+overwritten object keeps its old content. `0` or `off` turns a limit off. See
+[Upload limits](../docs/content/production.html.md#upload-limits).
+
 A PUT over an existing object (without `Blobstore-Offset`) replaces it
 atomically: if the upload fails or the client disconnects, the old content is
 still served. On the S3, GCS, Azure, and MinIO backends the old object is

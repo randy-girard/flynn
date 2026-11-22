@@ -504,3 +504,20 @@ func (f fakeSizeSeekerFileStream) Seek(offset int64, whence int) (int64, error) 
 	}
 	return 0, nil
 }
+
+// AppUsage is the size of the live objects stored under app's names (see
+// appForPath in the blobstore server): /slugs/apps/<app>/,
+// /tarreceive/apps/<app>/, /<app>-cache.tgz, /<app>-docker-cache.tgz and
+// /repos/<app>.tar. exclude is left out (the object a PUT replaces). An
+// upload still in progress has no size yet and is not counted.
+func (r *FileRepo) AppUsage(app, exclude string) (int64, error) {
+	var used int64
+	err := r.db.QueryRow(
+		`SELECT COALESCE(SUM(size), 0)::bigint FROM files WHERE deleted_at IS NULL AND name <> $1 AND (
+			left(name, length($2)) = $2 OR left(name, length($3)) = $3 OR name IN ($4, $5, $6))`,
+		exclude,
+		"/slugs/apps/"+app+"/", "/tarreceive/apps/"+app+"/",
+		"/"+app+"-cache.tgz", "/"+app+"-docker-cache.tgz", "/repos/"+app+".tar",
+	).Scan(&used)
+	return used, err
+}
