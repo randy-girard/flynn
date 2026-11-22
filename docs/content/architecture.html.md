@@ -240,7 +240,10 @@ TCP routes have three TLS modes:
 10000–29999. The host firewall opens that one port on every host, the same way
 it opens 80/443 for HTTP. It does not open the rest of the window. Ports
 outside the router pre-bind (3000–3500) listen when the route exists. See
-[Production — Firewalling](production.html.md#firewalling).
+[Production — Firewalling](production.html.md#firewalling). A route update
+(for example a new certificate) or a router resync takes over the route's
+existing socket, so old settings stop serving at once and a deleted route's
+port stops accepting.
 
 An instance of the router runs on every host so client traffic can land on any
 node. The router uses host networking and binds ports 80 and 443, so

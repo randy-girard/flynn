@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,6 +15,8 @@ import (
 	. "github.com/flynn/go-check"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/discoverd/testutil"
+	"github.com/randy-girard/flynn/pkg/keepalive"
+	"github.com/randy-girard/flynn/pkg/tlscert"
 	"github.com/randy-girard/flynn/router/testutils"
 	router "github.com/randy-girard/flynn/router/types"
 )
@@ -249,4 +254,207 @@ func (s *S) TestInitialTCPSync(c *C) {
 	discoverdRegisterTCP(c, l, srv.Addr)
 
 	assertTCPConn(c, addr, "1")
+}
+
+// useReusePortListen makes the listener bind with SO_REUSEPORT like the real
+// router does, so a second bind on a served port succeeds instead of failing.
+func useReusePortListen() func() {
+	prev := listenFunc
+	listenFunc = keepalive.ReusableListen
+	return func() { listenFunc = prev }
+}
+
+func (s *S) addTCPRouteToStore(c *C, l *TCPListener, store *testStore, r *router.Route) *router.Route {
+	wait := waitForEvent(c, l, "set", "")
+	store.add(r)
+	wait()
+	return r
+}
+
+func dialRefused(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 250*time.Millisecond)
+	if err != nil {
+		return true
+	}
+	conn.Close()
+	return false
+}
+
+func (s *S) TestTCPResyncKeepsOneListenerPerRoute(c *C) {
+	defer useReusePortListen()()
+	store := newTestStore()
+	l := &TCPListener{
+		IP:        "127.0.0.1",
+		syncer:    NewSyncer(store, "tcp"),
+		discoverd: s.discoverd,
+	}
+	l.startPort, l.endPort = allocatePortRange(4)
+	c.Assert(l.Start(), IsNil)
+	defer l.Close()
+
+	reservedPort := l.startPort
+	onDemandPort := allocatePort()
+	reservedAddr := fmt.Sprintf("127.0.0.1:%d", reservedPort)
+	onDemandAddr := fmt.Sprintf("127.0.0.1:%d", onDemandPort)
+
+	oldSrv := NewTCPTestServer("old")
+	newSrv := NewTCPTestServer("new")
+	defer oldSrv.Close()
+	defer newSrv.Close()
+
+	reserved := s.addTCPRouteToStore(c, l, store, router.TCPRoute{Service: "resync-old", Port: reservedPort}.ToRoute())
+	onDemand := s.addTCPRouteToStore(c, l, store, router.TCPRoute{Service: "resync-old", Port: onDemandPort}.ToRoute())
+	discoverdRegisterTCPService(c, l, "resync-old", oldSrv.Addr)
+	assertTCPConn(c, reservedAddr, "old")
+	assertTCPConn(c, onDemandAddr, "old")
+
+	// a second route on the new service makes its discoverd cache exist so
+	// the backend can be registered before the resync
+	keep := s.addTCPRouteToStore(c, l, store, router.TCPRoute{Service: "resync-new", Port: l.startPort + 1}.ToRoute())
+	discoverdRegisterTCPService(c, l, "resync-new", newSrv.Addr)
+
+	presyncc := make(chan struct{})
+	l.preSync = func() { <-presyncc }
+	postsyncc := make(chan struct{})
+	l.postSync = func(startc <-chan struct{}) {
+		<-startc
+		close(postsyncc)
+	}
+
+	// drop the event stream, change both routes while disconnected, resync
+	store.closeStreams()
+	for _, r := range []*router.Route{reserved, onDemand} {
+		updated := *r
+		updated.Service = "resync-new"
+		store.routesMtx.Lock()
+		store.routes[r.ID] = &updated
+		store.routesMtx.Unlock()
+	}
+	close(presyncc)
+	select {
+	case <-postsyncc:
+	case <-time.After(waitTimeout):
+		c.Fatal("timeout waiting for tcp resync")
+	}
+
+	// an orphaned listener on the same port would keep taking a share of
+	// connections for the old service
+	for i := 0; i < 20; i++ {
+		assertTCPConn(c, reservedAddr, "new")
+		assertTCPConn(c, onDemandAddr, "new")
+	}
+
+	l.mtx.RLock()
+	_, oldSvc := l.services["resync-old"]
+	newRefs := 0
+	if svc := l.services["resync-new"]; svc != nil {
+		newRefs = svc.refs
+	}
+	routes := len(l.routes)
+	l.mtx.RUnlock()
+	c.Assert(oldSvc, Equals, false)
+	c.Assert(newRefs, Equals, 3)
+	c.Assert(routes, Equals, 3)
+
+	// once the route is deleted nothing may accept on its port
+	wait := waitForEvent(c, l, "remove", onDemand.ID)
+	store.delete(onDemand)
+	wait()
+	c.Assert(dialRefused(onDemandAddr), Equals, true)
+
+	// the reserved port goes back to the pool exactly once
+	wait = waitForEvent(c, l, "remove", reserved.ID)
+	store.delete(reserved)
+	wait()
+	l.mtx.RLock()
+	_, pooled := l.listeners[reservedPort]
+	pool := len(l.listeners)
+	l.mtx.RUnlock()
+	c.Assert(pooled, Equals, true)
+	c.Assert(pool, Equals, 3)
+
+	wait = waitForEvent(c, l, "remove", keep.ID)
+	store.delete(keep)
+	wait()
+	l.mtx.RLock()
+	_, svcLeft := l.services["resync-new"]
+	l.mtx.RUnlock()
+	c.Assert(svcLeft, Equals, false)
+}
+
+func (s *S) TestTCPRouteUpdateReplacesCertificate(c *C) {
+	defer useReusePortListen()()
+	store := newTestStore()
+	l := &TCPListener{
+		IP:        "127.0.0.1",
+		syncer:    NewSyncer(store, "tcp"),
+		discoverd: s.discoverd,
+	}
+	l.startPort, l.endPort = allocatePortRange(2)
+	c.Assert(l.Start(), IsNil)
+	defer l.Close()
+
+	srv := NewTCPTestServer("tls-ok")
+	defer srv.Close()
+
+	for _, port := range []int{l.startPort, allocatePort()} {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		// generate fresh certs: the testutils cache is shared with other tests
+		oldCert, err := tlscert.Generate([]string{"tcp-update.example.org"})
+		c.Assert(err, IsNil)
+		newCert, err := tlscert.Generate([]string{"tcp-update.example.org"})
+		c.Assert(err, IsNil)
+		route := router.TCPRoute{
+			Service: "tls-update-tcp",
+			Port:    port,
+			TLSMode: router.TLSModeTerminate,
+			Certificate: &router.Certificate{
+				Cert: oldCert.Cert,
+				Key:  oldCert.PrivateKey,
+			},
+		}.ToRoute()
+		s.addTCPRouteToStore(c, l, store, route)
+		unregister := discoverdRegisterTCPService(c, l, "tls-update-tcp", srv.Addr)
+
+		c.Assert(peerCertFingerprint(c, addr), Equals, pemFingerprint(c, oldCert.Cert))
+
+		updated := *route
+		updated.Certificate = &router.Certificate{Cert: newCert.Cert, Key: newCert.PrivateKey}
+		wait := waitForEvent(c, l, "set", route.ID)
+		store.update(&updated)
+		wait()
+
+		for i := 0; i < 20; i++ {
+			c.Assert(peerCertFingerprint(c, addr), Equals, pemFingerprint(c, newCert.Cert))
+		}
+		l.mtx.RLock()
+		refs := l.services["tls-update-tcp"].refs
+		l.mtx.RUnlock()
+		c.Assert(refs, Equals, 1)
+
+		unregister()
+		wait = waitForEvent(c, l, "remove", route.ID)
+		store.delete(&updated)
+		wait()
+	}
+}
+
+func peerCertFingerprint(c *C, addr string) string {
+	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	c.Assert(err, IsNil)
+	defer conn.Close()
+	certs := conn.ConnectionState().PeerCertificates
+	c.Assert(len(certs) > 0, Equals, true)
+	return fingerprint(certs[0].Raw)
+}
+
+func pemFingerprint(c *C, certPEM string) string {
+	block, _ := pem.Decode([]byte(certPEM))
+	c.Assert(block, NotNil)
+	return fingerprint(block.Bytes)
+}
+
+func fingerprint(der []byte) string {
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:8])
 }

@@ -31,6 +31,12 @@ and listen on demand. `flynn addons:expose` uses that window. The host firewall
 opens the allocated port, not the whole window. Existing routes in 3000–3500
 keep working on the pre-bound listeners.
 
+Updating a TCP route (new certificate, service, or `leader` flag) and the full
+resync after the controller event stream drops reuse the route's existing
+socket. Each route has exactly one listener; the old route stops accepting and
+releases its service as soon as the new one serves, and a deleted route's port
+stops accepting (ports in 3000–3500 go back to the pre-bound pool).
+
 ### Benefits over HAProxy/nginx
 
 The primary benefits are that it uses service discovery natively and supports

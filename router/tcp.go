@@ -37,6 +37,10 @@ type TCPListener struct {
 	routes   map[string]*tcpRoute
 	ports    map[int]*tcpRoute
 	closed   bool
+
+	// testing hooks
+	preSync  func()
+	postSync func(<-chan struct{})
 }
 
 func (l *TCPListener) Start() error {
@@ -106,7 +110,15 @@ func (l *TCPListener) runSync(ctx context.Context, errc chan error) {
 
 		time.Sleep(2 * time.Second)
 
-		l.doSync(ctx, errc)
+		if l.preSync != nil {
+			l.preSync()
+		}
+
+		startc := l.doSync(ctx, errc)
+
+		if l.postSync != nil {
+			l.postSync(startc)
+		}
 
 		err = <-errc
 	}
@@ -159,20 +171,6 @@ func (h *tcpSyncHandler) Set(data *router.Route) error {
 		parent:   h.l,
 	}
 
-	h.l.mtx.Lock()
-	if h.l.closed {
-		h.l.mtx.Unlock()
-		return nil
-	}
-	if svc := h.l.services[r.Service]; svc != nil && svc.name != r.Service {
-		svc.refs--
-		if svc.refs <= 0 {
-			svc.Close()
-			delete(h.l.services, svc.name)
-		}
-	}
-	h.l.mtx.Unlock()
-
 	service, err := bindListenerService(&h.l.mtx, &h.l.closed, h.l.services, h.l.wm, h.l.discoverd, r.Service, r.DrainBackends)
 	if err != nil {
 		return err
@@ -209,19 +207,54 @@ func (h *tcpSyncHandler) Set(data *router.Route) error {
 		})
 		r.Certificate = nil
 	}
-	if listener, ok := h.l.listeners[r.Port]; ok {
+
+	// A route that is already serving (an update, or every route again after
+	// a resync) must hand its socket to the new route. Binding a fresh one
+	// would succeed under SO_REUSEPORT and leave the old route accepting a
+	// share of the connections with its old service and certificate.
+	existing := h.l.routes[data.ID]
+	samePort := existing != nil && existing.Port == r.Port
+	fromPool, oldClosed := false, false
+	if samePort {
+		ln, err := existing.dupListener()
+		if err != nil {
+			// fall back to a fresh bind once the old socket is gone
+			log.Printf("router: tcp route %s: reusing listener on port %d: %s", data.ID, r.Port, err)
+			existing.l.Close()
+			oldClosed = true
+		} else {
+			r.l = ln
+		}
+	} else if listener, ok := h.l.listeners[r.Port]; ok {
 		r.l = listener
+		fromPool = true
 		delete(h.l.listeners, r.Port)
 	}
 	started := make(chan error)
 	go r.Serve(started)
 	if err := <-started; err != nil {
-		if r.l != nil {
+		if fromPool {
 			h.l.listeners[r.Port] = r.l
+		} else if samePort && r.l != nil {
+			r.l.Close()
 		}
 		return err
 	}
 	service.refs++
+	if existing != nil {
+		if samePort {
+			// the new route owns the socket; stop the old accept loop only
+			if !oldClosed {
+				existing.l.Close()
+			}
+		} else {
+			existing.Close()
+			if h.l.ports[existing.Port] == existing {
+				delete(h.l.ports, existing.Port)
+			}
+		}
+		h.l.releaseService(existing.service)
+	}
 	h.l.routes[data.ID] = r
 	h.l.ports[r.Port] = r
 
@@ -240,12 +273,7 @@ func (h *tcpSyncHandler) Remove(id string) error {
 		return ErrNotFound
 	}
 	r.Close()
-
-	r.service.refs--
-	if r.service.refs <= 0 {
-		r.service.sc.Close()
-		delete(h.l.services, r.service.name)
-	}
+	h.l.releaseService(r.service)
 
 	delete(h.l.routes, id)
 	delete(h.l.ports, r.Port)
@@ -291,32 +319,51 @@ func (r *tcpRoute) Serve(started chan<- error) {
 	}
 }
 
-func (r *tcpRoute) Close() {
+// releaseService drops one route's reference to svc and closes it when no
+// route uses it any more. The caller holds l.mtx.
+func (l *TCPListener) releaseService(svc *service) {
+	if svc == nil {
+		return
+	}
+	svc.refs--
+	if svc.refs <= 0 {
+		svc.Close()
+		if l.services[svc.name] == svc {
+			delete(l.services, svc.name)
+		}
+	}
+}
+
+// dupListener returns a second listener on the route's socket, so the socket
+// stays bound (with its accept queue) after r.l is closed.
+func (r *tcpRoute) dupListener() (net.Listener, error) {
 	raw := r.rawL
 	if raw == nil {
 		raw = r.l
 	}
+	tcpLn, ok := raw.(*net.TCPListener)
+	if !ok {
+		return nil, fmt.Errorf("listener %T is not a TCP listener", raw)
+	}
+	fd, err := tcpLn.File()
+	if err != nil {
+		return nil, err
+	}
+	defer fd.Close()
+	return net.FileListener(fd)
+}
+
+func (r *tcpRoute) Close() {
+	if r.l == nil {
+		return
+	}
 	if r.Port >= r.parent.startPort && r.Port <= r.parent.endPort {
-		tcpLn, ok := raw.(*net.TCPListener)
-		if !ok {
-			log.Println("Error getting TCP listener", raw)
-			r.l.Close()
-			return
-		}
-		fd, err := tcpLn.File()
+		ln, err := r.dupListener()
 		if err != nil {
-			log.Println("Error getting listener fd", raw)
-			r.l.Close()
-			return
+			log.Printf("router: returning tcp port %d to the pool: %s", r.Port, err)
+		} else {
+			r.parent.listeners[r.Port] = ln
 		}
-		r.parent.listeners[r.Port], err = net.FileListener(fd)
-		if err != nil {
-			log.Println("Error copying listener", raw)
-			fd.Close()
-			r.l.Close()
-			return
-		}
-		fd.Close()
 	}
 	r.l.Close()
 }
