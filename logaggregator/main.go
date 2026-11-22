@@ -3,7 +3,9 @@ package main
 import (
 	"net"
 	"os"
+	"time"
 
+	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/logaggregator/client"
 	"github.com/randy-girard/flynn/pkg/appliancehttp"
@@ -34,12 +36,23 @@ func main() {
 	if len(keys) == 0 {
 		log15.Error("CONTROLLER_KEY is not set: the log API will refuse every request")
 	}
+	ttl := parseBufferTTL(os.Getenv("LOG_BUFFER_TTL"))
 	conf := ServerConfig{
 		SyslogAddr:  ":" + logPort,
 		ApiAddr:     ":" + apiPort,
 		Discoverd:   discoverd.DefaultClient,
 		ServiceName: serviceName,
 		APIKeys:     keys,
+		BufferTTL:   ttl,
+	}
+	if len(keys) > 0 {
+		// app deletions drop that app's log buffer
+		cc, err := controller.NewClient("", appliancehttp.ClientKey())
+		if err != nil {
+			log15.Error("error creating controller client, deleted apps' logs are only dropped by LOG_BUFFER_TTL", "err", err)
+		} else {
+			conf.AppEvents = cc
+		}
 	}
 
 	srv := NewServer(conf)
@@ -69,4 +82,18 @@ func main() {
 		shutdown.Fatal(err)
 	}
 	<-make(chan struct{})
+}
+
+// parseBufferTTL reads LOG_BUFFER_TTL (a Go duration such as 72h). Empty or
+// invalid values give DefaultBufferTTL.
+func parseBufferTTL(v string) time.Duration {
+	if v == "" {
+		return DefaultBufferTTL
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		log15.Error("invalid LOG_BUFFER_TTL, using the default", "value", v, "default", DefaultBufferTTL)
+		return DefaultBufferTTL
+	}
+	return d
 }

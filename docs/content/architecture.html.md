@@ -329,7 +329,15 @@ are sent from flynn-host as RFC6587-framed RFC5424 syslog messages over TCP.
 A frame whose MSG-LEN is not a positive number of at most 11,000 bytes closes
 that one connection and is logged, and a frame that is not valid RFC5424 is
 logged and skipped; the aggregator and its other connections keep running.
-The ring is a live tail, not retention. Each host also keeps about 200MB of
+The ring is a live tail, not retention. A ring exists only for an app that
+has logged or that someone follows with `flynn log -f`; reading an app that
+has none does not create one. The aggregator follows the controller's
+`app_deletion` events (replaying the last 1,000 on every connect) and drops
+a deleted app's ring at once, refusing its late lines for `LOG_BUFFER_TTL`.
+A ring that has had no line for `LOG_BUFFER_TTL` (a Go duration in the
+logaggregator release env, default `168h`) and has no follower is dropped
+too. A new aggregator instance loads the leader's snapshot, which leaves out
+empty and expired rings, so dropped apps are not copied forward on deploy. Each host also keeps about 200MB of
 log files per app. A cluster that needs to keep logs adds a syslog sink
 with `flynn-host log-sink:add`. Hosted and self-hosted clusters use that
 same path.

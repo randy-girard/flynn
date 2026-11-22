@@ -437,7 +437,11 @@ See [CLI](cli.md) and [Production — Monitoring](production.html.md#monitoring)
 `flynn log` shows the newest 10,000 lines per app id held by each
 logaggregator process. Host files under `/var/log/flynn` keep about 200MB
 per app on that host (100MiB plus one rotation). Neither number is a
-cluster total, and neither is retention. A hosted cluster and a large
+cluster total, and neither is retention. The aggregator drops an app's
+lines when the app is deleted, and drops the lines of an app that has
+logged nothing for `LOG_BUFFER_TTL` (default 7 days) once nobody follows
+it, so `flynn log` on an app that has been quiet that long shows nothing
+until it logs again. A hosted cluster and a large
 self-hosted cluster use the same sink path. Add a cluster syslog sink when
 the logs have to outlive the ring.
 

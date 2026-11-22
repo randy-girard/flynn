@@ -1049,6 +1049,9 @@ sudo flynn-host otel:remove <id>
 
 Job logs stay on syslog. The in-cluster aggregator keeps the newest 10,000
 lines per app id in each aggregator process. That ring is a live tail.
+It is dropped when the app is deleted, or after `LOG_BUFFER_TTL` (default
+`168h`, set with `flynn -a logaggregator env:set LOG_BUFFER_TTL=72h`) with
+no new line and no follower.
 `flynn log` reads it. It is not a cluster total and it is not retention.
 Each host also writes `/var/log/flynn/<app-id>.log`, rotating at 100MiB
 with one backup, about 200MB per app on that host. Those files are not a

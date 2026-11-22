@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 )
@@ -22,6 +23,9 @@ type Buffer struct {
 	capacity int
 	subs     map[chan<- *rfc5424.Message]struct{}
 	donec    chan struct{}
+	// lastActivity is the newest message time seen, capped at the time it
+	// was added, so a buffer loaded from a snapshot keeps its real age.
+	lastActivity time.Time
 }
 
 type message struct {
@@ -88,6 +92,14 @@ func (b *Buffer) Add(m *rfc5424.Message) error {
 			break
 		}
 	}
+	ts := m.Timestamp
+	if now := time.Now(); ts.After(now) {
+		ts = now
+	}
+	if ts.After(b.lastActivity) {
+		b.lastActivity = ts
+	}
+
 	if b.length < b.capacity {
 		// buffer not yet full
 		b.length++
@@ -105,6 +117,28 @@ func (b *Buffer) Add(m *rfc5424.Message) error {
 	}
 
 	return nil
+}
+
+// Len returns the number of buffered messages (-1 once closed).
+func (b *Buffer) Len() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.length
+}
+
+// LastActivity returns the newest message time added to the buffer, never
+// later than when it was added. It is zero for an empty buffer.
+func (b *Buffer) LastActivity() time.Time {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.lastActivity
+}
+
+// Subscribers returns the number of live subscriber channels.
+func (b *Buffer) Subscribers() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subs)
 }
 
 func (b *Buffer) Close() {
@@ -130,8 +164,9 @@ func (b *Buffer) Read() []*rfc5424.Message {
 // ReadAndSubscribe returns all buffered messages just like Read, and also
 // returns a channel that will stream new messages as they arrive.
 func (b *Buffer) ReadAndSubscribe(msgc chan<- *rfc5424.Message, donec <-chan struct{}) []*rfc5424.Message {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	// subscribe writes b.subs, so this needs the write lock
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	b.subscribe(msgc, donec)
 	return b.read()
@@ -143,8 +178,8 @@ func (b *Buffer) ReadAndSubscribe(msgc chan<- *rfc5424.Message, donec <-chan str
 //
 // The caller closes the donec channel to stop receiving messages.
 func (b *Buffer) Subscribe(msgc chan<- *rfc5424.Message, donec <-chan struct{}) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	b.subscribe(msgc, donec)
 }

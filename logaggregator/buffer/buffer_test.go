@@ -19,12 +19,14 @@ type S struct {
 var _ = Suite(&S{})
 
 func (s *S) SetUpTest(c *C) {
-	hdr := &rfc5424.Header{}
+	// distinct timestamps: lines with the same time and structured data are
+	// dropped as duplicates, and a coarse clock (macOS) repeats time.Now()
+	start := time.Now().Add(-time.Hour)
 
 	s.data = make([]*rfc5424.Message, DefaultCapacity*2)
 	for i := 0; i < len(s.data); i++ {
 		line := []byte(fmt.Sprintf("line %d\n", i))
-		s.data[i] = rfc5424.NewMessage(hdr, line)
+		s.data[i] = rfc5424.NewMessage(&rfc5424.Header{Timestamp: start.Add(time.Duration(i) * time.Microsecond)}, line)
 	}
 }
 
@@ -308,4 +310,41 @@ func (s *S) TestAddSort(c *C) {
 	between.Timestamp = first.Timestamp.Add(time.Second)
 	b.Add(between)
 	c.Assert(b.Read(), DeepEquals, []*rfc5424.Message{newHead, first, between, newTail})
+}
+
+func (s *S) TestLastActivityAndSubscribers(c *C) {
+	b := newBuffer(10)
+	defer b.Close()
+	c.Assert(b.Len(), Equals, 0)
+	c.Assert(b.LastActivity().IsZero(), Equals, true)
+
+	old := time.Now().Add(-48 * time.Hour)
+	b.Add(rfc5424.NewMessage(&rfc5424.Header{Timestamp: old}, []byte("old")))
+	c.Assert(b.Len(), Equals, 1)
+	c.Assert(b.LastActivity().Equal(old), Equals, true)
+
+	// an older line replayed later does not move activity back
+	b.Add(rfc5424.NewMessage(&rfc5424.Header{Timestamp: old.Add(-time.Hour)}, []byte("older")))
+	c.Assert(b.LastActivity().Equal(old), Equals, true)
+
+	// a line stamped in the future counts as arriving now, so a bad clock
+	// cannot pin a buffer in memory
+	before := time.Now()
+	b.Add(rfc5424.NewMessage(&rfc5424.Header{Timestamp: time.Now().Add(365 * 24 * time.Hour)}, []byte("future")))
+	c.Assert(b.LastActivity().Before(time.Now().Add(time.Second)), Equals, true)
+	c.Assert(b.LastActivity().Before(before), Equals, false)
+
+	c.Assert(b.Subscribers(), Equals, 0)
+	donec := make(chan struct{})
+	msgc := make(chan *rfc5424.Message, 1)
+	b.Subscribe(msgc, donec)
+	b.ReadAndSubscribe(make(chan *rfc5424.Message, 1), donec)
+	c.Assert(b.Subscribers(), Equals, 2)
+	close(donec)
+	for range msgc {
+	}
+	for i := 0; i < 500 && b.Subscribers() != 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	c.Assert(b.Subscribers(), Equals, 0)
 }

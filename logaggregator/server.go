@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/discoverd/client"
@@ -46,10 +47,17 @@ type ServerConfig struct {
 	// route but the health check.
 	APIKeys   []string
 	Discoverd *discoverd.Client
+
+	// BufferTTL is how long an app buffer with no new line and no follower
+	// is kept (DefaultBufferTTL when zero).
+	BufferTTL time.Duration
+	// AppEvents, when set, is the controller event stream whose app
+	// deletions drop that app's buffer.
+	AppEvents appEventSource
 }
 
 func NewServer(conf ServerConfig) *Server {
-	a := NewAggregator()
+	a := newAggregator(conf.BufferTTL)
 	c := NewHostCursors()
 	return &Server{
 		Aggregator:  a,
@@ -83,7 +91,8 @@ func (s *Server) Shutdown() {
 		}
 	}
 
-	// close syslog client connections
+	// close syslog client connections and stop the app deletion watcher
+	// (not waited for: it may be inside a controller connect attempt)
 	close(s.shutdown)
 	s.syslogWg.Wait()
 
@@ -152,6 +161,10 @@ func (s *Server) Start() error {
 
 	go s.runSyslog()
 	go http.Serve(s.apiListener, s.api)
+
+	if s.conf.AppEvents != nil {
+		go watchAppDeletions(s.Aggregator, s.conf.AppEvents, s.shutdown, 10*time.Second)
+	}
 
 	return nil
 }
