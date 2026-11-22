@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -56,6 +57,40 @@ func TestUploadTreatsExistingObjectAsDone(t *testing.T) {
 		srv.Close()
 		if (err == nil) != c.ok {
 			t.Errorf("status %d: err = %v", c.code, err)
+		}
+	}
+}
+
+// EDGE-08: the slug is sent with its length, so the blobstore can refuse an
+// oversize slug before any of it is uploaded, and a size refusal (413 or 507)
+// is final: it is reported with the blobstore's message, not retried.
+func TestUploadSlugStopsOnSizeLimit(t *testing.T) {
+	for _, code := range []int{http.StatusRequestEntityTooLarge, http.StatusInsufficientStorage} {
+		var requests int
+		var length int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			length = r.ContentLength
+			http.Error(w, "object exceeds the blobstore limit; MAX_OBJECT_SIZE", code)
+		}))
+		f, err := os.CreateTemp(t.TempDir(), "slug")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(strings.Repeat("s", 5000)); err != nil {
+			t.Fatal(err)
+		}
+		err = uploadSlug(f, srv.URL+"/slugs/apps/app-1/layers/abc.squashfs")
+		srv.Close()
+		f.Close()
+		if err == nil || !strings.Contains(err.Error(), "MAX_OBJECT_SIZE") {
+			t.Fatalf("status %d: err = %v, want the blobstore message", code, err)
+		}
+		if requests != 1 {
+			t.Fatalf("status %d: %d upload attempts, want 1", code, requests)
+		}
+		if length != 5000 {
+			t.Fatalf("status %d: Content-Length = %d, want 5000", code, length)
 		}
 	}
 }

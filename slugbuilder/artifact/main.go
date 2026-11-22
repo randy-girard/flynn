@@ -191,6 +191,10 @@ func slugArtifact(appID, id string, manifest *ct.ImageManifest) *ct.Artifact {
 const maxSlugUploadAttempts = 3
 
 func uploadSlug(slugFile *os.File, url string) (err error) {
+	info, err := slugFile.Stat()
+	if err != nil {
+		return err
+	}
 	tryUpload := func() error {
 		if _, err := slugFile.Seek(0, io.SeekStart); err != nil {
 			return err
@@ -198,29 +202,52 @@ func uploadSlug(slugFile *os.File, url string) (err error) {
 		// use a NopCloser to ensure failed requests don't close
 		// the slug file
 		data := ioutil.NopCloser(slugFile)
-		return upload(data, url)
+		return uploadSized(data, info.Size(), url)
 	}
 	for attempt := 1; attempt <= maxSlugUploadAttempts; attempt++ {
 		err = tryUpload()
 		if err == nil {
 			return nil
 		}
+		if _, ok := err.(sizeRefused); ok {
+			// another attempt sends the same bytes
+			return err
+		}
 		fmt.Printf("WARN: error uploading to blobstore (attempt %d of %d): %s\n", attempt, maxSlugUploadAttempts, err)
 	}
 	return
 }
 
+// sizeRefused is the blobstore refusing an object over its size limit or the
+// app's quota (EDGE-08), with the blobstore's message.
+type sizeRefused struct{ msg string }
+
+func (e sizeRefused) Error() string { return e.msg }
+
 func upload(data io.Reader, url string) error {
+	return uploadSized(data, -1, url)
+}
+
+// uploadSized PUTs data to url. A size of 0 or more is sent as the
+// Content-Length so the blobstore can refuse an oversize object up front.
+func uploadSized(data io.Reader, size int64, url string) error {
 	req, err := http.NewRequest("PUT", url, data)
 	if err != nil {
 		return err
+	}
+	if size >= 0 {
+		req.ContentLength = size
 	}
 	blobstoreauth.Apply(req)
 	res, err := hh.RetryClient.Do(req)
 	if err != nil {
 		return err
 	}
-	res.Body.Close()
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusRequestEntityTooLarge || res.StatusCode == http.StatusInsufficientStorage {
+		msg, _ := ioutil.ReadAll(io.LimitReader(res.Body, 4096))
+		return sizeRefused{fmt.Sprintf("blobstore refused the slug (%s): %s", res.Status, strings.TrimSpace(string(msg)))}
+	}
 	// 409: the content-addressed object is already stored under this name,
 	// which is the hash of these bytes. The blobstore refuses to replace it.
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusConflict {
