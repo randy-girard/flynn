@@ -5,8 +5,17 @@ A simple, fast HTTP file service.
 Blobstore provides a simple HTTP interface for reading, writing, and deleting
 files. It is like a simpler S3. Object routes require the cluster `AUTH_KEY`
 (HTTP Basic with an empty user, or `Authorization: Bearer`). `/.well-known/status`
-and `HEAD /` are unauthenticated. All object operations fall under these three
-HTTP verbs:
+and `HEAD /` are unauthenticated.
+
+The blobstore fails closed. A release with no `AUTH_KEY`, `CONTROLLER_KEY`, or
+`ACCESS_TOKEN_KEY` (an old backup restored with `--from-backup`, a hand-edited
+release, a partial upgrade) answers every object request with `401` and logs
+an error at start; status stays public. Only an explicit
+`BLOBSTORE_ALLOW_UNAUTHENTICATED=1` (or `true`) serves objects without
+credentials, and it is ignored while any key is set. `flynn-host
+production:check` fails its `blobstore-auth` line in both cases.
+
+All object operations fall under these three HTTP verbs:
 
  * PUT: write a file: `curl -u :$AUTH_KEY -X PUT -T /path/to/local/file
    http://blobstore.discoverd/path/to/remote/file`

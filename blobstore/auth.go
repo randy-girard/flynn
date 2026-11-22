@@ -13,6 +13,10 @@ import (
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 )
 
+// allowUnauthenticatedEnv names the explicit opt-in to serve objects with no
+// credentials when the release has no key.
+const allowUnauthenticatedEnv = "BLOBSTORE_ALLOW_UNAUTHENTICATED"
+
 // protect requires cluster-key or scoped-token credentials on blobstore
 // object routes. Health/status stays public. Signed BUILD_CACHE_URL tokens
 // are accepted only on that app's cache objects, expire, and are split into a
@@ -22,10 +26,26 @@ import (
 // /tarreceive/apps/<app>/ objects, and may not PUT over a content-addressed
 // layer or manifest that already exists (exists reports that; nil means the
 // store holds nothing).
+//
+// With no cluster key and no token key, protect fails closed: every object
+// request is 401 unless BLOBSTORE_ALLOW_UNAUTHENTICATED=1 (or true) is set.
 func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer, exists func(string) (bool, error)) http.Handler {
 	if tokens == nil && len(keys) == 0 {
-		log.Println("warning: blobstore authentication disabled (set AUTH_KEY)")
-		return inner
+		if allowUnauthenticated() {
+			log.Printf("warning: blobstore authentication disabled by %s=1; every object is readable, writable and deletable without credentials", allowUnauthenticatedEnv)
+			return inner
+		}
+		// Fail closed: with no key nothing can authenticate, so every
+		// object request is refused. Status stays public.
+		log.Printf("error: blobstore has no AUTH_KEY, CONTROLLER_KEY or ACCESS_TOKEN_KEY; refusing every object request (set the keys, or %s=1 to serve without authentication)", allowUnauthenticatedEnv)
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if blobstoreauth.IsPublicPath(path.Clean(req.URL.Path), req.Method) {
+				inner.ServeHTTP(w, req)
+				return
+			}
+			w.Header().Set("WWW-Authenticate", `Basic realm="blobstore"`)
+			http.Error(w, "Unauthorized: blobstore has no authentication key configured", http.StatusUnauthorized)
+		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		p := path.Clean(req.URL.Path)
@@ -71,6 +91,16 @@ func protect(inner http.Handler, keys []string, tokens *authorizer.Authorizer, e
 		w.Header().Set("WWW-Authenticate", `Basic realm="blobstore"`)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	})
+}
+
+// allowUnauthenticated reports the explicit opt-in to an open blobstore. Only
+// 1 or true (any case) count; anything else keeps the blobstore closed.
+func allowUnauthenticated() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(allowUnauthenticatedEnv))) {
+	case "1", "true":
+		return true
+	}
+	return false
 }
 
 // hasCopyFrom reports a Blobstore-Copy-From header (any value, any repeat).

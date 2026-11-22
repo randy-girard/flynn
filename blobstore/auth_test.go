@@ -331,19 +331,109 @@ func TestProtectBuildTokenPaths(t *testing.T) {
 	}
 }
 
-func TestProtectDisabledWithoutKeys(t *testing.T) {
+// TestProtectFailsClosedWithoutKeys: a release with no AUTH_KEY,
+// CONTROLLER_KEY or ACCESS_TOKEN_KEY (an old backup, a hand-edited release, a
+// partial upgrade) must not serve objects to anyone. Status stays public so
+// discoverd and the cluster health checks still see the process.
+func TestProtectFailsClosedWithoutKeys(t *testing.T) {
+	t.Setenv(allowUnauthenticatedEnv, "")
+	var calls int
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
 		w.WriteHeader(http.StatusOK)
 	})
 	srv := httptest.NewServer(protect(inner, nil, nil, nil))
+	defer srv.Close()
+	do := func(method, p string, setup func(*http.Request)) int {
+		t.Helper()
+		req, err := http.NewRequest(method, srv.URL+p, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if setup != nil {
+			setup(req)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	for _, tc := range []struct {
+		method, path string
+		setup        func(*http.Request)
+	}{
+		{http.MethodGet, "/file.txt", nil},
+		{http.MethodGet, "/slugs/apps/app-1/layers/abc.squashfs", nil},
+		{http.MethodGet, "/repos/app.tar", nil},
+		{http.MethodPut, "/repos/app.tar", nil},
+		{http.MethodDelete, "/repos/app.tar", nil},
+		{http.MethodGet, "/repos/app.tar", func(r *http.Request) { r.SetBasicAuth("", "") }},
+		{http.MethodGet, "/repos/app.tar", func(r *http.Request) { r.Header.Set("Authorization", "Bearer ") }},
+		{http.MethodGet, "/slugs/apps/app-1/cache.tgz?token=x&exp=9999999999", nil},
+	} {
+		if got := do(tc.method, tc.path, tc.setup); got != http.StatusUnauthorized {
+			t.Fatalf("%s %s with no keys = %d, want 401", tc.method, tc.path, got)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("inner handler ran %d times with no keys", calls)
+	}
+	if got := do(http.MethodGet, status.Path, nil); got != http.StatusOK {
+		t.Fatalf("status with no keys = %d, want 200", got)
+	}
+	if got := do(http.MethodHead, "/", nil); got != http.StatusOK {
+		t.Fatalf("HEAD / with no keys = %d, want 200", got)
+	}
+}
+
+// TestProtectAllowUnauthenticatedOverride: only an explicit
+// BLOBSTORE_ALLOW_UNAUTHENTICATED=1 restores the old open behaviour.
+func TestProtectAllowUnauthenticatedOverride(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{"1", http.StatusOK},
+		{"true", http.StatusOK},
+		{"", http.StatusUnauthorized},
+		{"0", http.StatusUnauthorized},
+		{"false", http.StatusUnauthorized},
+		{"yes please", http.StatusUnauthorized},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv(allowUnauthenticatedEnv, tc.value)
+			srv := httptest.NewServer(protect(inner, nil, nil, nil))
+			defer srv.Close()
+			res, err := http.Get(srv.URL + "/file.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			if res.StatusCode != tc.want {
+				t.Fatalf("%s=%q: got %d want %d", allowUnauthenticatedEnv, tc.value, res.StatusCode, tc.want)
+			}
+		})
+	}
+}
+
+// TestProtectOverrideIgnoredWithKeys: the override never opens a blobstore
+// that has a cluster key.
+func TestProtectOverrideIgnoredWithKeys(t *testing.T) {
+	t.Setenv(allowUnauthenticatedEnv, "1")
+	srv := authServer(t, []string{"secret"}, nil)
 	defer srv.Close()
 	res, err := http.Get(srv.URL + "/file.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("no keys configured should fail-open, got %d", res.StatusCode)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("override with keys: got %d want 401", res.StatusCode)
 	}
 }
 
