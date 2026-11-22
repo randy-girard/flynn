@@ -31,8 +31,10 @@ page. Set `ERROR_503_PAGE_URL` on the router app to serve your own page
 instead. The router downloads it once at start, before it opens any listener,
 and allows 10 seconds for the whole fetch (connect, headers and body, up to
 1 MB). If the fetch fails, times out, or returns a status other than 200, the
-router logs `using the built-in page` and starts with the built-in page. Fix
-the URL and restart the router to pick up the page.
+router logs `using the built-in page` and starts with the built-in page. The
+page is not fetched again while the router runs: `flynn -a router env:set
+ERROR_503_PAGE_URL=...` deploys a new router release, one host at a time, and
+each new router fetches the page when it starts.
 
 TCP routes may store a hostname and a TLS mode:
 
