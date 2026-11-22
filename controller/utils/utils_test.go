@@ -205,6 +205,31 @@ func TestFormationTagsEqualAndAppName(t *testing.T) {
 	}
 }
 
+// The deployer ends an omni roll by clearing the process's flynn-host-ids
+// tag (an empty inner map). That must not compare equal to the pinned tags,
+// or the scheduler ignores the change and the omni process stays on the
+// pinned hosts.
+func TestFormationTagsEqualDetectsClearedTags(t *testing.T) {
+	pinned := map[string]map[string]string{"app": {"flynn-host-ids": "devnode1"}}
+	cleared := map[string]map[string]string{"app": {}}
+	if FormationTagsEqual(pinned, cleared) {
+		t.Fatal("pinned tags compared equal to cleared tags")
+	}
+	if FormationTagsEqual(cleared, pinned) {
+		t.Fatal("cleared tags compared equal to pinned tags")
+	}
+	extra := map[string]map[string]string{"app": {"flynn-host-ids": "devnode1", "disk": "ssd"}}
+	if FormationTagsEqual(extra, pinned) || FormationTagsEqual(pinned, extra) {
+		t.Fatal("a tag present on one side only compared equal")
+	}
+	if FormationTagsEqual(pinned, map[string]map[string]string{"web": {"flynn-host-ids": "devnode1"}}) {
+		t.Fatal("tags on a different process type compared equal")
+	}
+	if !FormationTagsEqual(cleared, map[string]map[string]string{"app": {}}) {
+		t.Fatal("two cleared tag sets compared different")
+	}
+}
+
 func TestReservedAppName(t *testing.T) {
 	for _, name := range []string{
 		"plugins", "Plugins", " system ", "plugin", "new",

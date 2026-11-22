@@ -2,6 +2,9 @@ package main
 
 import (
 	"testing"
+	"time"
+
+	"github.com/inconshreveable/log15"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 )
@@ -146,5 +149,43 @@ func TestMatchingOmniHostCountKeepsUnhealthyHost(t *testing.T) {
 	})
 	if got := s.matchingOmniHostCount(formation, "app"); got != 3 {
 		t.Fatalf("matchingOmniHostCount = %d, want 3 (unhealthy host2 still runs its job)", got)
+	}
+}
+
+// The deployer's omni roll pins the new release to the hosts done so far
+// with flynn-host-ids, then clears the tag with the same process count. The
+// scheduler must apply that clear, or the omni process (the router) stays on
+// the pinned hosts and every other host is left without one.
+func TestHandleFormationAppliesClearedHostIDsTag(t *testing.T) {
+	logger := log15.New()
+	logger.SetHandler(log15.DiscardHandler())
+	s := NewScheduler(nil, nil, nil, logger)
+	s.hosts = map[string]*Host{
+		"host1": {ID: "host1", Healthy: true},
+		"host2": {ID: "host2", Healthy: true},
+		"host3": {ID: "host3", Healthy: true},
+	}
+	app := &ct.App{ID: "router"}
+	release := &ct.Release{ID: "release-1", Processes: map[string]ct.ProcessType{"app": {Omni: true}}}
+	updated := time.Now()
+	s.handleFormation(&ct.ExpandedFormation{
+		App: app, Release: release, Processes: map[string]int{"app": 1}, UpdatedAt: updated,
+		Tags: map[string]map[string]string{"app": {ct.FormationHostIDsTag: "host1"}},
+	})
+	f := s.formations.Get("router", "release-1")
+	if f == nil || f.Processes["app"] != 1 {
+		t.Fatalf("pinned formation not applied: %+v", f)
+	}
+
+	// same second, same process count, tag cleared
+	s.handleFormation(&ct.ExpandedFormation{
+		App: app, Release: release, Processes: map[string]int{"app": 1}, UpdatedAt: updated,
+		Tags: map[string]map[string]string{"app": {}},
+	})
+	if v, ok := f.Tags["app"][ct.FormationHostIDsTag]; ok {
+		t.Fatalf("scheduler kept flynn-host-ids=%q after the deployer cleared it", v)
+	}
+	if f.Processes["app"] != 3 {
+		t.Fatalf("omni app count = %d, want 3 (one per host) after the pin is cleared", f.Processes["app"])
 	}
 }

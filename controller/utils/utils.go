@@ -530,8 +530,14 @@ func FormationTagsEqual(a, b map[string]map[string]string) bool {
 		return false
 	}
 	for typ, tags := range b {
+		other, ok := a[typ]
+		// compare sizes too: {"app": {}} clears every tag on app and must
+		// not equal {"app": {"flynn-host-ids": ...}}.
+		if !ok || len(other) != len(tags) {
+			return false
+		}
 		for k, v := range tags {
-			if w, ok := a[typ][k]; !ok || w != v {
+			if w, ok := other[k]; !ok || w != v {
 				return false
 			}
 		}
