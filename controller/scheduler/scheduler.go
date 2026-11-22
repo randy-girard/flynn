@@ -1819,6 +1819,7 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 		}
 		s.hostVolumeIDs[vol.HostID][vol.ID] = struct{}{}
 	}
+	req.Volumes = append([]*Volume(nil), req.Job.Volumes...)
 	req.Error(nil)
 }
 
@@ -2228,7 +2229,10 @@ outer:
 			continue
 		}
 
-		for _, vol := range job.Volumes {
+		// req.Volumes is the loop's copy of job.Volumes at placement.
+		// The loop owns job and volume fields, so every change below
+		// runs there through onLoop.
+		for _, vol := range req.Volumes {
 			if vol.GetState() == ct.VolumeStatePending {
 				log.Info("creating new volume", "host.id", req.Host.ID, "vol.id", vol.ID, "vol.path", vol.Path)
 				if err := req.Host.client.CreateVolume("default", vol.Info()); err != nil {
@@ -2242,8 +2246,11 @@ outer:
 					}
 					continue outer
 				}
-				vol.SetState(ct.VolumeStateCreated)
-				s.persistVolume(vol)
+				created := vol
+				s.onLoop(func() {
+					created.SetState(ct.VolumeStateCreated)
+					s.persistVolume(created)
+				})
 			}
 		}
 
@@ -2255,31 +2262,50 @@ outer:
 			return
 		}
 		if isMissingHostVolumeError(err) {
-			if !shouldReplaceMissingVolumes(job.Volumes) {
-				log.Error("host rejected job due to missing persistent volume; blocking to avoid empty replacement", "err", err)
-				msg := err.Error()
-				job.hostError = &msg
-				job.State = JobStateBlocked
-				s.persistJob(job)
-				return
+			var retry bool
+			s.onLoop(func() { retry = s.handleMissingHostVolume(req, err) })
+			if retry {
+				continue outer
 			}
-			log.Warn("host rejected job due to missing volume, marking volumes destroyed and retrying", "err", err)
-			for _, vol := range job.Volumes {
-				if vol.GetState() != ct.VolumeStateDestroyed {
-					vol.SetState(ct.VolumeStateDestroyed)
-					vol.JobID = nil
-					s.persistVolume(vol)
-				}
-			}
-			job.Volumes = nil
-			job.State = JobStatePending
-			job.HostID = ""
-			job.JobID = ""
-			s.persistJob(job)
-			continue outer
+			return
 		}
 		log.Error("error adding job to the cluster", "attempts", attempt+1, "err", err)
 	}
+}
+
+// handleMissingHostVolume runs on the loop after a host rejected AddJob
+// because a volume is missing. It reports whether StartJob should place the
+// job again. A job the loop already moved on from (stopped, or placed again
+// under another host job ID) is left alone.
+func (s *Scheduler) handleMissingHostVolume(req *PlacementRequest, err error) bool {
+	job := req.Job
+	log := s.logger.New("fn", "handleMissingHostVolume", "app.id", job.AppID, "job.id", job.ID, "job.type", job.Type)
+	if job.State != JobStatePending || req.Config == nil || job.JobID != req.Config.ID {
+		log.Info("ignoring missing volume error for a job that is no longer pending", "job.state", job.State, "err", err)
+		return false
+	}
+	if !shouldReplaceMissingVolumes(job.Volumes) {
+		log.Error("host rejected job due to missing persistent volume; blocking to avoid empty replacement", "err", err)
+		msg := err.Error()
+		job.hostError = &msg
+		job.State = JobStateBlocked
+		s.persistJob(job)
+		return false
+	}
+	log.Warn("host rejected job due to missing volume, marking volumes destroyed and retrying", "err", err)
+	for _, vol := range job.Volumes {
+		if vol.GetState() != ct.VolumeStateDestroyed {
+			vol.SetState(ct.VolumeStateDestroyed)
+			vol.JobID = nil
+			s.persistVolume(vol)
+		}
+	}
+	job.Volumes = nil
+	job.State = JobStatePending
+	job.HostID = ""
+	job.JobID = ""
+	s.persistJob(job)
+	return true
 }
 
 // PlacementRequest is sent from a StartJob goroutine to the main scheduler
@@ -2289,7 +2315,10 @@ type PlacementRequest struct {
 	Job    *Job
 	Config *host.Job
 	Host   *Host
-	Err    chan error
+	// Volumes is job.Volumes as the loop placed them. StartJob reads
+	// this copy because the loop may replace job.Volumes afterwards.
+	Volumes []*Volume
+	Err     chan error
 }
 
 func (r *PlacementRequest) Error(err error) {

@@ -191,7 +191,10 @@ APIs on each host. A scheduler instance runs on every host in the cluster for
 fault tolerance, but only the leader elected by discoverd makes scheduling
 decisions. The leader's loop is the only writer of in-memory jobs, volumes,
 and placements. Host and controller calls from that loop run outside it, and
-the loop only applies the results. A slow host API stalls that host's call.
+the loop only applies the results. When a host rejects a job because a volume
+is missing, the loop resets or blocks the job only if it is still the pending
+job that was sent. A job the loop has already stopped is not placed again. A
+slow host API stalls that host's call.
 Placement onto other hosts continues. This is the same process on a hosted
 cluster and a self-hosted one. Writes back to the controller stay on a
 separate persistence loop. A write that is still failing after one minute is

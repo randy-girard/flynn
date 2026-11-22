@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -228,5 +229,151 @@ func (TestSuite) TestAddJobConflictIsSuccess(c *C) {
 	}
 	if atomic.LoadInt64(&calls) != 1 {
 		c.Fatalf("AddJob calls = %d, want 1", calls)
+	}
+}
+
+// missingVolumeHost fails every AddJob with the host's "required volume does
+// not exist" error. The first AddJob waits until release is called.
+func missingVolumeHost() (h *FakeHostClient, calls *int64, entered <-chan struct{}, release func()) {
+	h = NewFakeHostClient(testHostID, false)
+	h.AddJobErr = errors.New("job x required volume vol-x, but that volume does not exist")
+	var n int64
+	entered, release, hook := blockUntilRelease()
+	h.OnAddJob = func(*host.Job) {
+		atomic.AddInt64(&n, 1)
+		hook()
+	}
+	return h, &n, entered, release
+}
+
+// waitJobState polls the loop's state until the only job of the test type is
+// in one of want.
+func waitJobState(c *C, s *TestScheduler, want ...JobState) *Job {
+	deadline := time.Now().Add(2 * time.Second)
+	var last *Job
+	for time.Now().Before(deadline) {
+		for _, job := range s.InternalState().Jobs {
+			if job.Type != testJobType {
+				continue
+			}
+			last = job
+			for _, st := range want {
+				if job.State == st {
+					return job
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if last == nil {
+		c.Fatalf("no %s job, want state %v", testJobType, want)
+	}
+	c.Fatalf("job %s state = %s, want %v", last.ID, last.State, want)
+	return nil
+}
+
+// TestStartJobMissingVolumeMutatesOnLoop: a scale-down stops the job while
+// AddJob is in flight. The missing-volume error that comes back after must
+// not set the stopped job back to pending and place it again.
+func (TestSuite) TestStartJobMissingVolumeMutatesOnLoop(c *C) {
+	h, calls, entered, release := missingVolumeHost()
+	defer release()
+	cluster := newTestCluster(map[string]utils.HostClient{h.ID(): h})
+	s := newTestScheduler(c, cluster, true, map[string]int{testJobType: 0})
+	go s.Run()
+	defer s.Stop()
+	s.waitRectify()
+
+	c.Assert(s.PutFormation(&ct.Formation{AppID: testAppID, ReleaseID: testReleaseID, Processes: map[string]int{testJobType: 1}}), IsNil)
+	waitSignal(c, entered, "AddJob")
+	c.Assert(s.PutFormation(&ct.Formation{AppID: testAppID, ReleaseID: testReleaseID, Processes: map[string]int{testJobType: 0}}), IsNil)
+	waitJobState(c, s, JobStateStopping, JobStateStopped)
+
+	release()
+	// the first retry waits 500ms
+	time.Sleep(1200 * time.Millisecond)
+	if n := atomic.LoadInt64(calls); n != 1 {
+		c.Fatalf("AddJob calls = %d, want 1: the stopped job was placed again", n)
+	}
+	job := waitJobState(c, s, JobStateStopping, JobStateStopped)
+	c.Assert(job.HostID, Equals, testHostID)
+}
+
+// TestStartJobMissingPersistentVolumeDoesNotBlockStoppedJob: the persistent
+// branch must not mark a job blocked after the loop stopped it.
+func (TestSuite) TestStartJobMissingPersistentVolumeDoesNotBlockStoppedJob(c *C) {
+	h, _, entered, release := missingVolumeHost()
+	defer release()
+	cluster := newTestCluster(map[string]utils.HostClient{h.ID(): h})
+	s := newTestScheduler(c, cluster, true, map[string]int{testJobType: 0})
+	cc := s.ControllerClient.(*FakeControllerClient)
+	rel, err := cc.GetRelease(testReleaseID)
+	c.Assert(err, IsNil)
+	web := rel.Processes[testJobType]
+	web.Volumes = []ct.VolumeReq{{Path: "/data"}}
+	rel.Processes[testJobType] = web
+	go s.Run()
+	defer s.Stop()
+	s.waitRectify()
+
+	c.Assert(s.PutFormation(&ct.Formation{AppID: testAppID, ReleaseID: testReleaseID, Processes: map[string]int{testJobType: 1}}), IsNil)
+	waitSignal(c, entered, "AddJob")
+	c.Assert(s.PutFormation(&ct.Formation{AppID: testAppID, ReleaseID: testReleaseID, Processes: map[string]int{testJobType: 0}}), IsNil)
+	waitJobState(c, s, JobStateStopping, JobStateStopped)
+
+	release()
+	time.Sleep(300 * time.Millisecond)
+	job := waitJobState(c, s, JobStateStopping, JobStateStopped)
+	c.Assert(job.hostError, IsNil)
+}
+
+// missingOnceHost fails the first AddJob with a missing volume error.
+type missingOnceHost struct {
+	*FakeHostClient
+	calls int64
+}
+
+func (h *missingOnceHost) AddJob(job *host.Job) error {
+	if atomic.AddInt64(&h.calls, 1) == 1 {
+		return errors.New("job x required volume vol-x, but that volume does not exist")
+	}
+	return h.FakeHostClient.AddJob(job)
+}
+
+// TestStartJobMissingVolumeRetriesPendingJob keeps the normal path: a job
+// that is still pending is reset on the loop and placed again.
+func (TestSuite) TestStartJobMissingVolumeRetriesPendingJob(c *C) {
+	h := &missingOnceHost{FakeHostClient: NewFakeHostClient(testHostID, false)}
+	cluster := newTestCluster(map[string]utils.HostClient{h.ID(): h})
+	s := newTestScheduler(c, cluster, true, map[string]int{testJobType: 1})
+	go s.Run()
+	defer s.Stop()
+	waitJobState(c, s, JobStateStarting, JobStateRunning)
+	if n := atomic.LoadInt64(&h.calls); n != 2 {
+		c.Fatalf("AddJob calls = %d, want 2", n)
+	}
+}
+
+// TestStartJobMissingPersistentVolumeBlocksPendingJob keeps the persistent
+// guard: a pending job is blocked instead of given an empty volume.
+func (TestSuite) TestStartJobMissingPersistentVolumeBlocksPendingJob(c *C) {
+	h := &missingOnceHost{FakeHostClient: NewFakeHostClient(testHostID, false)}
+	cluster := newTestCluster(map[string]utils.HostClient{h.ID(): h})
+	s := newTestScheduler(c, cluster, true, map[string]int{testJobType: 0})
+	cc := s.ControllerClient.(*FakeControllerClient)
+	rel, err := cc.GetRelease(testReleaseID)
+	c.Assert(err, IsNil)
+	web := rel.Processes[testJobType]
+	web.Volumes = []ct.VolumeReq{{Path: "/data"}}
+	rel.Processes[testJobType] = web
+	go s.Run()
+	defer s.Stop()
+	s.waitRectify()
+	c.Assert(s.PutFormation(&ct.Formation{AppID: testAppID, ReleaseID: testReleaseID, Processes: map[string]int{testJobType: 1}}), IsNil)
+	job := waitJobState(c, s, JobStateBlocked)
+	c.Assert(job.hostError, NotNil)
+	time.Sleep(700 * time.Millisecond)
+	if n := atomic.LoadInt64(&h.calls); n != 1 {
+		c.Fatalf("AddJob calls = %d, want 1 for a blocked job", n)
 	}
 }
