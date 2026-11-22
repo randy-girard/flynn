@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	. "github.com/flynn/go-check"
 	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/random"
 	"golang.org/x/net/context"
 )
 
@@ -179,4 +181,23 @@ func TestProcessTypesPrivilegedJSON(t *testing.T) {
 	if strings.Contains(string(b), "host_network") {
 		t.Fatalf("stripped JSON leaked host_network: %s", b)
 	}
+}
+
+// PUT /apps/:id/release answered 200 with the new release when the app
+// update failed, so a deploy or rollback looked done while the app kept its
+// old release.
+func (s *S) TestSetAppReleaseReturnsRepoError(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "core45-rel-" + random.String(8)})
+	current := s.createTestRelease(c, app.ID, &ct.Release{})
+	c.Assert(s.c.SetAppRelease(app.ID, current.ID), IsNil)
+	next := s.createTestRelease(c, app.ID, &ct.Release{})
+
+	undo := s.injectRowFailure(c, "apps", "UPDATE", "app_id", app.ID)
+	err := s.c.SetAppRelease(app.ID, next.ID)
+	undo()
+	c.Assert(err, NotNil)
+
+	got, err := s.c.GetAppRelease(app.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.ID, Equals, current.ID)
 }

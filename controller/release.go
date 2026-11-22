@@ -136,7 +136,10 @@ func (c *controllerAPI) SetAppRelease(ctx context.Context, w http.ResponseWriter
 			return
 		}
 	}
-	c.appRepo.SetRelease(app, release.ID)
+	if err := c.appRepo.SetRelease(app, release.ID); err != nil {
+		respondWithError(w, err)
+		return
+	}
 	httphelper.JSON(w, 200, presentRelease(ctx, app, release))
 }
 
