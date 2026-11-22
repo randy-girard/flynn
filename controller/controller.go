@@ -248,6 +248,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		tokenSigner:            c.tokenSigner,
 		limiter:                limiterFromEnv(),
 		loginLimiter:           newLoginLimiter(loginLimitsFromEnv()),
+		patLifetime:            patLifetimeFromEnv(),
 	}
 	if strings.TrimSpace(api.githubPluginURL) == "" {
 		api.githubPluginURL = "http://github.discoverd"
@@ -629,6 +630,9 @@ type controllerAPI struct {
 	tokenSigner       *tokensigner.Signer
 	limiter           *accountLimiter
 	loginLimiter      *loginLimiter
+	// patLifetime bounds personal access token expiry (CORE-50). The zero
+	// value is the shipped default (90 days, at most 365).
+	patLifetime patLifetimePolicy
 	// lookupTXT resolves domain verification records. Nil uses the system
 	// resolver. Tests replace it so they do not need live DNS.
 	lookupTXT func(ctx context.Context, name string) ([]string, error)

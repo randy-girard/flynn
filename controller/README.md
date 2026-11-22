@@ -53,6 +53,13 @@ token counts. Scaling `web` multiplies both budgets. Set
 An empty or non-positive value keeps the default. The same limits apply
 on a hosted cluster and a self-hosted one.
 
+Personal access tokens (`POST /tokens`) always expire: 90 days when the
+request has no `expires_at`, and an `expires_at` more than 365 days away
+is a `400`. `PAT_DEFAULT_LIFETIME` and `PAT_MAX_LIFETIME` on the
+controller release change them (`30d` or a Go duration; `0`/`none` turns
+a limit off on a self_hosted cluster only). See
+[security](../docs/content/security.md).
+
 Password sign-in (`POST /oauth/token` `grant_type=password` and the `POST
 /oauth/authorize` form) has its own throttle on failed attempts: per account
 and address, per account, and per address, each a refilling bucket that

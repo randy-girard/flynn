@@ -71,7 +71,9 @@ Grant cluster administrator on a controller user.
 	Register("user:token", runHostUserToken, `
 usage: flynn-host user:token <email>
 
-Mint a personal access token for <email> and print it once.
+Mint a personal access token for <email> and print it once. It expires
+after the cluster default lifetime (90 days unless PAT_DEFAULT_LIFETIME is
+set on the controller).
 `)
 	Register("tenancy:mode", runTenancyMode, `
 usage: flynn-host tenancy:mode [--force] [<mode>]

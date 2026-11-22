@@ -1590,6 +1590,15 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 	// holds its port in instance_port, unique over live rows. Existing
 	// duplicates keep the oldest holder (migrateInstancePorts).
 	migrations.Add(97, migrateInstancePorts...)
+
+	// Personal access tokens have a maximum lifetime (CORE-50). Before 98 a
+	// token with no expires_at never expired. Live tokens with no expiry, or
+	// one further out than the built-in 365-day maximum, now expire 365 days
+	// after the upgrade.
+	migrations.Add(98,
+		`UPDATE personal_access_tokens SET expires_at = now() + interval '365 days'
+		WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now() + interval '365 days')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

@@ -104,6 +104,86 @@ func (s *S) TestPATCannotCarryPrivilegedScopes(c *C) {
 	c.Assert(admin, Equals, false)
 }
 
+// A personal access token always expires (CORE-50). With no expires_at it
+// gets the cluster default; one past the maximum is refused, in both
+// tenancy modes, and the bootstrap token gets the default too.
+func (s *S) TestCreateTokenAppliesMaxLifetime(c *C) {
+	day := 24 * time.Hour
+	u := s.createLoginUser(c, "core50-pat@flynn.test", "core50-pat", "pw-core50-pat", true)
+	login := s.signUser(c, u.ID, nil)
+	create := func(body ct.TokenCreate) (int, ct.AccessTokenRecord, string) {
+		raw, _ := json.Marshal(body)
+		code, resp := s.scopedStatus(c, http.MethodPost, login, "/tokens", string(raw))
+		var rec ct.AccessTokenRecord
+		if code == http.StatusOK {
+			c.Assert(json.Unmarshal([]byte(resp), &rec), IsNil)
+		}
+		return code, rec, resp
+	}
+	near := func(got *time.Time, want time.Time) {
+		c.Assert(got, NotNil)
+		c.Assert(got.Sub(want) < time.Minute && want.Sub(*got) < time.Minute, Equals, true, Commentf("got %v want ~%v", got, want))
+	}
+
+	for _, mode := range []string{"self_hosted", "hosted"} {
+		c.Assert(s.api.tenancy.SetSettings(mode, nil), IsNil)
+
+		code, rec, resp := create(ct.TokenCreate{Name: "core50-default"})
+		c.Assert(code, Equals, http.StatusOK, Commentf("mode=%s body=%s", mode, resp))
+		near(rec.ExpiresAt, time.Now().Add(90*day))
+		recs, err := s.api.tenancy.ListPATs(u.ID)
+		c.Assert(err, IsNil)
+		var stored *time.Time
+		for _, r := range recs {
+			if r.ID == rec.ID {
+				stored = r.ExpiresAt
+			}
+		}
+		near(stored, time.Now().Add(90*day))
+
+		within := time.Now().Add(300 * day).UTC().Truncate(time.Second)
+		code, rec, resp = create(ct.TokenCreate{Name: "core50-within", ExpiresAt: &within})
+		c.Assert(code, Equals, http.StatusOK, Commentf("mode=%s body=%s", mode, resp))
+		c.Assert(rec.ExpiresAt.Equal(within), Equals, true)
+
+		for _, bad := range []time.Time{time.Now().Add(400 * day), time.Now().Add(100 * 365 * day), time.Now().Add(-time.Hour)} {
+			bad := bad
+			code, _, resp = create(ct.TokenCreate{Name: "core50-bad", ExpiresAt: &bad})
+			c.Assert(code, Equals, http.StatusBadRequest, Commentf("mode=%s expires=%v body=%s", mode, bad, resp))
+			c.Assert(resp, Matches, `(?s).*expires_at.*`)
+			c.Assert(resp, Not(Matches), `(?s).*flynn_pat_.*`)
+		}
+	}
+
+	// A self-hosted operator can opt out; hosted mode still caps at 365 days.
+	saved := s.api.patLifetime
+	defer func() { s.api.patLifetime = saved }()
+	s.api.patLifetime = patLifetimePolicy{Max: patLifetimeNone, Default: patLifetimeNone}
+	c.Assert(s.api.tenancy.SetSettings("self_hosted", nil), IsNil)
+	code, rec, resp := create(ct.TokenCreate{Name: "core50-optout"})
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", resp))
+	c.Assert(rec.ExpiresAt, IsNil)
+	c.Assert(s.api.tenancy.SetSettings("hosted", nil), IsNil)
+	code, rec, resp = create(ct.TokenCreate{Name: "core50-optout-hosted"})
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", resp))
+	near(rec.ExpiresAt, time.Now().Add(365*day))
+	c.Assert(s.api.tenancy.SetSettings("self_hosted", nil), IsNil)
+	s.api.patLifetime = saved
+
+	// flynn-host user:token goes through the same policy.
+	req, err := http.NewRequest(http.MethodPost, s.srv.URL+"/users/"+u.ID+"/bootstrap-token", nil)
+	c.Assert(err, IsNil)
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth("", authKey)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	c.Assert(res.StatusCode, Equals, http.StatusOK)
+	var boot ct.AccessTokenRecord
+	c.Assert(json.NewDecoder(res.Body).Decode(&boot), IsNil)
+	near(boot.ExpiresAt, time.Now().Add(90*day))
+}
+
 // A signed login token for a known user is admin only while users.cluster_admin
 // is set. A token signed before a demotion keeps its claim until expiry, so
 // expandToken must not trust it.

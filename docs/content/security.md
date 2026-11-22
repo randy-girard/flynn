@@ -128,6 +128,20 @@ acts as its user: an admin's token is admin while the user is an admin, and a
 tenant's token reaches the tenant's apps. On authentication a stored row keeps
 only allowlisted scopes, and controller migration 92 clears every other scope
 from existing rows.
+
+Every personal access token expires. A token created with no `expires_at`
+(including `flynn-host user:token`) expires after 90 days, and `POST /tokens`
+refuses an `expires_at` more than 365 days away, or one in the past, with
+`400`. Set `PAT_DEFAULT_LIFETIME` and `PAT_MAX_LIFETIME` on the controller app
+to change them (`flynn -a controller env:set PAT_MAX_LIFETIME=30d`; days such
+as `30d` or a Go duration such as `720h`). A default longer than the maximum is
+cut to the maximum. `0` or `none` turns a limit off on a `self_hosted` cluster
+only: a hosted cluster with no maximum still uses 365 days. A value that does
+not parse is logged and the built-in value is used. Controller migration 98
+gives every live token that had no expiry, or one more than 365 days out, an
+expiry 365 days after the upgrade. A token is still revoked at once by
+`flynn token:revoke`, a password change, or disabling the user.
+
 The TLS certificate used for communication is generated during installation
 (self-signed). Operators should not pass `--insecure` or skip-verify to talk
 to the controller, git, or dashboard:

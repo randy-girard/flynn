@@ -627,6 +627,17 @@ func (c *controllerAPI) issuePAT(ctx context.Context, w http.ResponseWriter, use
 		return
 	}
 	body.Scopes = scopes
+	settings, err := c.tenancy.GetSettings()
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	expires, err := c.patLifetime.resolve(time.Now(), settings.Mode, body.ExpiresAt)
+	if err != nil {
+		httphelper.ValidationError(w, "expires_at", err.Error())
+		return
+	}
+	body.ExpiresAt = expires
 	material := "flynn_pat_" + random.Hex(32)
 	sum := sha256.Sum256([]byte(material))
 	rec, err := c.tenancy.CreatePAT(userID, random.UUID(), body.Name, body.Scopes, hex.EncodeToString(sum[:]), body.ExpiresAt)

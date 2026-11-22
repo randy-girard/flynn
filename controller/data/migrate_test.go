@@ -1108,3 +1108,50 @@ func (MigrateSuite) TestMigrateInstancePortsKeepsOldestOfDuplicates(c *C) {
 	c.Assert(postgres.IsUniquenessError(err, "resources_instance_port_key"), Equals, true, Commentf("err=%v", err))
 	c.Assert(db.Exec(`UPDATE resources SET instance_port = 3001 WHERE resource_id = $1`, none), IsNil)
 }
+
+// TestMigrateCapsPATLifetime checks that migration 98 gives every live
+// personal access token an expiry at most 365 days out (CORE-50). Before it a
+// token with no expires_at never expired. Revoked rows and tokens that
+// already expire sooner are left alone.
+func (MigrateSuite) TestMigrateCapsPATLifetime(c *C) {
+	db := setupTestDB(c, "controllertest_pat_lifetime")
+	var before, rest postgres.Migrations
+	for _, m := range *migrations {
+		if m.ID < 98 {
+			before = append(before, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	c.Assert(before.Migrate(db), IsNil)
+	userID := random.UUID()
+	c.Assert(db.Exec(`INSERT INTO users (id, handle, email, password_hash) VALUES ($1, 'core50-mig', 'core50-mig@flynn.test', 'x')`, userID), IsNil)
+	add := func(expires, revoked *time.Time) string {
+		id := random.UUID()
+		c.Assert(db.Exec(`INSERT INTO personal_access_tokens (id, user_id, name, token_hash, expires_at, revoked_at) VALUES ($1, $2, 'mig', $3, $4, $5)`, id, userID, random.Hex(16), expires, revoked), IsNil)
+		return id
+	}
+	now := time.Now()
+	soon := now.Add(10 * 24 * time.Hour).UTC().Truncate(time.Second)
+	far := now.Add(10 * 365 * 24 * time.Hour)
+	revokedAt := now.Add(-time.Hour).UTC().Truncate(time.Second)
+	never := add(nil, nil)
+	tooFar := add(&far, nil)
+	keep := add(&soon, nil)
+	revoked := add(nil, &revokedAt)
+	c.Assert(rest.Migrate(db), IsNil)
+
+	get := func(id string) *time.Time {
+		var t *time.Time
+		c.Assert(db.QueryRow(`SELECT expires_at FROM personal_access_tokens WHERE id = $1`, id).Scan(&t), IsNil)
+		return t
+	}
+	limit := now.Add(365 * 24 * time.Hour)
+	for _, id := range []string{never, tooFar} {
+		got := get(id)
+		c.Assert(got, NotNil)
+		c.Assert(got.Sub(limit) < time.Minute && limit.Sub(*got) < time.Minute, Equals, true, Commentf("got %v", got))
+	}
+	c.Assert(get(keep).Equal(soon), Equals, true)
+	c.Assert(get(revoked), IsNil)
+}

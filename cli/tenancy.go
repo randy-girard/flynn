@@ -36,9 +36,13 @@ usage: flynn token:create [--scope <scope>] [--expires <time>] [<name>]
 Mint a personal access token. The token is printed once. It acts as you:
 cluster admin and app access come from your user, not from the token.
 
+Every token expires. With no --expires it lasts the cluster default (90
+days unless the operator changed it); an expiry past the cluster maximum
+(365 days by default) is refused.
+
 Options:
 	--scope=<scope>    Scope stored on the token. Only "user" is accepted
-	--expires=<time>   RFC3339 expiry
+	--expires=<time>   RFC3339 expiry, at most the cluster maximum away
 
 Examples:
 
