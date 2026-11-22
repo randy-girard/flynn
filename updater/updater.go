@@ -170,11 +170,10 @@ func run() error {
 		}
 	}
 
-	if hosts, herr := cluster.NewClient().Hosts(); herr == nil {
-		if err := updaterdeploy.ReplaceHostInfraJobs(client, hosts, images, false, log); err != nil {
-			log.Error("error replacing host-infra jobs", "err", err)
-			return err
-		}
+	if err := replaceHostInfra(newHostLister(), func(hosts []*cluster.Host) error {
+		return updaterdeploy.ReplaceHostInfraJobs(client, hosts, images, false, log)
+	}, log); err != nil {
+		return err
 	}
 
 	// deploy system apps in order first
@@ -310,6 +309,26 @@ func run() error {
 	return nil
 }
 
+// newHostLister is the discoverd host lookup. Tests swap it.
+var newHostLister = func() updaterdeploy.HostLister { return cluster.NewClient() }
+
+// replaceHostInfra lists the hosts and swaps the persistent discoverd and
+// flannel jobs onto the pulled images. A host list that keeps failing fails
+// the update: skipping the swap leaves both apps on the old image while
+// `update` reports success.
+func replaceHostInfra(lister updaterdeploy.HostLister, replace func([]*cluster.Host) error, log log15.Logger) error {
+	hosts, err := updaterdeploy.ListHostsWithRetry(lister, log)
+	if err != nil {
+		log.Error("error listing hosts for host-infra replace", "err", err)
+		return err
+	}
+	if err := replace(hosts); err != nil {
+		log.Error("error replacing host-infra jobs", "err", err)
+		return err
+	}
+	return nil
+}
+
 type errDeploySkipped struct {
 	reason string
 }
@@ -364,10 +383,14 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		log.Error("error setting router deploy strategy", "err", err)
 		return err
 	}
-	hostCount := 1
-	if hosts, herr := cluster.NewClient().Hosts(); herr == nil {
-		hostCount = len(hosts)
+	// No fallback guess: hostCount 1 on a multi-node cluster would move the
+	// controller to the single-node all-at-once strategy.
+	hosts, err := updaterdeploy.ListHostsWithRetry(newHostLister(), log)
+	if err != nil {
+		log.Error("error listing hosts for controller deploy strategy", "err", err)
+		return err
 	}
+	hostCount := len(hosts)
 	if err := updaterdeploy.EnsureControllerStrategy(client, app, hostCount, log); err != nil {
 		log.Error("error setting controller deploy strategy", "err", err)
 		return err

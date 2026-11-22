@@ -69,6 +69,10 @@ var (
 	updateRemoteDaemonTimeout = 5 * time.Minute
 )
 
+// updateHostLister is the discoverd host lookup used by system app deploys.
+// Tests swap it.
+var updateHostLister = func() updaterdeploy.HostLister { return cluster.NewClient() }
+
 // clusterHostCount returns how many flynn-host peers are registered. If
 // discoverd cannot be queried, it returns a non-nil error.
 func clusterHostCount() (int, error) {
@@ -1712,10 +1716,14 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images
 		log.Error("error setting router deploy strategy", "err", err)
 		return err
 	}
-	hostCount, err := clusterHostCount()
+	// No fallback guess: hostCount 1 on a multi-node cluster would move the
+	// controller to the single-node all-at-once strategy.
+	strategyHosts, err := updaterdeploy.ListHostsWithRetry(updateHostLister(), log)
 	if err != nil {
-		hostCount = 1
+		log.Error("error listing hosts for controller deploy strategy", "err", err)
+		return err
 	}
+	hostCount := len(strategyHosts)
 	if err := updaterdeploy.EnsureControllerStrategy(client, app, hostCount, log); err != nil {
 		log.Error("error setting controller deploy strategy", "err", err)
 		return err
