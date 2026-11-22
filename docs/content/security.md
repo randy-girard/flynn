@@ -831,6 +831,16 @@ cannot create accounts, which stops it squatting an address such as
 `alice@corp.com` and receiving the grants made when Alice is later invited.
 Self-signup goes through the dashboard, which calls the controller with the
 cluster key. Do not run untrusted code in Flynn.
+
+`DELETE /users/:id` (cluster-admin only) removes the user with their tokens,
+OAuth sessions, collaborator rows, memberships, and handle in one
+transaction. While the user still owns a live app (one in their personal
+account, or one with no owner account that they created) it answers `409`
+and deletes nothing; transfer or delete those apps first. Deleted apps keep
+their row, so the delete clears `created_by` on every app the user created,
+and an app they created in another account stays with that account. Any
+other row that still references the user is also a `409` naming the table,
+not a `500`.
 HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not

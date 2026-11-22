@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -205,4 +206,102 @@ func (s *S) TestExpandTokenDerivesAdminFromUserRow(c *C) {
 		code, _ = s.scopedStatus(c, http.MethodGet, tok, "/cluster/audit", "")
 		c.Assert(code, Equals, http.StatusForbidden, Commentf("scope=%q", scope))
 	}
+}
+
+func (s *S) deleteUserStatus(c *C, id string) (int, string) {
+	req, err := http.NewRequest(http.MethodDelete, s.srv.URL+"/users/"+id, nil)
+	c.Assert(err, IsNil)
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth("", authKey)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	body, err := io.ReadAll(res.Body)
+	c.Assert(err, IsNil)
+	return res.StatusCode, string(body)
+}
+
+func (s *S) appCreatedBy(c *C, appID string) *string {
+	var createdBy *string
+	c.Assert(s.hc.db.QueryRow(`SELECT created_by::text FROM apps WHERE app_id = $1`, appID).Scan(&createdBy), IsNil)
+	return createdBy
+}
+
+// A user who created an app can be deleted once the app is gone (CORE-51).
+// Deleted apps keep their row (soft delete) and apps.created_by references
+// users, so before the fix DELETE /users/:id failed with a 500 carrying the
+// raw "apps_created_by_fkey" SQL error.
+func (s *S) TestDeleteUserAfterDeletingTheirApp(c *C) {
+	u := s.createLoginUser(c, "core51-a@flynn.test", "core51-a", "pw-core51-a", false)
+	s.storePAT(c, u.ID, "user")
+	code, body := s.scopedStatus(c, http.MethodPost, s.signUser(c, u.ID, nil), "/apps", `{"name":"core51-a-app"}`)
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", body))
+	var app ct.App
+	c.Assert(json.Unmarshal([]byte(body), &app), IsNil)
+	c.Assert(app.CreatedBy, Equals, u.ID)
+	c.Assert(app.OwnerAccount, Equals, "user:"+u.ID)
+
+	// A live personal app still blocks the delete with a clear 409.
+	code, body = s.deleteUserStatus(c, u.ID)
+	c.Assert(code, Equals, http.StatusConflict, Commentf("body=%s", body))
+	c.Assert(body, Matches, `(?s).*still owns personal apps.*`)
+	_, err := s.api.tenancy.GetUser(u.ID)
+	c.Assert(err, IsNil)
+
+	// The app_deletion worker soft-deletes the row.
+	c.Assert(s.hc.db.Exec(`UPDATE apps SET deleted_at = now() WHERE app_id = $1`, app.ID), IsNil)
+
+	code, body = s.deleteUserStatus(c, u.ID)
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", body))
+	_, err = s.api.tenancy.GetUser(u.ID)
+	c.Assert(err, Equals, ErrNotFound)
+	c.Assert(s.appCreatedBy(c, app.ID), IsNil)
+	recs, err := s.api.tenancy.ListPATs(u.ID)
+	c.Assert(err, IsNil)
+	c.Assert(recs, HasLen, 0)
+}
+
+// An app the user created in another account stays with that account and
+// only loses its creator. A live app with no owner account is the creator's
+// (build tokens fall back to created_by), so it blocks the delete.
+func (s *S) TestDeleteUserKeepsAppsTheyCreatedForOthers(c *C) {
+	u := s.createLoginUser(c, "core51-b@flynn.test", "core51-b", "pw-core51-b", false)
+	org := &ct.App{Name: "core51-b-org-app", OwnerAccount: "org:core51-" + random.Hex(4), CreatedBy: u.ID}
+	s.createTestApp(c, org)
+	c.Assert(s.appCreatedBy(c, org.ID), NotNil)
+	legacy := &ct.App{Name: "core51-b-legacy-app", CreatedBy: u.ID}
+	s.createTestApp(c, legacy)
+	c.Assert(s.hc.db.Exec(`UPDATE apps SET owner_account = NULL WHERE app_id = $1`, legacy.ID), IsNil)
+
+	code, body := s.deleteUserStatus(c, u.ID)
+	c.Assert(code, Equals, http.StatusConflict, Commentf("body=%s", body))
+	c.Assert(body, Matches, `(?s).*still owns personal apps.*`)
+
+	c.Assert(s.hc.db.Exec(`UPDATE apps SET deleted_at = now() WHERE app_id = $1`, legacy.ID), IsNil)
+	code, body = s.deleteUserStatus(c, u.ID)
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", body))
+	c.Assert(s.appCreatedBy(c, org.ID), IsNil)
+	got, err := s.c.GetApp(org.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.OwnerAccount, Equals, org.OwnerAccount)
+}
+
+// Any other row that still references the user turns into a 409 with a
+// plain message, not a 500 with SQL text, and nothing is half deleted.
+func (s *S) TestDeleteUserForeignKeyConflictIs409(c *C) {
+	u := s.createLoginUser(c, "core51-c@flynn.test", "core51-c", "pw-core51-c", false)
+	s.storePAT(c, u.ID, "user")
+	c.Assert(s.hc.db.Exec(`CREATE TABLE core51_user_refs (user_id uuid NOT NULL REFERENCES users (id))`), IsNil)
+	defer s.hc.db.Exec(`DROP TABLE core51_user_refs`)
+	c.Assert(s.hc.db.Exec(`INSERT INTO core51_user_refs (user_id) VALUES ($1)`, u.ID), IsNil)
+
+	code, body := s.deleteUserStatus(c, u.ID)
+	c.Assert(code, Equals, http.StatusConflict, Commentf("body=%s", body))
+	c.Assert(body, Not(Matches), `(?s).*(violates|SQLSTATE|retry"?:\s*true).*`)
+	c.Assert(body, Matches, `(?s).*still referenced.*`)
+	_, err := s.api.tenancy.GetUser(u.ID)
+	c.Assert(err, IsNil)
+	recs, err := s.api.tenancy.ListPATs(u.ID)
+	c.Assert(err, IsNil)
+	c.Assert(recs, HasLen, 1)
 }

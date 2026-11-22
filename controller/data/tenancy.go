@@ -188,35 +188,66 @@ func (r *TenancyRepo) UpdateUserRevokingCredentials(u *ct.User, at time.Time) er
 	return nil
 }
 
+// ErrUserOwnsApps is returned by DeleteUser while the user still owns a
+// live app: one in their personal account, or one with no owner account that
+// they created (build tokens treat created_by as the owner then).
+var ErrUserOwnsApps = errors.New("tenancy: user still owns apps")
+
+// UserInUseError is returned by DeleteUser when a row the delete does not
+// clean up still references the user. Table names the referencing table.
+type UserInUseError struct{ Table string }
+
+func (e *UserInUseError) Error() string {
+	if e.Table == "" {
+		return "tenancy: user is still referenced"
+	}
+	return "tenancy: user is still referenced by " + e.Table
+}
+
+// DeleteUser removes a user and everything that only exists for them, in
+// one transaction (CORE-51). Apps keep their rows when deleted (soft delete)
+// and apps.created_by references users, so the creator is cleared on every
+// app the user created; an app in another account stays with that account.
 func (r *TenancyRepo) DeleteUser(id string) error {
-	if err := r.db.Exec(`DELETE FROM oauth_codes WHERE user_id=$1`, id); err != nil {
+	tx, err := r.db.Begin()
+	if err != nil {
 		return err
 	}
-	if err := r.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE user_id=$1`, id); err != nil {
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM apps WHERE deleted_at IS NULL
+		AND (owner_account = $1 OR (COALESCE(owner_account, '') = '' AND created_by = $2))`, "user:"+id, id).Scan(&n); err != nil {
 		return err
 	}
-	if err := r.db.Exec(`DELETE FROM oauth_sessions WHERE user_id=$1`, id); err != nil {
+	if n > 0 {
+		return ErrUserOwnsApps
+	}
+	for _, q := range []string{
+		`UPDATE apps SET created_by = NULL WHERE created_by = $1`,
+		`DELETE FROM oauth_codes WHERE user_id = $1`,
+		`DELETE FROM oauth_refresh_tokens WHERE user_id = $1`,
+		`DELETE FROM oauth_sessions WHERE user_id = $1`,
+		`DELETE FROM personal_access_tokens WHERE user_id = $1`,
+		`DELETE FROM account_collaborators WHERE user_id = $1`,
+		`DELETE FROM app_collaborators WHERE user_id = $1`,
+		`DELETE FROM memberships WHERE user_id = $1`,
+		`DELETE FROM users WHERE id = $1`,
+	} {
+		if err := tx.Exec(q, id); err != nil {
+			return userDeleteError(err)
+		}
+	}
+	if err := tx.Exec(`DELETE FROM handles WHERE account = $1`, "user:"+id); err != nil {
 		return err
 	}
-	if err := r.db.Exec(`DELETE FROM personal_access_tokens WHERE user_id=$1`, id); err != nil {
-		return err
+	return userDeleteError(tx.Commit())
+}
+
+func userDeleteError(err error) error {
+	if e, ok := err.(pgx.PgError); ok && e.Code == postgres.ForeignKeyViolation {
+		return &UserInUseError{Table: e.TableName}
 	}
-	if err := r.db.Exec(`DELETE FROM account_collaborators WHERE user_id=$1`, id); err != nil {
-		return err
-	}
-	if err := r.db.Exec(`DELETE FROM app_collaborators WHERE user_id=$1`, id); err != nil {
-		return err
-	}
-	if err := r.db.Exec(`DELETE FROM memberships WHERE user_id=$1`, id); err != nil {
-		return err
-	}
-	if err := r.db.Exec(`DELETE FROM handles WHERE account=$1`, "user:"+id); err != nil {
-		return err
-	}
-	if err := r.db.Exec(`DELETE FROM users WHERE id=$1`, id); err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (r *TenancyRepo) CountOwnedApps(account string) (int, error) {

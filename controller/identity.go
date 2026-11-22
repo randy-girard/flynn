@@ -535,17 +535,21 @@ func (c *controllerAPI) DeleteUser(ctx context.Context, w http.ResponseWriter, _
 		respondWithError(w, err)
 		return
 	}
-	n, err := c.tenancy.CountOwnedApps("user:" + id)
-	if err != nil {
-		respondWithError(w, err)
-		return
-	}
-	if n > 0 {
-		httphelper.ConflictError(w, "user still owns personal apps; transfer or delete them first")
-		return
-	}
 	if err := c.tenancy.DeleteUser(id); err != nil {
-		respondWithError(w, err)
+		var inUse *data.UserInUseError
+		switch {
+		case err == data.ErrUserOwnsApps:
+			httphelper.ConflictError(w, "user still owns personal apps; transfer or delete them first")
+		case errors.As(err, &inUse):
+			// Not the raw SQL error (CORE-51): name the table, keep the 409.
+			msg := "user is still referenced"
+			if inUse.Table != "" {
+				msg += " by " + inUse.Table
+			}
+			httphelper.ConflictError(w, msg+"; remove those references first")
+		default:
+			respondWithError(w, err)
+		}
 		return
 	}
 	_ = c.tenancy.Audit(c.actor(ctx), "user.delete", "user:"+id, "", nil)
