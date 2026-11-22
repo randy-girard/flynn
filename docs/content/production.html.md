@@ -986,7 +986,11 @@ every app) or to a comma-separated list of app names or IDs:
 flynn -a gitreceive env:set SSH_CLIENT_KEY_APPS="billing-web,billing-worker"
 ```
 
-With `SSH_CLIENT_KEY_APPS` unset, no app receives the key. For an opted-in app
+With `SSH_CLIENT_KEY_APPS` unset, no app receives the key, gitreceive does
+not write it to disk, and `ssh` submodule URLs are refused. For an opted-in
+app, gitreceive fetches `ssh` submodules with the key (strict host key
+checking against `SSH_CLIENT_HOSTS`, public addresses only; see
+[Apps — Git submodules](apps.md#git-submodules)). For an opted-in app
 the slugbuilder stages the key in a root-only file (mode 0600), loads it into
 an `ssh-agent` and deletes the file before any buildpack runs. Buildpack code
 gets `SSH_AUTH_SOCK` and can authenticate with the key while the build runs, but

@@ -526,6 +526,20 @@ node's instance credentials. Operators can deny more ranges with
 `FLYNN_JOB_EGRESS_DENY`; see
 [Production — Job egress deny list](production.html.md#job-egress-deny-list).
 
+Submodules of a `git push` are fetched by the gitreceive pre-receive hook,
+which runs as root in the system gitreceive job, not in the build job. The
+URL comes from the pushed `.gitmodules`, so the hook treats it as tenant
+input: only `https` to hosts whose every address is public (git is pinned to
+the checked addresses and does not follow redirects), and `ssh` only for apps
+in `SSH_CLIENT_KEY_APPS`. Local paths, `file://`, `*.discoverd`, other
+schemes, option-looking URLs and private, overlay and loopback addresses are
+refused before anything is contacted. Each fetch is depth 1, time limited and
+file size limited. gitreceive writes the cluster SSH client key only when
+`SSH_CLIENT_KEY_APPS` is set, to `~/.ssh/cluster_client_key` rather than the
+default identity, and passes it to ssh only for an opted-in app's submodule
+(with `IdentitiesOnly`, `BatchMode` and strict host key checking against
+`SSH_CLIENT_HOSTS`). See [Apps — Git submodules](apps.md#git-submodules).
+
 Build jobs (slugbuilder / dockerbuilder) are a separate overlay class. They
 cannot reach user jobs or the host control plane, but they can still reach
 cluster services the build needs, including blobstore. Blobstore HTTP

@@ -217,6 +217,30 @@ Deploys via `git push` can be cancelled by killing the push process with
 immediately, including a compile that is still pending, and the code will not
 be deployed.
 
+### Git submodules
+
+`git push` includes submodules: gitreceive fetches the commit each gitlink
+records from the URL in the pushed `.gitmodules`. Because that URL is chosen
+by whoever pushes and gitreceive is a system job on the cluster network, the
+URL must be one of:
+
+- `https://` to a host whose every DNS address is public. git connects only
+  to the addresses that were checked (`http.curloptResolve`) and does not
+  follow redirects.
+- `ssh://user@host/path` or `user@host:path`, also to public addresses, only
+  for apps listed in gitreceive `SSH_CLIENT_KEY_APPS` (see
+  [SSH Client Key](production.html.md#ssh-client-key)).
+
+`file://`, local paths, `http://`, `git://`, remote-helper URLs (`ext::`),
+URLs that start with `-`, `*.discoverd`, single-label names, and private,
+loopback, link-local, CGNAT (including the Flynn overlay) and NAT64 addresses
+are refused, and the push fails with `submodule <path>: cannot fetch <url>`.
+Each submodule is fetched at depth 1 for the recorded commit (falling back to
+branches and tags if the server refuses a fetch by commit ID), with a 300
+second limit and a 1 GiB limit per file. Nested submodules are not fetched.
+To use a private repository on an internal server, vendor it into the app
+repository instead.
+
 ### Building specific Git branches
 
 To deploy a different branch of the same repository, create a new app using the

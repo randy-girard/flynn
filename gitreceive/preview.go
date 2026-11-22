@@ -170,6 +170,6 @@ while read oldrev newrev refname; do
 	echo "-----> Creating preview app for $branch..."
 	app=$(/bin/gitreceived -ensure-preview "$RECEIVE_PIPELINE" "$branch" "$newrev")
 	echo "-----> Deploying $branch to $app..."
-	git-archive-all $newrev | stdbuf -oL -eL /bin/flynn-receiver "$app" "$newrev" --meta git=true --meta "git.commit=$newrev" --meta "git.branch=$branch" --meta flynn-preview=true | sed -u "s/^/"$'\e[1G\e[K'"/"
+	git-archive-all $newrev "$app" | stdbuf -oL -eL /bin/flynn-receiver "$app" "$newrev" --meta git=true --meta "git.commit=$newrev" --meta "git.branch=$branch" --meta flynn-preview=true | sed -u "s/^/"$'\e[1G\e[K'"/"
 done
 `)

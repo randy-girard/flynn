@@ -602,7 +602,7 @@ func TestArchiveTreeIncludesSubmoduleDuringQuarantine(t *testing.T) {
 	runGit(t, parent, "init", "-q", "-b", "main")
 	runGit(t, parent, "config", "user.email", "t@example.com")
 	runGit(t, parent, "config", "user.name", "t")
-	modules := "[submodule \"go-flynn-example\"]\n\tpath = go-flynn-example\n\turl = " + sub + "\n"
+	modules := "[submodule \"go-flynn-example\"]\n\tpath = go-flynn-example\n\turl = file://" + sub + "\n"
 	if err := os.WriteFile(filepath.Join(parent, ".gitmodules"), []byte(modules), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -623,12 +623,16 @@ func TestArchiveTreeIncludesSubmoduleDuringQuarantine(t *testing.T) {
 git-archive-all "$1" > "$2"
 `, "bash", rev, tarPath)
 	hook.Dir = filepath.Join(parent, ".git")
+	// A checker stand-in that allows file:// so the fetch runs offline; the
+	// real check refuses local URLs (TestSubmoduleCloneRefusesUnsafeURL).
+	stub := filepath.Join(t.TempDir(), "check")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf 'file\\n%s\\n\\n' \"$2\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	hook.Env = append(os.Environ(),
 		"GIT_DIR="+filepath.Join(parent, ".git"),
 		"GIT_QUARANTINE_PATH="+t.TempDir(),
-		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=protocol.file.allow",
-		"GIT_CONFIG_VALUE_0=always",
+		"SUBMODULE_URL_CHECK="+stub,
 	)
 	if out, err := hook.CombinedOutput(); err != nil {
 		t.Fatalf("archive: %v\n%s", err, out)

@@ -41,6 +41,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == submoduleCheckFlag {
+		if err := runCheckSubmoduleURL(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-ensure-preview" {
 		if err := runEnsurePreview(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -116,6 +123,7 @@ type gitService struct {
 
 type gitEnv struct {
 	App          string
+	AppName      string
 	Pipeline     string
 	ReceiveToken string
 }
@@ -226,7 +234,7 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(repoPath)
 
-	env := gitEnv{App: app.ID}
+	env := gitEnv{App: app.ID, AppName: app.Name}
 	if rpc == "git-receive-pack" {
 		env.ReceiveToken = h.receiveToken(app)
 	}
@@ -467,6 +475,7 @@ func gitCommand(env gitEnv, name string, args ...string) (*exec.Cmd, io.Reader) 
 	// Explicitly set the environment for the Git command
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("RECEIVE_APP=%s", env.App),
+		fmt.Sprintf("RECEIVE_APP_NAME=%s", env.AppName),
 		fmt.Sprintf("RECEIVE_PIPELINE=%s", env.Pipeline),
 	)
 	if tok := strings.TrimSpace(env.ReceiveToken); tok != "" {
@@ -529,8 +538,14 @@ func (w writeFlusher) Write(p []byte) (int, error) {
 // directory until the hook exits 0, and checkout rewrites HEAD to that SHA.
 // A failed deploy then discards the object, and the next push dies with
 // "bad object HEAD" before this hook can run.
+//
+// Arguments after rev name the app (ID and/or name) for the submodule SSH
+// opt-in. Submodule URLs are tenant input (EDGE-02): each one goes through
+// `gitreceived -check-submodule-url` first, and only the commit the gitlink
+// records is fetched, with depth 1, a time limit and a file size limit.
 const archiveTreeFunc = `git-archive-all() {
 	rev="$1"
+	shift
 	work="$(mktemp -d)"
 	cleanup() { rm -rf "$work"; }
 	trap cleanup RETURN
@@ -539,7 +554,43 @@ const archiveTreeFunc = `git-archive-all() {
 		env -u GIT_DIR -u GIT_WORK_TREE -u GIT_QUARANTINE_PATH \
 			-u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
 			-u GIT_INDEX_FILE -u GIT_PREFIX \
+			-u GIT_PROXY_COMMAND -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT \
 			"$@"
+	}
+	submodule_fetch() {
+		local sha="$1" url="$2" dest="$3"
+		shift 3
+		local plan proto fetch_url pin
+		plan="$("${SUBMODULE_URL_CHECK:-/bin/gitreceived}" -check-submodule-url "$url" "$@")" || return 1
+		{ read -r proto; read -r fetch_url; read -r pin; } <<< "$plan"
+		[ -n "$proto" ] && [ -n "$fetch_url" ] || return 1
+		local -a cfg=(-c http.followRedirects=false -c credential.helper= -c core.askPass=)
+		local ssh_cmd=""
+		case "$proto" in
+		https) [ -n "$pin" ] || return 1; cfg+=(-c "http.curloptResolve=$pin") ;;
+		ssh)
+			[ -n "$pin" ] || return 1
+			ssh_cmd="ssh -F /dev/null -i ${SSH_CLIENT_KEY_FILE:-$HOME/.ssh/cluster_client_key} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o HostKeyAlias=$pin"
+			;;
+		esac
+		local -a limit=(timeout -k 10 "${SUBMODULE_FETCH_TIMEOUT:-300}")
+		(
+			ulimit -f "${SUBMODULE_MAX_FILE_KB:-1048576}"
+			unset GIT_SSH GIT_SSH_COMMAND GIT_SSH_VARIANT
+			export GIT_ALLOW_PROTOCOL="$proto" GIT_TERMINAL_PROMPT=0
+			if [ -n "$ssh_cmd" ]; then
+				export GIT_SSH_COMMAND="$ssh_cmd"
+			fi
+			rm -rf "$dest"
+			mkdir -p "$(dirname "$dest")"
+			git_outside git init -q "$dest" || exit 1
+			if ! git_outside "${limit[@]}" git -C "$dest" "${cfg[@]}" fetch -q --no-tags --depth 1 -- "$fetch_url" "$sha"; then
+				# Servers that refuse a fetch by commit ID: fetch branches and
+				# tags (still limited) and check out the recorded commit.
+				git_outside "${limit[@]}" git -C "$dest" "${cfg[@]}" fetch -q -- "$fetch_url" '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' || exit 1
+			fi
+			git_outside git -C "$dest" -c advice.detachedHead=false checkout --force --quiet "$sha" || exit 1
+		)
 	}
 	git archive --format=tar "$rev" | tar -x -C "$work"
 	if [ -f "$work/.gitmodules" ]; then
@@ -549,14 +600,14 @@ const archiveTreeFunc = `git-archive-all() {
 			[ "$mode" = "160000" ] || continue
 			url="$(git config -f "$work/.gitmodules" --get "submodule.${path}.url" || true)"
 			[ -n "$url" ] || continue
-			dest="$work/$path"
-			rm -rf "$dest"
-			mkdir -p "$(dirname "$dest")"
 			# receive-pack exports GIT_DIR and GIT_QUARANTINE_PATH. Git 2.45+
-			# refuses ref updates in that environment, so the clone writes
-			# nothing and slugbuilder is handed an empty stream.
-			git_outside git clone --quiet "$url" "$dest"
-			git_outside git -C "$dest" checkout --force --quiet "$sha"
+			# refuses ref updates in that environment, so the fetch runs
+			# outside it (git_outside); otherwise slugbuilder gets an empty stream.
+			if ! submodule_fetch "$sha" "$url" "$work/$path" "$@" < /dev/null; then
+				echo "submodule ${path}: cannot fetch ${url} (only https to public hosts, or ssh for apps in SSH_CLIENT_KEY_APPS)" >&2
+				rm -f "$links"
+				return 1
+			fi
 		done < "$links"
 		rm -f "$links"
 	fi
@@ -571,7 +622,7 @@ set -eo pipefail;
 
 while read oldrev newrev refname; do
 	if [[ $refname = "refs/heads/master" ]] || [[ $refname = "refs/heads/main" ]]; then
-		git-archive-all $newrev | stdbuf -oL -eL /bin/flynn-receiver "$RECEIVE_APP" "$newrev" --meta git=true --meta "git.commit=$newrev"| sed -u "s/^/"$'\e[1G\e[K'"/"
+		git-archive-all $newrev "$RECEIVE_APP" "$RECEIVE_APP_NAME" | stdbuf -oL -eL /bin/flynn-receiver "$RECEIVE_APP" "$newrev" --meta git=true --meta "git.commit=$newrev"| sed -u "s/^/"$'\e[1G\e[K'"/"
 		deploy_pushed=1
 		break
 	fi
