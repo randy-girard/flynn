@@ -128,7 +128,7 @@ func parseTimestamp(buf []byte, cursor *int, msg *Message) error {
 }
 
 func parseNextField(buf []byte, cursor *int) ([]byte, error) {
-	if len(buf) < *cursor {
+	if len(buf) <= *cursor {
 		return nil, &ParseError{*cursor, "missing field"}
 	}
 	nextSpace := indexByteAfter(buf, ' ', *cursor)
@@ -148,7 +148,7 @@ func parseNextField(buf []byte, cursor *int) ([]byte, error) {
 }
 
 func parseStructuredData(buf []byte, cursor *int, msg *Message) error {
-	if len(buf) < *cursor {
+	if len(buf) <= *cursor {
 		return &ParseError{*cursor, "missing structured data field"}
 	}
 	if c := buf[*cursor]; c == '-' {
@@ -180,6 +180,15 @@ func parseStructuredData(buf []byte, cursor *int, msg *Message) error {
 	return nil
 }
 
+// indexByteAfter returns the index of the first c in buf at or after after,
+// or -1 when there is none.
 func indexByteAfter(buf []byte, c byte, after int) int {
-	return bytes.IndexByte(buf[after:], c) + after
+	if after < 0 || after > len(buf) {
+		return -1
+	}
+	i := bytes.IndexByte(buf[after:], c)
+	if i < 0 {
+		return -1
+	}
+	return i + after
 }
