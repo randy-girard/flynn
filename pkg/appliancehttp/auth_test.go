@@ -71,3 +71,65 @@ func TestSetAuthMatchesHTTPClientKey(t *testing.T) {
 		t.Fatalf("basic=%v %q", ok, pass)
 	}
 }
+
+// TestKeysSplitsControllerAndAuthKey: the controller keeps AUTH_KEY as a
+// comma-separated list so keys can rotate. Every entry is accepted, and the
+// first one is what a client sends.
+func TestKeysSplitsControllerAndAuthKey(t *testing.T) {
+	t.Setenv("CONTROLLER_KEY", "")
+	t.Setenv("AUTH_KEY", " new , old ,")
+	if got := Keys(); len(got) != 2 || got[0] != "new" || got[1] != "old" {
+		t.Fatalf("Keys()=%q", got)
+	}
+	if got := ClientKey(); got != "new" {
+		t.Fatalf("ClientKey()=%q", got)
+	}
+	t.Setenv("CONTROLLER_KEY", "ck")
+	if got := Keys(); len(got) != 3 || got[0] != "ck" {
+		t.Fatalf("Keys() with CONTROLLER_KEY=%q", got)
+	}
+	if got := ClientKey(); got != "ck" {
+		t.Fatalf("ClientKey() prefers CONTROLLER_KEY, got %q", got)
+	}
+	t.Setenv("CONTROLLER_KEY", "")
+	t.Setenv("AUTH_KEY", "")
+	if Keys() != nil || ClientKey() != "" {
+		t.Fatal("empty env must yield no keys")
+	}
+}
+
+func TestRequireKeysGuardsEverythingButStatus(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := RequireKeys([]string{"a", "b"}, ok)
+	do := func(path, key string) int {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if key != "" {
+			req.SetBasicAuth("", key)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if c := do(status.Path, ""); c != http.StatusOK {
+		t.Fatalf("status path without key = %d", c)
+	}
+	for _, p := range []string{"/x", "/debug/pprof/"} {
+		if c := do(p, ""); c != http.StatusUnauthorized {
+			t.Fatalf("%s without key = %d", p, c)
+		}
+		if c := do(p, "nope"); c != http.StatusUnauthorized {
+			t.Fatalf("%s with wrong key = %d", p, c)
+		}
+		if c := do(p, "b"); c != http.StatusOK {
+			t.Fatalf("%s with second key = %d", p, c)
+		}
+	}
+	closed := RequireKeys(nil, ok)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.SetBasicAuth("", "")
+	closed.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no configured key must fail closed, got %d", rec.Code)
+	}
+}

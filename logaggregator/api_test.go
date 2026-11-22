@@ -7,11 +7,16 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
 	"time"
 
 	. "github.com/flynn/go-check"
 	"github.com/randy-girard/flynn/logaggregator/client"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/status"
 	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 	"github.com/randy-girard/flynn/pkg/typeconv"
 )
@@ -330,4 +335,65 @@ func marshalMessage(m *rfc5424.Message) string {
 		panic(err)
 	}
 	return string(b) + "\n"
+}
+
+// TestLogAPIRequiresClusterKey: the API serves every app's buffered logs, so
+// every route except the health check needs the cluster key (EDGE-04). A
+// server with no key configured refuses everything.
+func TestLogAPIRequiresClusterKey(t *testing.T) {
+	srv := NewServer(ServerConfig{SyslogAddr: ":0", ApiAddr: ":0", ServiceName: "t", APIKeys: []string{"k1"}})
+	srv.Aggregator.feed(newMessageForApp("victim", "web.1", "secret line"))
+	api := httptest.NewServer(srv.api)
+	defer api.Close()
+
+	get := func(path string, key string) (int, string) {
+		req, _ := http.NewRequest("GET", api.URL+path, nil)
+		if key != "" {
+			req.SetBasicAuth("", key)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := ioutil.ReadAll(res.Body)
+		return res.StatusCode, string(b)
+	}
+	for _, path := range []string{"/log/victim", "/cursors", "/snapshot"} {
+		if code, body := get(path, ""); code != http.StatusUnauthorized || strings.Contains(body, "secret line") {
+			t.Fatalf("GET %s without key = %d %q", path, code, body)
+		}
+		if code, _ := get(path, "wrong"); code != http.StatusUnauthorized {
+			t.Fatalf("GET %s with wrong key = %d", path, code)
+		}
+		if code, _ := get(path, "k1"); code != http.StatusOK {
+			t.Fatalf("GET %s with key = %d", path, code)
+		}
+	}
+	if code, _ := get(status.Path, ""); code != http.StatusOK {
+		t.Fatalf("health check must stay public, got %d", code)
+	}
+
+	open := NewServer(ServerConfig{SyslogAddr: ":0", ApiAddr: ":0", ServiceName: "t"})
+	api2 := httptest.NewServer(open.api)
+	defer api2.Close()
+	res, err := http.Get(api2.URL + "/snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no configured key must fail closed, got %d", res.StatusCode)
+	}
+
+	c, _ := client.NewWithKey(api.URL, "k1")
+	rc, err := c.GetLog("victim", nil)
+	if err != nil {
+		t.Fatalf("client with key: %v", err)
+	}
+	rc.Close()
+	nokey, _ := client.NewWithKey(api.URL, "")
+	if _, err := nokey.GetCursors(); err == nil {
+		t.Fatal("client without key must get an error")
+	}
 }

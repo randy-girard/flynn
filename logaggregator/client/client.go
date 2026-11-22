@@ -10,6 +10,7 @@ import (
 
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
 	"github.com/randy-girard/flynn/logaggregator/utils"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 )
@@ -33,12 +34,25 @@ func newClient(url string, http *http.Client) *Client {
 	}
 }
 
-// NewClient creates a new Client pointing at uri.
+// New creates a Client pointing at uri. It sends the cluster key from the
+// process environment (CONTROLLER_KEY, or the first AUTH_KEY entry), which
+// every API route except the health check requires.
 func New(uri string) (*Client, error) {
 	return NewWithHTTP(uri, httphelper.RetryClient)
 }
 
-// NewClient creates a new Client pointing at uri with the specified http client.
+// NewWithKey is New with an explicit cluster key, for callers (flynn-host)
+// that resolve the key themselves.
+func NewWithKey(uri, key string) (*Client, error) {
+	c, err := NewWithHTTP(uri, httphelper.RetryClient)
+	if err != nil {
+		return nil, err
+	}
+	c.Key = key
+	return c, nil
+}
+
+// NewWithHTTP is New with the specified http client.
 func NewWithHTTP(uri string, httpClient *http.Client) (*Client, error) {
 	if uri == "" {
 		uri = "http://logaggregator.discoverd"
@@ -47,7 +61,9 @@ func NewWithHTTP(uri string, httpClient *http.Client) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newClient(u.String(), httpClient), nil
+	c := newClient(u.String(), httpClient)
+	c.Key = appliancehttp.ClientKey()
+	return c, nil
 }
 
 // GetLog returns a ReadCloser log stream of the log channel with ID channelID.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/keepalive"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 )
@@ -269,8 +270,12 @@ func main() {
 		shutdown.BeforeExit(func() { hb.Close() })
 	}
 
+	apiKeys := appliancehttp.Keys()
+	if len(apiKeys) == 0 {
+		log.Error("AUTH_KEY / CONTROLLER_KEY is not set: the router API will refuse every request")
+	}
 	log.Info("serving API requests")
-	shutdown.Fatal(http.Serve(listener, apiHandler(&r)))
+	shutdown.Fatal(http.Serve(listener, apiHandler(&r, apiKeys)))
 }
 
 type listenErr struct {

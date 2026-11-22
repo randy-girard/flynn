@@ -9,6 +9,12 @@ are provisioned via a HTTP API. Only two pieces of data are required: the domain
 name and the service name. PostgreSQL is used as a pluggable persistence backend
 so that all instances of router get the same configuration.
 
+The router's own API (`router-api`, port 5000 on the host network: `/events`,
+`/metrics`, `/debug`) requires the cluster key (`CONTROLLER_KEY` or an
+`AUTH_KEY` entry) as HTTP Basic password or Bearer token. Only
+`/.well-known/status` is public. `router/client` sends the key from its
+environment.
+
 Each router process caps in-flight HTTP requests at 512 per app
 (`parent_ref`, which the controller sets to `controller/apps/<app id>`).
 Every HTTP route of that app shares the cap, including routes to different

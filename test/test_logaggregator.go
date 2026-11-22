@@ -81,7 +81,7 @@ func (s *LogAggregatorSuite) TestReplication(t *c.C) {
 		proxy, err := s.clusterProxy(x, aggHost+":80")
 		t.Assert(err, c.IsNil)
 		defer proxy.Stop()
-		lc, _ := client.New("http://" + proxy.addr)
+		lc, _ := client.NewWithKey("http://"+proxy.addr, x.Key)
 		out, err := lc.GetLog(ish.app.ID, &logagg.LogOpts{Follow: true, Lines: &lineCount})
 		t.Assert(err, c.IsNil)
 

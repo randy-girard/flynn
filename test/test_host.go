@@ -516,7 +516,7 @@ func (s *HostSuite) TestNotifyOOM(t *c.C) {
 	appID := random.UUID()
 
 	// subscribe to init log messages from the logaggregator
-	client, err := logaggc.New("")
+	client, err := logaggc.NewWithKey("", s.clusterConf(t).Key)
 	t.Assert(err, c.IsNil)
 	opts := logagg.LogOpts{
 		Follow:      true,
@@ -879,7 +879,7 @@ func (s *HostSuite) TestLogSinks(t *c.C) {
 	defer client.DeleteApp(app.ID)
 
 	// subscribe to log messages for the test app from the test logaggregator
-	logc, err := logaggc.New("http://" + logaggProxy.addr)
+	logc, err := logaggc.NewWithKey("http://"+logaggProxy.addr, x.Key)
 	t.Assert(err, c.IsNil)
 	log, err := logc.GetLog(app.ID, &logagg.LogOpts{Follow: true})
 	t.Assert(err, c.IsNil)

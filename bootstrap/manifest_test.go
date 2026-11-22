@@ -55,7 +55,8 @@ func TestRouterAndGitreceiveKeepControllerKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(data)
-	for _, id := range []string{"router", "gitreceive"} {
+	// logaggregator and router API need it since EDGE-04.
+	for _, id := range []string{"router", "gitreceive", "logaggregator"} {
 		i := strings.Index(s, `"id": "`+id+`"`)
 		if i < 0 {
 			t.Fatalf("missing %s", id)

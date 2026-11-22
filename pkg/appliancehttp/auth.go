@@ -1,4 +1,6 @@
-// Package appliancehttp authenticates datastore appliance admin HTTP APIs.
+// Package appliancehttp authenticates datastore appliance admin HTTP APIs and
+// the other internal system APIs that take the cluster key (logaggregator,
+// router).
 package appliancehttp
 
 import (
@@ -71,5 +73,54 @@ func Unauthorized(w http.ResponseWriter) {
 	httphelper.Error(w, httphelper.JSONError{
 		Code:    httphelper.UnauthorizedErrorCode,
 		Message: "authentication required",
+	})
+}
+
+// Keys is every cluster key this process accepts: CONTROLLER_KEY, then each
+// comma-separated entry of AUTH_KEY (the controller keeps a list there so the
+// key can rotate). Empty entries are dropped; nil when neither is set.
+func Keys() []string {
+	var keys []string
+	for _, env := range []string{"CONTROLLER_KEY", "AUTH_KEY"} {
+		for _, k := range strings.Split(os.Getenv(env), ",") {
+			if k = strings.TrimSpace(k); k != "" {
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys
+}
+
+// ClientKey is the key a system process sends to another system API: the
+// first of Keys.
+func ClientKey() string {
+	if keys := Keys(); len(keys) > 0 {
+		return keys[0]
+	}
+	return ""
+}
+
+// AuthorizedAny reports whether r presents one of keys. No keys never
+// authenticates.
+func AuthorizedAny(r *http.Request, keys []string) bool {
+	for _, k := range keys {
+		if Authorized(r, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireKeys serves h only to requests that present one of keys; the health
+// check (status.Path) stays public. With no keys every other request gets
+// 401, so a release that lost its key fails closed.
+func RequireKeys(keys []string, h http.Handler) http.Handler {
+	keys = append([]string(nil), keys...)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if PublicStatusPath(r.URL.Path) || AuthorizedAny(r, keys) {
+			h.ServeHTTP(w, r)
+			return
+		}
+		Unauthorized(w)
 	})
 }

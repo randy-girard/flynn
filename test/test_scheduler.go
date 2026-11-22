@@ -792,7 +792,7 @@ func (s *SchedulerSuite) TestGracefulShutdown(t *c.C) {
 		proxy, err := s.clusterProxy(x, r.Addr)
 		t.Assert(err, c.IsNil)
 		defer proxy.Stop()
-		stream, err := routerc.NewWithAddr(proxy.addr).StreamEvents(&router.StreamEventsOptions{
+		stream, err := routerc.NewWithAddrKey(proxy.addr, x.Key).StreamEvents(&router.StreamEventsOptions{
 			EventTypes: []router.EventType{
 				router.EventTypeBackendUp,
 				router.EventTypeBackendDown,

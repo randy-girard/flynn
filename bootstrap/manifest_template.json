@@ -548,7 +548,8 @@
     "artifacts": [$image_artifact[logaggregator]],
     "release": {
       "env": {
-        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}"
       },
       "processes": {
         "app": {

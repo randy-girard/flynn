@@ -28,15 +28,19 @@ func (s *LogAggregatorTestSuite) SetUpTest(c *C) {
 	s.srv = testServer(c)
 	s.agg = s.srv.Aggregator
 	s.api = httptest.NewServer(s.srv.api)
-	s.client, err = client.New(s.api.URL)
+	s.client, err = client.NewWithKey(s.api.URL, testAPIKey)
 	c.Assert(err, IsNil)
 }
+
+// testAPIKey is the cluster key the test server accepts on its API.
+const testAPIKey = "test-cluster-key"
 
 func testServer(c *C) *Server {
 	return NewServer(ServerConfig{
 		SyslogAddr:  ":0",
 		ApiAddr:     ":0",
 		ServiceName: "test-logaggregator",
+		APIKeys:     []string{testAPIKey},
 	})
 }
 
@@ -44,7 +48,7 @@ func testClient(c *C, srv *Server) *client.Client {
 	_, port, _ := net.SplitHostPort(srv.apiListener.Addr().String())
 	url := "http://127.0.0.1:" + port + "/"
 
-	client, err := client.New(url)
+	client, err := client.NewWithKey(url, testAPIKey)
 	c.Assert(err, IsNil)
 
 	return client

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/pprof"
@@ -19,7 +20,9 @@ type API struct {
 	router *Router
 }
 
-func apiHandler(rtr *Router) http.Handler {
+// apiHandler serves the router API. /events (every route and backend),
+// /metrics and /debug need the cluster key; the health check is public.
+func apiHandler(rtr *Router, keys []string) http.Handler {
 	api := &API{router: rtr}
 	r := httprouter.New()
 
@@ -30,7 +33,7 @@ func apiHandler(rtr *Router) http.Handler {
 
 	r.HandlerFunc("GET", "/debug/*path", pprof.Handler.ServeHTTP)
 
-	return httphelper.ContextInjector("router", httphelper.NewRequestLogger(r))
+	return httphelper.ContextInjector("router", httphelper.NewRequestLogger(appliancehttp.RequireKeys(keys, r)))
 }
 
 func (api *API) StreamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request) {

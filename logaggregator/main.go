@@ -6,6 +6,7 @@ import (
 
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/logaggregator/client"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 
 	"github.com/inconshreveable/log15"
@@ -29,11 +30,16 @@ func main() {
 		serviceName = "logaggregator"
 	}
 
+	keys := appliancehttp.Keys()
+	if len(keys) == 0 {
+		log15.Error("CONTROLLER_KEY is not set: the log API will refuse every request")
+	}
 	conf := ServerConfig{
 		SyslogAddr:  ":" + logPort,
 		ApiAddr:     ":" + apiPort,
 		Discoverd:   discoverd.DefaultClient,
 		ServiceName: serviceName,
+		APIKeys:     keys,
 	}
 
 	srv := NewServer(conf)

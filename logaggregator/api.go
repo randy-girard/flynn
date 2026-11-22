@@ -12,6 +12,7 @@ import (
 	"github.com/randy-girard/flynn/logaggregator/snapshot"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
 	"github.com/randy-girard/flynn/logaggregator/utils"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/status"
@@ -22,7 +23,9 @@ import (
 	"golang.org/x/net/context"
 )
 
-func apiHandler(agg *Aggregator, cursors *HostCursors) http.Handler {
+// apiHandler serves the log API. Buffered logs of every app (and the host
+// cursors) are behind the cluster key; only the health check is public.
+func apiHandler(agg *Aggregator, cursors *HostCursors, keys []string) http.Handler {
 	api := aggregatorAPI{agg, cursors}
 	r := httprouter.New()
 
@@ -32,7 +35,7 @@ func apiHandler(agg *Aggregator, cursors *HostCursors) http.Handler {
 	r.GET("/snapshot", httphelper.WrapHandler(api.GetSnapshot))
 	return httphelper.ContextInjector(
 		"logaggregator-api",
-		httphelper.NewRequestLogger(r),
+		httphelper.NewRequestLogger(appliancehttp.RequireKeys(keys, r)),
 	)
 }
 

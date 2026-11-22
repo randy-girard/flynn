@@ -31,6 +31,7 @@ import (
 	zfsVolume "github.com/randy-girard/flynn/host/volume/zfs"
 	"github.com/randy-girard/flynn/pkg/clihelp"
 	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/controllerkey"
 	"github.com/randy-girard/flynn/pkg/instanceport"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/version"
@@ -325,6 +326,13 @@ func runDaemon(args *docopt.Args) {
 	mux := logmux.New(hostID, logDir, logger.New("host.id", hostID, "component", "logmux"))
 	sman := logmux.NewSinkManager(sinkFile, mux, state, logger.New("host.id", hostID, "component", "sinkManager"))
 	shutdown.BeforeExit(func() { sman.CloseDB() })
+	sman.SetAggregatorKey(func() string {
+		return resolveAggregatorKey(
+			func() string { return controllerkey.FromEnvOrMeta(nil) },
+			func() string { return localClusterKey(state) },
+			cli.ClusterControllerKey,
+		)
+	})
 
 	log.Info("initializing job backend", "type", backendName)
 	var backend Backend

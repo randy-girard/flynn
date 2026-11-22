@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/stream"
@@ -33,11 +34,15 @@ func NewWithHTTP(http *http.Client) Client {
 	return c
 }
 
+// newRouterClient sends the cluster key from the environment
+// (CONTROLLER_KEY, or the first AUTH_KEY entry): the router API refuses
+// requests without it.
 func newRouterClient() *client {
 	return &client{Client: &httpclient.Client{
 		ErrNotFound: ErrNotFound,
 		URL:         "http://router-api.discoverd:5000",
 		HTTP:        httphelper.RetryClient,
+		Key:         appliancehttp.ClientKey(),
 	}}
 }
 
@@ -45,6 +50,14 @@ func newRouterClient() *client {
 func NewWithAddr(addr string) Client {
 	c := newRouterClient()
 	c.URL = fmt.Sprintf("http://%s", addr)
+	return c
+}
+
+// NewWithAddrKey is NewWithAddr with an explicit cluster key.
+func NewWithAddrKey(addr, key string) Client {
+	c := newRouterClient()
+	c.URL = fmt.Sprintf("http://%s", addr)
+	c.Key = key
 	return c
 }
 

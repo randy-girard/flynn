@@ -42,6 +42,11 @@ type SinkManager struct {
 	sinks  map[string]Sink
 	state  JobStateGetter
 
+	// aggregatorKey resolves the cluster key for the logaggregator API. It
+	// has its own lock so a slow lookup never holds up sink changes.
+	keyMtx        sync.Mutex
+	aggregatorKey func() string
+
 	dbPath string
 	db     *bolt.DB
 
@@ -386,6 +391,29 @@ type LogAggregatorSink struct {
 	shutdownCh   chan struct{}
 }
 
+// aggregatorAPIURL is the logaggregator HTTP API for a sink's syslog host.
+// Tests point it at a local server.
+var aggregatorAPIURL = func(host string) string { return "http://" + host }
+
+// SetAggregatorKey sets how logaggregator sinks find the cluster key the
+// logaggregator API requires (EDGE-04). It is called on every connect, so a
+// key that was not resolvable at boot is picked up on the next reconnect.
+func (sm *SinkManager) SetAggregatorKey(f func() string) {
+	sm.keyMtx.Lock()
+	defer sm.keyMtx.Unlock()
+	sm.aggregatorKey = f
+}
+
+func (sm *SinkManager) aggregatorAPIKey() string {
+	sm.keyMtx.Lock()
+	f := sm.aggregatorKey
+	sm.keyMtx.Unlock()
+	if f == nil {
+		return ""
+	}
+	return f()
+}
+
 func NewLogAggregatorSink(sm *SinkManager, info *SinkInfo) (*LogAggregatorSink, error) {
 	cfg := &ct.LogAggregatorSinkConfig{}
 	if err := json.Unmarshal(info.Config, cfg); err != nil {
@@ -424,7 +452,7 @@ func (s *LogAggregatorSink) Connect() error {
 	}
 	// Connect to logaggregator HTTP endpoint
 	host, _, _ := net.SplitHostPort(s.addr)
-	c, err := client.New("http://" + host)
+	c, err := client.NewWithKey(aggregatorAPIURL(host), s.sm.aggregatorAPIKey())
 	if err != nil {
 		conn.Close()
 		return err

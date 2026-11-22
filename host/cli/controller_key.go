@@ -15,6 +15,13 @@ import (
 // Discoverd no longer publishes AUTH_KEY on controller instances (SEC-028).
 // Order: process env / host.json (already copied into env), then discoverd
 // meta for mixed-version rollouts, then AUTH_KEY on a running controller job.
+// ClusterControllerKey resolves the cluster controller key the way the CLI
+// and the updater do: process env, then job env listed from the cluster's
+// hosts. A key found on the cluster is cached in env and host.json.
+func ClusterControllerKey() string {
+	return controllerAPIKey(nil)
+}
+
 func controllerAPIKey(meta map[string]string) string {
 	return controllerAPIKeyFromHosts(meta, nil)
 }

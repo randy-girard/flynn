@@ -39,7 +39,10 @@ type ServerConfig struct {
 	SyslogAddr, ApiAddr string
 
 	ServiceName string
-	Discoverd   *discoverd.Client
+	// APIKeys are the cluster keys the HTTP API accepts. Empty refuses every
+	// route but the health check.
+	APIKeys   []string
+	Discoverd *discoverd.Client
 }
 
 func NewServer(conf ServerConfig) *Server {
@@ -49,7 +52,7 @@ func NewServer(conf ServerConfig) *Server {
 		Aggregator: a,
 		Cursors:    c,
 		conf:       conf,
-		api:        apiHandler(a, c),
+		api:        apiHandler(a, c, conf.APIKeys),
 		shutdown:   make(chan struct{}),
 		syslogDone: make(chan struct{}),
 	}

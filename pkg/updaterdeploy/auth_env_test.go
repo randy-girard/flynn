@@ -160,3 +160,18 @@ func TestBackfillAppAuthFillsBlobstore(t *testing.T) {
 		t.Fatalf("%v", env)
 	}
 }
+
+// TestEnsureReleaseAuthEnvLogaggregatorAndRouterGetClusterKey: both APIs
+// refuse requests without the cluster key (EDGE-04), so an upgraded cluster
+// whose release predates the key must get it before the new image starts.
+func TestEnsureReleaseAuthEnvLogaggregatorAndRouterGetClusterKey(t *testing.T) {
+	s := ClusterSecrets{ControllerKey: "ck", DiscoverdAuthKey: "dk"}
+	logagg := map[string]string{"DISCOVERD_AUTH_KEY": "dk"}
+	if !EnsureReleaseAuthEnv("logaggregator", logagg, s) || logagg["CONTROLLER_KEY"] != "ck" {
+		t.Fatalf("logaggregator env=%v", logagg)
+	}
+	router := map[string]string{}
+	if !EnsureReleaseAuthEnv("router", router, s) || router["AUTH_KEY"] != "ck" || router["CONTROLLER_KEY"] != "ck" {
+		t.Fatalf("router env=%v", router)
+	}
+}
