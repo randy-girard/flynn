@@ -26,6 +26,14 @@ finish. Idle keep-alives, TCP accepts, and file descriptors are not capped.
 A rejection is logged as `http concurrency limit` and is not a backend latency
 sample. See [Apps — Routes](../docs/content/apps.md#routes).
 
+When no backend can serve a request the router returns its built-in 503
+page. Set `ERROR_503_PAGE_URL` on the router app to serve your own page
+instead. The router downloads it once at start, before it opens any listener,
+and allows 10 seconds for the whole fetch (connect, headers and body, up to
+1 MB). If the fetch fails, times out, or returns a status other than 200, the
+router logs `using the built-in page` and starts with the built-in page. Fix
+the URL and restart the router to pick up the page.
+
 TCP routes may store a hostname and a TLS mode:
 
 * `tls_mode=""` — plaintext proxy
