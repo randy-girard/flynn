@@ -210,6 +210,25 @@ blocked, starting, and up `slugbuilder` and `dockerbuilder` jobs count.
 A compile still waiting after 30 minutes is cancelled. The run timeout
 starts when the process starts and is also at most 30 minutes.
 
+### One build at a time
+
+An app builds one push at a time. While a `git push`, a GitHub deploy
+(`flynn github:deploy`, the dashboard, or a webhook) or a preview deploy of
+the app is building, a second one is refused before it builds anything:
+
+```
+remote: -----> Push refused: a git push to this app is in progress (started 14:02:11 UTC). Wait for it to finish, then pull and push again.
+ ! [remote rejected] main -> main (pre-receive hook declined)
+```
+
+A push whose branch moved after git read it (another push landed between
+the two requests of one push) is refused the same way, with `another push
+landed first`. Pull, then push again. Other apps are not affected.
+
+The lock is a lease in the controller (`PUT /apps/:app/build-lock`). Its
+holder renews it every 40 seconds, so a gitreceive or taffy job that dies
+frees the app within two minutes.
+
 ### Cancelling Deploys
 
 Deploys via `git push` can be cancelled by killing the push process with

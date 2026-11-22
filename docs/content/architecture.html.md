@@ -279,7 +279,10 @@ releases through the controller and roll out with the same deploy logic.
 Git pushes are received over HTTPS by the gitreceive component which spawns
 a receiver that starts a new *slugbuilder* job to process the build. If the repo
 has been pushed before, a cached archive of the repo will be downloaded from the
-*blobstore* before receiving the git push. A tenant's push is authorized
+*blobstore* before receiving the git push. gitreceive holds the app's build
+lease in the controller from before that download until it stores the repo
+again, so a second push to the app is refused instead of building beside it
+(see [Apps](apps.md#one-build-at-a-time)). A tenant's push is authorized
 against the grants the controller returns for that caller from
 `GET /whoami/grants` (see [Security](security.md)).
 
@@ -300,7 +303,8 @@ BuildKit produces an image that *tarreceive* imports.
 
 Taffy clones a Git repository (including GitHub App HTTPS clones) and pipes an
 archive of the revision into *flynn-receiver*, the same builder gitreceive uses
-for `git push`. After `flynn-host plugin:install github`, the dashboard Deploy
+for `git push`; flynn-receiver takes the same build lease, so a GitHub deploy
+and a `git push` to one app do not build at once. After `flynn-host plugin:install github`, the dashboard Deploy
 tab and `flynn github:deploy` start a taffy job. GitHub App webhooks on the
 controller (and proxied at gitreceive `/github/webhook`) can start that job
 automatically.
