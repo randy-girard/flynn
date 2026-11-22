@@ -31,6 +31,11 @@ The release process type is the image `ENTRYPOINT` plus `CMD` (the same argv
 used to start the container). The dashboard Resources tab shows that command
 for each process.
 
+The CLI flattens the image into one uncompressed tar. tarreceive refuses one
+over `MAX_LAYER_SIZE` (default 32 GiB) with `layer exceeds the tarreceive
+limit` before the upload starts; see
+[Upload limits](production.html.md#upload-limits).
+
 ## Container stack
 
 To build from a `Dockerfile` on the server instead of using buildpacks, switch

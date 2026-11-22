@@ -62,12 +62,23 @@ func (c *Client) prepareReq(method, rawurl string, header http.Header, in interf
 	return c.prepareReqContext(context.Background(), method, rawurl, header, in)
 }
 
+// SizedBody is a request body whose length is known up front. It is sent
+// as the Content-Length instead of chunked, so a server with a size limit can
+// refuse it before the upload.
+type SizedBody struct {
+	io.Reader
+	Size int64
+}
+
 func (c *Client) prepareReqContext(ctx context.Context, method, rawurl string, header http.Header, in interface{}) (*http.Request, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	var payload io.Reader
+	size := int64(-1)
 	switch v := in.(type) {
+	case SizedBody:
+		payload, size = v.Reader, v.Size
 	case io.Reader:
 		payload = v
 	case nil:
@@ -82,6 +93,12 @@ func (c *Client) prepareReqContext(ctx context.Context, method, rawurl string, h
 	req, err := http.NewRequestWithContext(ctx, method, rawurl, payload)
 	if err != nil {
 		return nil, err
+	}
+	if size >= 0 {
+		req.ContentLength = size
+		if size == 0 {
+			req.Body = http.NoBody
+		}
 	}
 	if header == nil {
 		header = make(http.Header)

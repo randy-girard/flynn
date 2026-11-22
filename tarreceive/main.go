@@ -27,6 +27,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/squashfs"
 	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/uploadlimit"
 	"github.com/randy-girard/flynn/tarreceive/utils"
 )
 
@@ -55,6 +56,19 @@ func main() {
 	auth := authorizer.New([]string{authKey}, nil, tokenKey, tokenMaxValidity)
 
 	srv := newServer(auth, client)
+	if srv.maxLayerSize, err = uploadlimit.FromEnv("MAX_LAYER_SIZE", defaultMaxLayerSize); err != nil {
+		log.Fatalln("error parsing MAX_LAYER_SIZE:", err)
+	}
+	concurrency, err := uploadlimit.FromEnv("MAX_CONCURRENT_LAYERS", defaultLayerConcurrency)
+	if err != nil {
+		log.Fatalln("error parsing MAX_CONCURRENT_LAYERS:", err)
+	}
+	if concurrency > 0 {
+		srv.sem = make(chan struct{}, concurrency)
+	} else {
+		srv.sem = nil
+	}
+	log.Printf("layer limits: MAX_LAYER_SIZE=%d MAX_CONCURRENT_LAYERS=%d (0 is unlimited)", srv.maxLayerSize, concurrency)
 
 	handler := httphelper.ContextInjector(
 		"tarreceive",
@@ -64,20 +78,42 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), handler))
 }
 
+// Defaults for the layer limits (EDGE-08). flynn docker:push sends the whole
+// image as one flattened, uncompressed tar, so the size limit has to fit the
+// largest image an operator deploys; 32 GiB covers large CUDA/ML images.
+// Operators change them with `flynn -a tarreceive env:set`.
+const (
+	defaultMaxLayerSize     = 32 << 30
+	defaultLayerConcurrency = 2
+)
+
 type server struct {
 	router *httprouter.Router
 	auth   *authorizer.Authorizer
 	client controller.Client
 	// fetchLayer reads a stored layer config; ct.ErrNotFound when absent.
 	fetchLayer func(id string) (*ct.ImageLayer, error)
+	// maxLayerSize caps the layer tar a POST may send; 0 is no limit.
+	maxLayerSize int64
+	// sem bounds how many layers unpack and run mksquashfs at once; nil
+	// is no limit.
+	sem chan struct{}
+	// squash builds the squashfs at dst from the directory src.
+	squash func(src, dst string) error
+	// upload PUTs data to a blobstore URL.
+	upload func(data io.Reader, url string) error
 }
 
 func newServer(auth *authorizer.Authorizer, client controller.Client) *server {
 	s := &server{
-		router:     httprouter.New(),
-		auth:       auth,
-		client:     client,
-		fetchLayer: blobstoreLayer,
+		router:       httprouter.New(),
+		auth:         auth,
+		client:       client,
+		fetchLayer:   blobstoreLayer,
+		maxLayerSize: defaultMaxLayerSize,
+		sem:          make(chan struct{}, defaultLayerConcurrency),
+		squash:       mksquashfs,
+		upload:       upload,
 	}
 	s.router.GET("/layer/:id", s.handleGetLayer)
 	s.router.POST("/layer/:id", s.handleCreateLayer)
@@ -143,16 +179,40 @@ func blobstoreLayer(id string) (*ct.ImageLayer, error) {
 	return &layer, nil
 }
 
+// mksquashfs builds a layer squashfs with the shared layer arguments.
+func mksquashfs(src, dst string) error {
+	if out, err := exec.Command("mksquashfs", squashfs.LayerArgs(src, dst, "-processors", squashfs.ProcessorCount(runtime.NumCPU()))...).CombinedOutput(); err != nil {
+		return fmt.Errorf("mksquashfs error: %s: %s", err, out)
+	}
+	return nil
+}
+
+// layerTooLarge answers 413 naming the limit and the setting that raises it.
+func (s *server) layerTooLarge(w http.ResponseWriter) {
+	httphelper.JSON(w, http.StatusRequestEntityTooLarge, httphelper.JSONError{
+		Code: httphelper.RequestBodyTooBigErrorCode,
+		Message: fmt.Sprintf("layer exceeds the tarreceive limit of %s; an operator can raise it with `flynn -a tarreceive env:set MAX_LAYER_SIZE=<size>`",
+			uploadlimit.Format(s.maxLayerSize)),
+	})
+}
+
 func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	id := p.ByName("id")
 	flat := r.Header.Get("X-Flynn-Flattened-Layer") == "1"
+
+	// EDGE-08: refuse a body over the limit before writing any of it.
+	if s.maxLayerSize > 0 && r.ContentLength > s.maxLayerSize {
+		s.layerTooLarge(w)
+		return
+	}
+	body := uploadlimit.NewReader(r.Body, s.maxLayerSize)
 
 	// The layer is named by the SHA256 of its tar. Once its config is
 	// stored, keep it: rebuilding can produce different squashfs bytes, and
 	// images that already name the old hash would no longer verify (NEW-05).
 	if existing, err := s.fetchLayer(id); err == nil {
 		// Read the upload so the client sees the answer, not a reset.
-		io.Copy(ioutil.Discard, r.Body)
+		io.Copy(ioutil.Discard, body)
 		httphelper.JSON(w, http.StatusOK, existing)
 		return
 	} else if err != ct.ErrNotFound {
@@ -173,7 +233,7 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 			return nil, err
 		}
 		tarHash := sha256.New()
-		if _, err := io.Copy(io.MultiWriter(tarFile, tarHash), r.Body); err != nil {
+		if _, err := io.Copy(io.MultiWriter(tarFile, tarHash), body); err != nil {
 			tarFile.Close()
 			return nil, err
 		}
@@ -184,6 +244,16 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		// check the SHA256 hash
 		if hex.EncodeToString(tarHash.Sum(nil)) != id {
 			return nil, errors.New("SHA256 mismatch")
+		}
+
+		// unpack and squash hold a slot: both use the disk and every CPU
+		if s.sem != nil {
+			select {
+			case s.sem <- struct{}{}:
+				defer func() { <-s.sem }()
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
 		}
 
 		// extract the tar
@@ -211,8 +281,8 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 
 		// create squashfs layer
 		layerPath := filepath.Join(tmpDir, "layer.squashfs")
-		if out, err := exec.Command("mksquashfs", squashfs.LayerArgs(extractDir, layerPath, "-processors", squashfs.ProcessorCount(runtime.NumCPU()))...).CombinedOutput(); err != nil {
-			return nil, fmt.Errorf("mksquashfs error: %s: %s", err, out)
+		if err := s.squash(extractDir, layerPath); err != nil {
+			return nil, err
 		}
 
 		// generate squashfs layer SHA
@@ -232,7 +302,7 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		if _, err := layerFile.Seek(0, os.SEEK_SET); err != nil {
 			return nil, err
 		}
-		if err := upload(layerFile, utils.LayerURL(id)); err != nil {
+		if err := s.upload(layerFile, utils.LayerURL(id)); err != nil {
 			return nil, err
 		}
 
@@ -248,12 +318,16 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		if err != nil {
 			return nil, err
 		}
-		if err := upload(bytes.NewReader(layerData), utils.ConfigURL(id)); err != nil {
+		if err := s.upload(bytes.NewReader(layerData), utils.ConfigURL(id)); err != nil {
 			return nil, err
 		}
 
 		return layer, nil
 	}()
+	if body.Exceeded {
+		s.layerTooLarge(w)
+		return
+	}
 	if err != nil {
 		httphelper.Error(w, err)
 		return
@@ -269,7 +343,7 @@ func (s *server) handleCreateArtifact(w http.ResponseWriter, r *http.Request, p 
 	}
 	rawManifest := image.RawManifest()
 	imageURL := fmt.Sprintf("http://blobstore.discoverd/tarreceive/images/%s.json", image.ID())
-	if err := upload(bytes.NewReader(rawManifest), imageURL); err != nil {
+	if err := s.upload(bytes.NewReader(rawManifest), imageURL); err != nil {
 		httphelper.Error(w, err)
 		return
 	}

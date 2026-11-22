@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/httpclient"
@@ -86,7 +87,30 @@ func (c *Client) createLayer(id string, src io.Reader, flat bool) (*ct.ImageLaye
 	if flat {
 		header.Set("X-Flynn-Flattened-Layer", "1")
 	}
-	return &layer, c.PostWithHeader("/layer/"+id, header, src, &layer)
+	var body interface{} = src
+	if size, ok := remaining(src); ok {
+		// send the length so tarreceive can refuse an oversize layer
+		// before the upload (EDGE-08)
+		body = httpclient.SizedBody{Reader: src, Size: size}
+	}
+	return &layer, c.PostWithHeader("/layer/"+id, header, body, &layer)
+}
+
+// remaining is the number of bytes left to read in a regular file.
+func remaining(src io.Reader) (int64, bool) {
+	f, ok := src.(*os.File)
+	if !ok {
+		return 0, false
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return 0, false
+	}
+	pos, err := f.Seek(0, io.SeekCurrent)
+	if err != nil || pos > info.Size() {
+		return 0, false
+	}
+	return info.Size() - pos, true
 }
 
 func (c *Client) CreateArtifact(manifest *ct.ImageManifest) (*ct.Artifact, error) {
