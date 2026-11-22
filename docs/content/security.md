@@ -566,7 +566,9 @@ job on the host, or one it looks up from the cluster. The logaggregator syslog
 port has no authentication, so it is reachable only from hosts and platform
 jobs (gitreceive ships push progress there): user and build jobs are covered
 by their overlay drops, and datastore engines are dropped by
-`flynn-net-logagg`. Blobstore HTTP
+`flynn-net-logagg`. A malformed frame on that port (a zero, negative or
+oversized MSG-LEN) closes only the sending connection, and a truncated
+RFC5424 header is a parse error, not a crash. Blobstore HTTP
 requires the cluster `AUTH_KEY` / `CONTROLLER_KEY` (Basic or Bearer) for
 object GET/PUT/DELETE. `/.well-known/status` and `HEAD /` stay
 unauthenticated so bootstrap and health checks work. Per-app

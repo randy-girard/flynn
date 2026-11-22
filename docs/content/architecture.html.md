@@ -326,6 +326,9 @@ application from the slug.
 The logaggregator takes log lines from jobs running on each host and buffers
 the newest 10,000 lines for each app in that aggregator process. The lines
 are sent from flynn-host as RFC6587-framed RFC5424 syslog messages over TCP.
+A frame whose MSG-LEN is not a positive number of at most 11,000 bytes closes
+that one connection and is logged, and a frame that is not valid RFC5424 is
+logged and skipped; the aggregator and its other connections keep running.
 The ring is a live tail, not retention. Each host also keeps about 200MB of
 log files per app. A cluster that needs to keep logs adds a syslog sink
 with `flynn-host log-sink:add`. Hosted and self-hosted clusters use that

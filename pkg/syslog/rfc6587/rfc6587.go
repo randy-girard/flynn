@@ -48,6 +48,11 @@ func split(newlines bool, data []byte, atEOF bool) (advance int, token []byte, e
 		if err != nil {
 			return 0, nil, err
 		}
+		// Atoi accepts a sign, so "-5" parses; a negative or zero length
+		// would make end <= i and the slice below panic.
+		if length <= 0 {
+			return 0, nil, fmt.Errorf("MSG-LEN must be positive, got %d", length)
+		}
 		if length > MaxMsgLen {
 			return 0, nil, fmt.Errorf("maximum MSG-LEN is %d, got %d", MaxMsgLen, length)
 		}

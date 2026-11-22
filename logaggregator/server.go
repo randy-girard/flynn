@@ -33,6 +33,8 @@ type Server struct {
 	shutdown chan struct{}
 
 	testMessageHook chan struct{}
+	// syslogSplit frames syslog connections; tests replace it.
+	syslogSplit bufio.SplitFunc
 }
 
 type ServerConfig struct {
@@ -49,12 +51,13 @@ func NewServer(conf ServerConfig) *Server {
 	a := NewAggregator()
 	c := NewHostCursors()
 	return &Server{
-		Aggregator: a,
-		Cursors:    c,
-		conf:       conf,
-		api:        apiHandler(a, c, conf.APIKeys),
-		shutdown:   make(chan struct{}),
-		syslogDone: make(chan struct{}),
+		Aggregator:  a,
+		Cursors:     c,
+		conf:        conf,
+		api:         apiHandler(a, c, conf.APIKeys),
+		shutdown:    make(chan struct{}),
+		syslogDone:  make(chan struct{}),
+		syslogSplit: rfc6587.Split,
 	}
 }
 
@@ -180,8 +183,16 @@ func (s *Server) drainSyslogConn(conn net.Conn) {
 		conn.Close()
 	}()
 
+	// A panic while reading one connection must only drop that connection,
+	// not exit the process and stop log collection for the cluster.
+	defer func() {
+		if r := recover(); r != nil {
+			log15.Error("syslog connection panic, closing it", "remote", conn.RemoteAddr(), "panic", r)
+		}
+	}()
+
 	sc := bufio.NewScanner(conn)
-	sc.Split(rfc6587.Split)
+	sc.Split(s.syslogSplit)
 	for sc.Scan() {
 		msgBytes := sc.Bytes()
 		// slice in msgBytes could get modified on next Scan(), need to copy it
@@ -198,6 +209,9 @@ func (s *Server) drainSyslogConn(conn net.Conn) {
 		if s.testMessageHook != nil {
 			s.testMessageHook <- struct{}{}
 		}
+	}
+	if err := sc.Err(); err != nil {
+		log15.Error("syslog framing error, closing connection", "remote", conn.RemoteAddr(), "err", err)
 	}
 }
 
