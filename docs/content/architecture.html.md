@@ -282,7 +282,14 @@ has been pushed before, a cached archive of the repo will be downloaded from the
 *blobstore* before receiving the git push. gitreceive holds the app's build
 lease in the controller from before that download until it stores the repo
 again, so a second push to the app is refused instead of building beside it
-(see [Apps](apps.md#one-build-at-a-time)). A tenant's push is authorized
+(see [Apps](apps.md#one-build-at-a-time)). A failed download of the cached
+repo fails the push with a 500 and leaves no temporary directory behind.
+After a push, the repo is stored back; a transport error or a 5xx is retried
+twice, and a refusal (for example a 401 or 413) is not. A final failure is
+logged as `uploadRepo` with the app name: the build is already deployed,
+and the next push starts from the older cache and sends the missing objects
+again. Both transfers have a one-minute bound on the blobstore's answer and
+a 30-minute bound overall. A tenant's push is authorized
 against the grants the controller returns for that caller from
 `GET /whoami/grants` (see [Security](security.md)).
 
