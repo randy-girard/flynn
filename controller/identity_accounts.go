@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -25,16 +27,24 @@ func (c *controllerAPI) SuspendAccount(ctx context.Context, w http.ResponseWrite
 		respondWithError(w, err)
 		return
 	}
-	if id, ok := strings.CutPrefix(account, "user:"); ok {
-		if u, err := c.tenancy.GetUser(id); err == nil {
-			u.Suspended = true
-			_ = c.tenancy.UpdateUser(u)
-		}
+	if err := c.setAccountUserSuspended(account, true); err != nil {
+		respondWithError(w, err)
+		return
 	}
-	c.scaleAccountToZero(account)
-	_ = c.tenancy.Audit(c.actor(ctx), "account.suspend", account, "", map[string]string{
-		"intent": "scale_to_zero",
-	})
+	// The account is marked suspended before its apps are scaled down, so
+	// a failed scale still blocks logins and new work. The error is
+	// returned so the caller (billing) retries instead of believing the
+	// tenant is stopped; a retry is safe.
+	scaleErr := c.scaleAccountToZero(account)
+	audit := map[string]string{"intent": "scale_to_zero"}
+	if scaleErr != nil {
+		audit["scale_failed"] = "true"
+	}
+	_ = c.tenancy.Audit(c.actor(ctx), "account.suspend", account, "", audit)
+	if scaleErr != nil {
+		respondWithError(w, scaleErr)
+		return
+	}
 	w.WriteHeader(200)
 }
 
@@ -44,11 +54,9 @@ func (c *controllerAPI) UnsuspendAccount(ctx context.Context, w http.ResponseWri
 		respondWithError(w, err)
 		return
 	}
-	if id, ok := strings.CutPrefix(account, "user:"); ok {
-		if u, err := c.tenancy.GetUser(id); err == nil {
-			u.Suspended = false
-			_ = c.tenancy.UpdateUser(u)
-		}
+	if err := c.setAccountUserSuspended(account, false); err != nil {
+		respondWithError(w, err)
+		return
 	}
 	_ = c.tenancy.Audit(c.actor(ctx), "account.unsuspend", account, "", map[string]string{
 		"intent": "restore_logins_only",
@@ -56,22 +64,50 @@ func (c *controllerAPI) UnsuspendAccount(ctx context.Context, w http.ResponseWri
 	w.WriteHeader(200)
 }
 
-func (c *controllerAPI) scaleAccountToZero(account string) {
+// setAccountUserSuspended mirrors the suspension onto the user row when the
+// account is a user's own ("user:<id>"). An account with no user row (an
+// org, or a user that was never created) has nothing to update.
+func (c *controllerAPI) setAccountUserSuspended(account string, suspended bool) error {
+	id, ok := strings.CutPrefix(account, "user:")
+	if !ok {
+		return nil
+	}
+	u, err := c.tenancy.GetUser(id)
+	if err == data.ErrNotFound {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	u.Suspended = suspended
+	return c.tenancy.UpdateUser(u)
+}
+
+// scaleAccountToZero asks for every process of every formation of the
+// account's own (non-system) apps to scale to zero. It tries every
+// formation and returns the failures joined, so one bad app does not leave
+// the others running and the caller still learns that the account is not
+// fully stopped.
+func (c *controllerAPI) scaleAccountToZero(account string) error {
 	apps, err := c.appRepo.ListByOwner(account)
 	if err != nil {
-		return
+		return fmt.Errorf("list apps of %s: %w", account, err)
 	}
+	var errs []error
 	for _, app := range apps {
 		if app.System() {
 			continue
 		}
 		forms, err := c.formationRepo.List(app.ID)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("list formations of app %s: %w", app.Name, err))
 			continue
 		}
 		for _, f := range forms {
 			relRaw, err := c.releaseRepo.Get(f.ReleaseID)
-			if err != nil {
+			if err == data.ErrNotFound {
+				continue
+			} else if err != nil {
+				errs = append(errs, fmt.Errorf("get release %s of app %s: %w", f.ReleaseID, app.Name, err))
 				continue
 			}
 			rel, _ := relRaw.(*ct.Release)
@@ -86,9 +122,12 @@ func (c *controllerAPI) scaleAccountToZero(account string) {
 				continue
 			}
 			req := newScaleRequest(&ct.Formation{AppID: app.ID, ReleaseID: f.ReleaseID, Processes: zeros}, rel)
-			_, _ = c.formationRepo.AddScaleRequest(req, false)
+			if _, err := c.formationRepo.AddScaleRequest(req, false); err != nil {
+				errs = append(errs, fmt.Errorf("scale app %s to zero: %w", app.Name, err))
+			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 func (c *controllerAPI) GetQuota(ctx context.Context, w http.ResponseWriter, _ *http.Request) {

@@ -112,7 +112,10 @@ Remove a collaborator from the current context account, or from -a <app>.
 	register("account:suspend", runAccountSuspend(true), `
 usage: flynn account:suspend <handle>
 
-Suspend an account so it cannot create or run apps.
+Suspend an account so it cannot create or run apps. The account is marked
+suspended first, then every formation of its own apps is scaled to zero. If a
+scale-down fails the command exits with an error and the account stays
+suspended; run it again to finish stopping the apps.
 `)
 	register("account:unsuspend", runAccountSuspend(false), `
 usage: flynn account:unsuspend <handle>

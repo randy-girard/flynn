@@ -462,9 +462,9 @@ func (c *controllerAPI) PatchUser(ctx context.Context, w http.ResponseWriter, re
 	}
 	if body.Suspended != nil {
 		u.Suspended = *body.Suspended
-		_ = c.tenancy.SetAccountSuspended("user:"+u.ID, *body.Suspended)
-		if *body.Suspended {
-			c.scaleAccountToZero("user:" + u.ID)
+		if err := c.tenancy.SetAccountSuspended("user:"+u.ID, *body.Suspended); err != nil {
+			respondWithError(w, err)
+			return
 		}
 	}
 	// A changed password revokes every credential the user holds, the
@@ -484,10 +484,20 @@ func (c *controllerAPI) PatchUser(ctx context.Context, w http.ResponseWriter, re
 		respondWithError(w, err)
 		return
 	}
+	// Scale down only once the user row says suspended, as
+	// SuspendAccount does; a failure is returned so the caller retries.
+	var scaleErr error
+	if body.Suspended != nil && *body.Suspended {
+		scaleErr = c.scaleAccountToZero("user:" + u.ID)
+	}
 	u.PasswordHash = ""
 	audit := userUpdateAudit(&body)
 	audit.CredentialsRevoked = passwordChanged
 	_ = c.tenancy.Audit(c.actor(ctx), "user.update", "user:"+u.ID, "", audit)
+	if scaleErr != nil {
+		respondWithError(w, scaleErr)
+		return
+	}
 	httphelper.JSON(w, 200, u)
 }
 

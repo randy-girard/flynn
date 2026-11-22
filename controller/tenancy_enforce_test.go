@@ -520,3 +520,143 @@ func (s *S) TestPrepareNewAppHostedForeignOwnerNotCounted(c *C) {
 	c.Assert(code, Equals, 200, Commentf("%s", raw))
 	c.Assert(app.OwnerAccount, Equals, "user:"+a.ID)
 }
+
+// injectRowFailure makes the next writes to one row of table fail inside
+// postgres: a BEFORE trigger raises for rows whose column equals value. It
+// stands in for a repo error (lost connection, constraint, timeout) at a
+// precise point of a handler. The returned func removes the trigger.
+func (s *S) injectRowFailure(c *C, table, op, column, value string) func() {
+	name := "core45_fail_" + strings.ReplaceAll(random.UUID(), "-", "")
+	c.Assert(s.hc.db.Exec(fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger AS $f$
+BEGIN
+	IF NEW.%s::text = '%s' THEN
+		RAISE EXCEPTION 'injected %s failure';
+	END IF;
+	RETURN NEW;
+END
+$f$ LANGUAGE plpgsql`, name, column, value, table)), IsNil)
+	c.Assert(s.hc.db.Exec(fmt.Sprintf(`CREATE TRIGGER %s BEFORE %s ON %s FOR EACH ROW EXECUTE FUNCTION %s()`, name, op, table, name)), IsNil)
+	return func() {
+		c.Assert(s.hc.db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON %s`, name, table)), IsNil)
+		c.Assert(s.hc.db.Exec(fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, name)), IsNil)
+	}
+}
+
+// keyStatus sends one request with the cluster key.
+func (s *S) keyStatus(c *C, method, path, body string) (int, string) {
+	var r io.Reader
+	if body != "" {
+		r = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, s.srv.URL+path, r)
+	c.Assert(err, IsNil)
+	req.Header.Set("Accept", "application/json")
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.SetBasicAuth("", authKey)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	got, err := io.ReadAll(res.Body)
+	c.Assert(err, IsNil)
+	return res.StatusCode, string(got)
+}
+
+// suspendFixture is an account with one app running web=2.
+func (s *S) suspendFixture(c *C, account string) (*ct.App, *ct.Release) {
+	app := s.createTestApp(c, &ct.App{Name: "core45-" + random.String(8), OwnerAccount: account})
+	release := s.createTestRelease(c, app.ID, &ct.Release{Processes: map[string]ct.ProcessType{"web": {}}})
+	s.createTestFormation(c, &ct.Formation{AppID: app.ID, ReleaseID: release.ID, Processes: map[string]int{"web": 2}})
+	return app, release
+}
+
+// POST /accounts/:id/suspend answered 200 when the scale-to-zero of the
+// account's apps failed, so billing believed the tenant was stopped while
+// its processes kept running. The failure is reported, and a retry after
+// the fault clears scales the app down.
+func (s *S) TestSuspendReportsScaleFailure(c *C) {
+	account := "user:" + random.UUID()
+	app, release := s.suspendFixture(c, account)
+	undo := s.injectRowFailure(c, "scale_requests", "INSERT", "app_id", app.ID)
+	code, body := s.keyStatus(c, http.MethodPost, "/accounts/"+account+"/suspend", `{}`)
+	undo()
+	c.Assert(code, Equals, http.StatusInternalServerError, Commentf("body=%s", body))
+	f, err := s.c.GetFormation(app.ID, release.ID)
+	c.Assert(err, IsNil)
+	c.Assert(f.Processes["web"], Equals, 2)
+
+	code, body = s.keyStatus(c, http.MethodPost, "/accounts/"+account+"/suspend", `{}`)
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", body))
+	f, err = s.c.GetFormation(app.ID, release.ID)
+	c.Assert(err, IsNil)
+	c.Assert(f.Processes["web"], Equals, 0)
+}
+
+// Suspending a user account must also mark the user row suspended (that is
+// what blocks its logins); a failed write was ignored.
+func (s *S) TestSuspendReportsUserUpdateFailure(c *C) {
+	tag := random.String(8)
+	u := s.createLoginUser(c, "core45-"+tag+"@flynn.test", "core45-"+tag, "pw-"+tag, false)
+	undo := s.injectRowFailure(c, "users", "UPDATE", "id", u.ID)
+	code, body := s.keyStatus(c, http.MethodPost, "/accounts/user:"+u.ID+"/suspend", `{}`)
+	undo()
+	c.Assert(code, Equals, http.StatusInternalServerError, Commentf("body=%s", body))
+	got, err := s.api.tenancy.GetUser(u.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Suspended, Equals, false)
+}
+
+// Unsuspend dropped the same user-row error, leaving logins blocked while
+// answering 200.
+func (s *S) TestUnsuspendReportsUserUpdateFailure(c *C) {
+	tag := random.String(8)
+	u := s.createLoginUser(c, "core45u-"+tag+"@flynn.test", "core45u-"+tag, "pw-"+tag, false)
+	code, body := s.keyStatus(c, http.MethodPost, "/accounts/user:"+u.ID+"/suspend", `{}`)
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", body))
+	undo := s.injectRowFailure(c, "users", "UPDATE", "id", u.ID)
+	code, body = s.keyStatus(c, http.MethodPost, "/accounts/user:"+u.ID+"/unsuspend", `{}`)
+	undo()
+	c.Assert(code, Equals, http.StatusInternalServerError, Commentf("body=%s", body))
+	got, err := s.api.tenancy.GetUser(u.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Suspended, Equals, true)
+}
+
+// PATCH /users/:id {"suspended":true} runs the same scale-to-zero and
+// ignored both its error and the account_state write error.
+func (s *S) TestPatchUserSuspendReportsScaleFailure(c *C) {
+	tag := random.String(8)
+	u := s.createLoginUser(c, "core45p-"+tag+"@flynn.test", "core45p-"+tag, "pw-"+tag, false)
+	app, release := s.suspendFixture(c, "user:"+u.ID)
+	undo := s.injectRowFailure(c, "scale_requests", "INSERT", "app_id", app.ID)
+	code, body := s.keyStatus(c, http.MethodPatch, "/users/"+u.ID, `{"suspended":true}`)
+	undo()
+	c.Assert(code, Equals, http.StatusInternalServerError, Commentf("body=%s", body))
+	f, err := s.c.GetFormation(app.ID, release.ID)
+	c.Assert(err, IsNil)
+	c.Assert(f.Processes["web"], Equals, 2)
+
+	code, body = s.keyStatus(c, http.MethodPatch, "/users/"+u.ID, `{"suspended":true}`)
+	c.Assert(code, Equals, http.StatusOK, Commentf("body=%s", body))
+	f, err = s.c.GetFormation(app.ID, release.ID)
+	c.Assert(err, IsNil)
+	c.Assert(f.Processes["web"], Equals, 0)
+	got, err := s.api.tenancy.GetUser(u.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Suspended, Equals, true)
+}
+
+// PATCH /users/:id {"suspended":true} ignored a failed account_state write,
+// so the account was not suspended for quota and authz checks.
+func (s *S) TestPatchUserSuspendReportsAccountStateFailure(c *C) {
+	tag := random.String(8)
+	u := s.createLoginUser(c, "core45s-"+tag+"@flynn.test", "core45s-"+tag, "pw-"+tag, false)
+	undo := s.injectRowFailure(c, "account_state", "INSERT OR UPDATE", "account", "user:"+u.ID)
+	code, body := s.keyStatus(c, http.MethodPatch, "/users/"+u.ID, `{"suspended":true}`)
+	undo()
+	c.Assert(code, Equals, http.StatusInternalServerError, Commentf("body=%s", body))
+	got, err := s.api.tenancy.GetUser(u.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Suspended, Equals, false)
+}

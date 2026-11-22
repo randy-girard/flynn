@@ -438,7 +438,7 @@ func (s *S) TestScaleAccountToZeroListsOnlyTheAccountsApps(c *C) {
 	cs := s.newCountingServer(c, 5)
 	defer cs.close()
 	cs.counter.reset()
-	cs.api.scaleAccountToZero(account)
+	c.Assert(cs.api.scaleAccountToZero(account), IsNil)
 	c.Assert(cs.counter.rowsFor("app_list"), HasLen, 0)
 	c.Assert(cs.counter.rowsFor("app_list_by_owner"), DeepEquals, []int{1})
 

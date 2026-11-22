@@ -146,7 +146,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `token` / `token:create` / `token:list` / `token:revoke` | Personal access tokens. Create prints the secret once |
 | `context` / `context:list` / `context:use <handle>` | Remember a default owner handle per cluster in `~/.flynnrc`. Not an access check |
 | `collaborator` / `collaborator:list` / `collaborator:add` / `collaborator:remove` | Account collaborators, or app collaborators when `-a` is set. Roles: view, deploy, manage, admin. `collaborator:add <email>` creates a non-admin user when the email is unknown, but only for a cluster administrator; other users get a 403 and must have the invitee sign up first (`POST /users` is cluster-admin only) |
-| `account:suspend` / `account:unsuspend` / `account:quota:set` | Suspend an account or set explicit quotas. Zero and negative limits are rejected |
+| `account:suspend` / `account:unsuspend` / `account:quota:set` | Suspend an account (scales its own apps to zero; exits with an error, account still suspended, if a scale-down fails, so run it again) or set explicit quotas. Zero and negative limits are rejected |
 | `login` | Password grant against `https://auth.<domain>` (or `--oauth` for browser OAuth). Tokens are stored per cluster. The token is limited to the apps and roles granted to that user (see [App roles](#app-roles)). |
 | `git-credentials` | Git credential helper (installed into git config by `cluster:add`; not typed by hand). `cluster:add` records a native Flynn CLI. On a Mac with a Vagrant checkout, that is `/usr/local/bin/flynn` (`make vagrant-cli`), not `build-dev/bin/flynn` (a Linux symlink after image builds). |
 | `update` | Replace this CLI from GitHub Releases |
