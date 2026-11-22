@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -210,9 +211,20 @@ func (s *Server) drainSyslogConn(conn net.Conn) {
 			s.testMessageHook <- struct{}{}
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if err := sc.Err(); isSyslogFramingError(err) {
 		log15.Error("syslog framing error, closing connection", "remote", conn.RemoteAddr(), "err", err)
 	}
+}
+
+// isSyslogFramingError reports whether a scanner error came from a malformed
+// frame rather than from the connection itself (reset, timeout, shutdown),
+// which is normal when hosts reconnect and is not logged.
+func isSyslogFramingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *net.OpError
+	return !errors.As(err, &opErr) && !errors.Is(err, net.ErrClosed)
 }
 
 func NewHostCursors() *HostCursors {

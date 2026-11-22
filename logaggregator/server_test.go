@@ -183,6 +183,14 @@ func (s *ServerTestSuite) TestPanicInConnectionIsContained(c *C) {
 	waitMessage(c, srv)
 }
 
+func (s *ServerTestSuite) TestSyslogFramingErrorOnlyForBadFrames(c *C) {
+	_, _, err := rfc6587.Split([]byte("-5 x"), false)
+	c.Assert(isSyslogFramingError(err), Equals, true)
+	c.Assert(isSyslogFramingError(nil), Equals, false)
+	c.Assert(isSyslogFramingError(&net.OpError{Op: "read", Net: "tcp", Err: io.ErrUnexpectedEOF}), Equals, false)
+	c.Assert(isSyslogFramingError(fmt.Errorf("wrapped: %w", &net.OpError{Op: "read", Net: "tcp", Err: io.EOF})), Equals, false)
+}
+
 func waitMessage(c *C, srv *Server) {
 	select {
 	case <-srv.testMessageHook:
