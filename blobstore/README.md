@@ -28,6 +28,12 @@ content addressed, so a scoped PUT over one that already exists is refused
 with `409 Conflict` and nothing is written. The cluster key may still replace
 any object.
 
+A PUT over an existing object (without `Blobstore-Offset`) replaces it
+atomically: if the upload fails or the client disconnects, the old content is
+still served. On the S3, GCS, Azure, and MinIO backends the old object is
+deleted only after the new upload is committed; if that delete fails it is left
+for `flynn-blobstore cleanup`.
+
 ```shell
 # create /file1.txt
 echo data | curl -u :$AUTH_KEY -X PUT --data-binary @- http://blobstore.discoverd/file1.txt

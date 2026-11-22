@@ -275,11 +275,15 @@ func (r *FileRepo) Put(name string, data io.Reader, offset int64, typ string) er
 	}
 	h := sha512.New().(resumable.Hash)
 	b := r.defaultBackend
+	var replaced *replacedFile
 
 create:
 	err = tx.QueryRow("INSERT INTO files (name, backend, type) VALUES ($1, $2, $3) RETURNING file_id", name, b.Name(), typ).Scan(&info.ID)
 	if postgres.IsUniquenessError(err, "") {
 		tx.Rollback()
+		// a retry after a concurrent insert also rolled back any
+		// earlier deleted_at, so nothing is replaced yet
+		replaced = nil
 		tx, err = r.db.Begin()
 		if err != nil {
 			return err
@@ -328,7 +332,11 @@ create:
 				f.Close()
 			}
 		} else {
-			// file exists, not appending, overwrite by deleting
+			// file exists, not appending, overwrite by marking the old row
+			// deleted in this transaction. An external backend object is
+			// only removed after the new upload commits (see the end of
+			// Put): a failed or interrupted upload rolls the row back and
+			// must still find its data.
 			var di backend.FileInfo
 			var externalID *string
 			var backendName string
@@ -341,19 +349,10 @@ create:
 			if externalID != nil {
 				di.ExternalID = *externalID
 			}
-			// delete old file from backend
-			if err := func() error {
-				if backendName == "postgres" {
-					// no need to call delete, it is done automatically by a trigger
-					return nil
-				}
-				b, err := r.getBackend(backendName)
-				if err != nil {
-					return err
-				}
-				return b.Delete(nil, di)
-			}(); err != nil {
-				log.Printf("Error deleting %s (%s) from backend %s: %s", di.ExternalID, name, backendName, err)
+			// the Postgres backend's large object is unlinked by a trigger
+			// inside this transaction, so it needs no deferred delete
+			if backendName != "postgres" {
+				replaced = &replacedFile{info: di, backend: backendName}
 			}
 			goto create
 		}
@@ -378,7 +377,33 @@ create:
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if replaced != nil {
+		r.deleteReplaced(name, replaced)
+	}
+	return nil
+}
+
+// replacedFile is the external backend object of a row that an overwrite
+// marked deleted.
+type replacedFile struct {
+	info    backend.FileInfo
+	backend string
+}
+
+// deleteReplaced removes the object an overwrite replaced. It runs only after
+// the overwrite committed. A failure is logged and the object stays listed
+// (its row has deleted_at set) for `flynn-blobstore cleanup`.
+func (r *FileRepo) deleteReplaced(name string, f *replacedFile) {
+	b, err := r.getBackend(f.backend)
+	if err == nil {
+		err = b.Delete(nil, f.info)
+	}
+	if err != nil {
+		log.Printf("Error deleting replaced %s (%s) from backend %s, left for cleanup: %s", f.info.ExternalID, name, f.backend, err)
+	}
 }
 
 func (r *FileRepo) Delete(name string) error {

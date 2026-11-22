@@ -671,6 +671,14 @@ and when any file fails to move. With `--delete`, a file is removed from the old
 backend only after its move is committed, so a failed run never loses data and can
 be re-run.
 
+Overwriting an object (gitreceive replaces `/repos/<app>.tar` on each push, and
+builds replace their cache tarballs) follows the same rule on S3, GCS, Azure, and
+MinIO: the new upload goes to a new backend object, and the replaced object is
+deleted only after the new one is committed. A failed or interrupted overwrite
+leaves the old content readable. If that delete fails, the replaced object stays
+in the bucket; `flynn -a blobstore run /bin/flynn-blobstore cleanup` removes
+such leftovers.
+
 The equivalent `flynn -a blobstore env:set` / `flynn -a blobstore run /bin/flynn-blobstore migrate --delete` path still works.
 
 On Flynn older than v20160924.0 the migrate binary was `/bin/flynn-blobstore-migrate`.
