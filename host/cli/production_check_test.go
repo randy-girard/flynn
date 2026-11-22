@@ -2,11 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,6 +183,7 @@ type productionFixture struct {
 	jobReleaseErr   error
 	procs           map[string]ct.ProcessType
 	env             map[string]string
+	authEnv         map[string]string // blobstore key env; nil is a keyed release
 	releaseErr      error
 	profiles        []*ct.RuntimeProfile
 	profileErr      error
@@ -259,6 +266,50 @@ func (f *productionFixture) init() {
 	}
 }
 
+// releaseEnv is the blobstore release env: the backend env plus the key env.
+// A nil authEnv stands in for a bootstrapped release (AUTH_KEY and a valid
+// ACCESS_TOKEN_KEY); an empty one is a release with no keys.
+func (f *productionFixture) releaseEnv() map[string]string {
+	if f.env == nil {
+		return nil
+	}
+	auth := f.authEnv
+	if auth == nil {
+		auth = map[string]string{"AUTH_KEY": fixtureClusterKey, "ACCESS_TOKEN_KEY": fixtureTokenKey()}
+	}
+	env := make(map[string]string, len(f.env)+len(auth))
+	for k, v := range f.env {
+		env[k] = v
+	}
+	for k, v := range auth {
+		env[k] = v
+	}
+	return env
+}
+
+const fixtureClusterKey = "fixture-cluster-key-secret"
+
+var (
+	fixtureTokenKeyOnce sync.Once
+	fixtureTokenKeyText string
+)
+
+// fixtureTokenKey is a valid ACCESS_TOKEN_KEY (base64url PKIX ECDSA public key).
+func fixtureTokenKey() string {
+	fixtureTokenKeyOnce.Do(func() {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			panic(err)
+		}
+		der, err := x509.MarshalPKIXPublicKey(&k.PublicKey)
+		if err != nil {
+			panic(err)
+		}
+		fixtureTokenKeyText = base64.URLEncoding.EncodeToString(der)
+	})
+	return fixtureTokenKeyText
+}
+
 func (f *productionFixture) checkConfig() productionCheckConfig {
 	f.init()
 	f.api = &stubProductionAPI{
@@ -267,7 +318,7 @@ func (f *productionFixture) checkConfig() productionCheckConfig {
 		placement:       f.placement,
 		placementErr:    f.placementErr,
 		jobReleaseErr:   f.jobReleaseErr,
-		release:         &ct.Release{Env: f.env, Processes: f.procs},
+		release:         &ct.Release{Env: f.releaseEnv(), Processes: f.procs},
 		releaseErr:      f.releaseErr,
 		profiles:        f.profiles,
 		profileErr:      f.profileErr,
@@ -597,6 +648,8 @@ func TestProductionCheckUsage(t *testing.T) {
 		"either tenancy mode",
 		"Tenancy does not change this line",
 		"does not write the mode",
+		"BLOBSTORE_ALLOW_UNAUTHENTICATED",
+		"refuses every object request",
 	} {
 		if !strings.Contains(cmd.usage, want) {
 			t.Fatalf("usage missing %q:\n%s", want, cmd.usage)
@@ -640,6 +693,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 		{status: "ok", check: "tenancy", detail: "mode=self_hosted", action: "flynn-host tenancy:mode hosted"},
 		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "warn", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
+		{status: "ok", check: "blobstore-auth", detail: "cluster_key=set token_key=set", action: "No blobstore auth change"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "A large cluster runs runtime:reserve"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
@@ -684,6 +738,7 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 		{status: "ok", check: "tenancy", detail: "mode=hosted", action: "Hosted mode is on"},
 		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
+		{status: "ok", check: "blobstore-auth", detail: "cluster_key=set token_key=set", action: "No blobstore auth change"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin", action: "Hosted placement reserves"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
@@ -847,6 +902,7 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 		{status: "ok", check: "tenancy", detail: "mode=hosted"},
 		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "ok", check: "blobstore", detail: "default=s3main", action: "No blobstore change"},
+		{status: "ok", check: "blobstore-auth", detail: "cluster_key=set token_key=set", action: "No blobstore auth change"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default"},
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
@@ -888,6 +944,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "fail", check: "tenancy", detail: "error=controller down", action: "not self-hosted"},
 		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
+		{status: "ok", check: "blobstore-auth", detail: "cluster_key=set token_key=set", action: "No blobstore auth change"},
 		{status: "fail", check: "zfs", detail: "pool=flynn-default file=/srv/custom.vdev", action: "zpool detach"},
 		{status: "fail", check: "reserve", detail: "mode=unknown small=false medium=false large=false scheduler=unknown", action: "not self-hosted"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
@@ -1273,7 +1330,7 @@ func TestProductionCheckColorsStatusWhenRequested(t *testing.T) {
 func requireColoredRows(t *testing.T, got string) {
 	t.Helper()
 	rows := productionRows(t, got)
-	if len(rows) != 16 {
+	if len(rows) != 17 {
 		t.Fatalf("colored table rows %d\n%s", len(rows), got)
 	}
 	if rows[1].status != "ok" || rows[1].check != "placement" || rows[1].detail != "mode=mixed" {
@@ -1767,5 +1824,67 @@ func TestProductionCheckLogSinkCoverage(t *testing.T) {
 	}
 	if !strings.Contains(commands["production:check"].usage, "GET /sinks") || !strings.Contains(commands["production:check"].usage, "does not call log-sink:list") {
 		t.Fatal("usage does not describe the controller sink list")
+	}
+}
+
+// TestProductionCheckBlobstoreAuth: a blobstore release with no cluster key and
+// no token key refuses every object request (EDGE-12), and the explicit
+// BLOBSTORE_ALLOW_UNAUTHENTICATED override opens every object. Both fail in
+// either tenancy mode. Key values are never printed.
+func TestProductionCheckBlobstoreAuth(t *testing.T) {
+	cases := []struct {
+		name   string
+		mode   string
+		auth   map[string]string
+		status string
+		detail string
+		action string
+	}{
+		{"keyed", "hosted", nil, "ok", "cluster_key=set token_key=set", "No blobstore auth change"},
+		{"controller key name", "self_hosted", map[string]string{"CONTROLLER_KEY": "k1", "ACCESS_TOKEN_KEY": fixtureTokenKey()}, "ok", "cluster_key=set token_key=set", "No blobstore auth change"},
+		{"no keys hosted", "hosted", map[string]string{}, "fail", "cluster_key=missing token_key=missing", "refuses every object request"},
+		{"no keys self-hosted", "self_hosted", map[string]string{}, "fail", "cluster_key=missing token_key=missing", "refuses every object request"},
+		{"blank keys", "hosted", map[string]string{"AUTH_KEY": " , ", "ACCESS_TOKEN_KEY": " "}, "fail", "cluster_key=missing token_key=missing", "refuses every object request"},
+		{"override open", "self_hosted", map[string]string{"BLOBSTORE_ALLOW_UNAUTHENTICATED": "1"}, "fail", "cluster_key=missing token_key=missing unauthenticated=allowed", "Every object is open"},
+		{"override true", "hosted", map[string]string{"BLOBSTORE_ALLOW_UNAUTHENTICATED": "TRUE"}, "fail", "cluster_key=missing token_key=missing unauthenticated=allowed", "Every object is open"},
+		{"override ignored with keys", "hosted", map[string]string{"AUTH_KEY": "k1", "ACCESS_TOKEN_KEY": fixtureTokenKey(), "BLOBSTORE_ALLOW_UNAUTHENTICATED": "1"}, "warn", "cluster_key=set token_key=set unauthenticated=allowed", "Unset BLOBSTORE_ALLOW_UNAUTHENTICATED"},
+		{"override off", "hosted", map[string]string{"BLOBSTORE_ALLOW_UNAUTHENTICATED": "0"}, "fail", "cluster_key=missing token_key=missing", "refuses every object request"},
+		{"no token key", "hosted", map[string]string{"AUTH_KEY": "k1"}, "warn", "cluster_key=set token_key=missing", "scoped build tokens"},
+		{"invalid token key", "hosted", map[string]string{"AUTH_KEY": "k1", "ACCESS_TOKEN_KEY": "not-a-key"}, "warn", "cluster_key=set token_key=invalid", "scoped build tokens"},
+		{"token key only", "hosted", map[string]string{"ACCESS_TOKEN_KEY": fixtureTokenKey()}, "fail", "cluster_key=missing token_key=set", "Set AUTH_KEY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &productionFixture{tenancy: ct.TenancySettings{Mode: tc.mode}, authEnv: tc.auth}
+			got, err := f.run(t)
+			row := mustCheck(t, got, tc.status, "blobstore-auth", tc.detail)
+			if !strings.Contains(row.action, tc.action) {
+				t.Fatalf("action %q missing %q", row.action, tc.action)
+			}
+			if tc.status == "fail" {
+				assertFailed(t, err)
+			}
+			for _, secret := range []string{fixtureClusterKey, fixtureTokenKey(), "k1", "not-a-key"} {
+				if strings.Contains(got, secret) {
+					t.Fatalf("leaked a key value %q:\n%s", secret, got)
+				}
+			}
+			assertProductionWidth(t, got)
+		})
+	}
+
+	// A blobstore that fails closed must also block the hosted switch.
+	f := &productionFixture{tenancy: ct.TenancySettings{Mode: "self_hosted"}, authEnv: map[string]string{}}
+	if err := hostedProductionBlock(f.checkConfig()); err == nil || !strings.Contains(err.Error(), "blobstore-auth") {
+		t.Fatalf("keyless blobstore must refuse hosted, got %v", err)
+	}
+
+	// No release: the blobstore row already fails; no second auth row.
+	f = &productionFixture{releaseErr: errors.New("no blobstore release")}
+	got, _ := f.run(t)
+	for _, row := range productionRows(t, got) {
+		if row.check == "blobstore-auth" {
+			t.Fatalf("auth row without a release:\n%s", got)
+		}
 	}
 }

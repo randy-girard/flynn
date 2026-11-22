@@ -17,6 +17,7 @@ import (
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/blobstore/data"
+	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/servicetoken"
 	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -35,7 +36,7 @@ const flannelDefaultNetwork = "100.100.0.0/16"
 const productionCheckUsage = `
 usage: flynn-host production:check [--zpool-name=<name>]
 
-Print a bordered table for tenancy, the blobstore backend, ZFS, runtime
+Print a bordered table for tenancy, the blobstore backend and auth, ZFS, runtime
 reservation, the per-host process cap, the persistent-singleton cap,
 backups, the cluster log sink, and the overlay. Columns are status,
 check, detail, and what to do. Long cells wrap inside the border. Status
@@ -55,6 +56,12 @@ and that name's backend type. Empty DEFAULT_BACKEND is postgres. A name
 whose parsed type is missing or postgres, in any case, fails when hosted and warns
 when self-hosted. The line prints that default name only, never BACKEND_*
 values. The check does not migrate.
+
+Blobstore auth reads the same release. No AUTH_KEY or CONTROLLER_KEY
+and no ACCESS_TOKEN_KEY fails: the blobstore refuses every object request.
+BLOBSTORE_ALLOW_UNAUTHENTICATED=1 with no key fails: every object is open.
+That override with keys warns, as does a missing or invalid token key.
+Tenancy does not change this line. Key values are never printed.
 
 ZFS runs zpool status -P for --zpool-name on this host. A regular-file
 leaf fails in either tenancy mode, including a mirror that still lists the
@@ -367,6 +374,7 @@ func collectProductionRows(cfg productionCheckConfig) []productionRow {
 
 	addPlacementLine(add, api, workload, placementErr, hosts, hostsErr, jobs, jobsErr)
 	addBlobstoreLine(add, mode, release, releaseErr)
+	addBlobstoreAuthLine(add, release, releaseErr)
 	addZFSLine(add, pool, zpoolRun, zpoolOut, zpoolErr, cfg.Stat)
 	addReserveLine(add, mode, profiles, profileErr)
 	addHostCapLine(add, hosts, hostsErr)
@@ -433,6 +441,69 @@ func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release,
 		status: "ok", check: "blobstore", detail: "default=" + name,
 		action: "No blobstore change.",
 	})
+}
+
+// blobstoreAllowUnauthenticatedEnv is the blobstore's explicit opt-in to
+// serve objects with no credentials (blobstore/auth.go).
+const blobstoreAllowUnauthenticatedEnv = "BLOBSTORE_ALLOW_UNAUTHENTICATED"
+
+// addBlobstoreAuthLine reports whether the blobstore release can authenticate
+// callers. Without AUTH_KEY or CONTROLLER_KEY and without ACCESS_TOKEN_KEY
+// the blobstore refuses every object request (EDGE-12); with the
+// BLOBSTORE_ALLOW_UNAUTHENTICATED override it serves every object to anyone.
+// Both fail in either tenancy mode. Only key names are printed, never values.
+// A release read error is already a blobstore fail and adds no row here.
+func addBlobstoreAuthLine(add func(productionRow), release *ct.Release, err error) {
+	if err != nil || release == nil {
+		return
+	}
+	env := release.Env
+	clusterKey := "missing"
+	for _, name := range []string{"AUTH_KEY", "CONTROLLER_KEY"} {
+		for _, k := range strings.Split(env[name], ",") {
+			if strings.TrimSpace(k) != "" {
+				clusterKey = "set"
+			}
+		}
+	}
+	tokenKey := "missing"
+	if raw := strings.TrimSpace(env["ACCESS_TOKEN_KEY"]); raw != "" {
+		tokenKey = "set"
+		if k, err := authorizer.ParseTokenKey(raw); err != nil || k == nil {
+			tokenKey = "invalid"
+		}
+	}
+	override := false
+	switch strings.ToLower(strings.TrimSpace(env[blobstoreAllowUnauthenticatedEnv])) {
+	case "1", "true":
+		override = true
+	}
+	detail := "cluster_key=" + clusterKey + " token_key=" + tokenKey
+	if override {
+		detail += " unauthenticated=allowed"
+	}
+	row := productionRow{check: "blobstore-auth", detail: detail}
+	switch {
+	case clusterKey == "missing" && tokenKey != "set" && override:
+		row.status = "fail"
+		row.action = "Every object is open to any caller. Set AUTH_KEY and ACCESS_TOKEN_KEY on the blobstore release and unset " + blobstoreAllowUnauthenticatedEnv + "."
+	case clusterKey == "missing" && tokenKey != "set":
+		row.status = "fail"
+		row.action = "The blobstore refuses every object request, so builds and deploys fail. Set AUTH_KEY (the controller key) and ACCESS_TOKEN_KEY on the blobstore release."
+	case clusterKey == "missing":
+		row.status = "fail"
+		row.action = "Cluster services authenticate with the controller key and are refused. Set AUTH_KEY on the blobstore release."
+	case override:
+		row.status = "warn"
+		row.action = "Unset " + blobstoreAllowUnauthenticatedEnv + ". The keys are enforced now, but it opens every object if they are removed."
+	case tokenKey != "set":
+		row.status = "warn"
+		row.action = "scoped build tokens are refused, so app builds fail. Set a valid ACCESS_TOKEN_KEY on the blobstore release."
+	default:
+		row.status = "ok"
+		row.action = "No blobstore auth change."
+	}
+	add(row)
 }
 
 const (
