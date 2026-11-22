@@ -228,7 +228,10 @@ after the user presses Continue. That POST is refused (HTTP 403) when the
 browser marks it cross-site or same-site (`Sec-Fetch-Site`) or when
 `Origin` is another host, so an app on another subdomain of the cluster
 domain cannot submit it. The dashboard's own `/oauth/authorize` applies
-the same redirect rule.
+the same redirect rule and the same consent step: a dashboard session shows
+the signed-in email and redirect target, and the code is issued only by a
+POST of that page from the dashboard host (a missing `Origin` and `Referer`
+is refused too).
 
 ## Sign-in attempts and password changes
 
