@@ -17,6 +17,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -119,6 +120,9 @@ type gitHandler struct {
 	httpClient *http.Client
 	prepare    func(cacheKey string) (string, error)
 	upload     func(path, cacheKey string) error
+	// uploadRetryDelay is the first wait before storeRepo retries an
+	// upload (EDGE-10); 0 means one second.
+	uploadRetryDelay time.Duration
 	// maxPushSize caps the request body of a git RPC; 0 is no limit.
 	maxPushSize int64
 	// locks holds the app's build lease for a push (EDGE-09); nil pushes
@@ -280,12 +284,8 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	success := g.handleFunc(env, g.rpc, repoPath, w, r)
 	if success && g.rpc == "git-receive-pack" && env.Refusal == "" {
-		upload := h.upload
-		if upload == nil {
-			upload = uploadRepo
-		}
-		if err := upload(repoPath, app.ID); err != nil {
-			logError(w, "uploadRepo", err)
+		if err := h.storeRepo(repoPath, app.ID); err != nil {
+			logError(w, "uploadRepo", err, "app", app.Name)
 		}
 	}
 }
@@ -361,12 +361,8 @@ func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *a
 
 	success := g.handleFunc(gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize}, g.rpc, repoPath, w, r)
 	if success && g.rpc == "git-receive-pack" {
-		upload := h.upload
-		if upload == nil {
-			upload = uploadRepo
-		}
-		if err := upload(repoPath, cacheKey); err != nil {
-			logError(w, "uploadRepo", err)
+		if err := h.storeRepo(repoPath, cacheKey); err != nil {
+			logError(w, "uploadRepo", err, "pipeline", pipeline)
 		}
 	}
 }
@@ -544,9 +540,9 @@ func fail500(w http.ResponseWriter, context string, err error) {
 	logError(w, context, err)
 }
 
-func logError(w http.ResponseWriter, msg string, err error) {
+func logError(w http.ResponseWriter, msg string, err error, ctx ...interface{}) {
 	logger, _ := ctxhelper.LoggerFromContext(w.(*httphelper.ResponseWriter).Context())
-	logger.Error(msg, "error", err)
+	logger.Error(msg, append([]interface{}{"error", err}, ctx...)...)
 }
 
 // Git subprocess helpers
@@ -754,48 +750,82 @@ if [[ -z "${deploy_pushed}" ]]; then
 fi
 `)
 
-func blobstoreCacheURL(cacheKey string) string {
-	return fmt.Sprintf("http://blobstore.discoverd/repos/%s.tar", cacheKey)
+// repoCacheBase and repoCacheClient are where the repo cache lives and the
+// client that reads and writes it. Tests point them at a fake blobstore.
+var (
+	repoCacheBase   = "http://blobstore.discoverd"
+	repoCacheClient = newRepoCacheClient(repoCacheTimeout, repoCacheHeaderTimeout)
+)
+
+// A repo cache transfer may move a repo up to the push limit inside the
+// cluster, so the whole request gets a generous bound. The blobstore must
+// answer within repoCacheHeaderTimeout once the request is sent.
+const (
+	repoCacheTimeout       = 30 * time.Minute
+	repoCacheHeaderTimeout = time.Minute
+)
+
+func newRepoCacheClient(timeout, headerTimeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ResponseHeaderTimeout: headerTimeout,
+			IdleConnTimeout:       90 * time.Second,
+			MaxIdleConnsPerHost:   2,
+		},
+	}
 }
 
+func blobstoreCacheURL(cacheKey string) string {
+	return fmt.Sprintf("%s/repos/%s.tar", repoCacheBase, cacheKey)
+}
+
+// prepareRepo downloads the app's cached repo into a new temporary
+// directory, or starts an empty one when there is no cache yet. On error the
+// directory is removed; the caller removes it after a success.
 func prepareRepo(cacheKey string) (string, error) {
 	path, err := ioutil.TempDir("", "repo-"+cacheKey)
 	if err != nil {
 		return "", err
 	}
-
-	req, err := http.NewRequest("GET", blobstoreCacheURL(cacheKey), nil)
-	if err != nil {
+	if err := fetchRepo(path, cacheKey); err != nil {
+		os.RemoveAll(path)
 		return "", err
 	}
-	blobstoreauth.Apply(req)
-	res, err := http.DefaultClient.Do(req)
+	return path, nil
+}
+
+func fetchRepo(path, cacheKey string) error {
+	req, err := http.NewRequest("GET", blobstoreCacheURL(cacheKey), nil)
 	if err != nil {
-		return "", err
+		return err
+	}
+	blobstoreauth.Apply(req)
+	res, err := repoCacheClient.Do(req)
+	if err != nil {
+		return err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode == 404 {
-		return path, initRepo(path)
+		return initRepo(path)
 	}
 	if res.StatusCode != 200 {
-		return "", fmt.Errorf("unexpected error %d retrieving cached repo", res.StatusCode)
+		return fmt.Errorf("unexpected status %d retrieving cached repo", res.StatusCode)
 	}
 
 	if err := archiver.Untar(path, tar.NewReader(res.Body)); err != nil {
-		return "", err
+		return fmt.Errorf("extracting cached repo: %w", err)
 	}
 	if err := setGitConfig(path); err != nil {
-		return "", err
+		return err
 	}
 	if err := writeRepoHook(path); err != nil {
-		return "", err
+		return err
 	}
-	if err := repairDanglingHEAD(path); err != nil {
-		return "", err
-	}
-
-	return path, nil
+	return repairDanglingHEAD(path)
 }
 
 func initRepo(path string) error {
@@ -942,20 +972,87 @@ func uploadRepo(path, cacheKey string) error {
 	errCh := make(chan error)
 	go func() {
 		err := archiver.Tar(path, tw, func(n string) bool { return strings.HasSuffix(n, ".git") || strings.Contains(n, ".git/") })
-		tw.Close()
-		w.Close()
+		if cerr := tw.Close(); err == nil {
+			err = cerr
+		}
+		// A failed archive must fail the request, not end it as a short
+		// but valid tar that the blobstore would store.
+		w.CloseWithError(err)
 		errCh <- err
 	}()
 
 	// upload the tarball to the blobstore
-	req, _ := http.NewRequest("PUT", blobstoreCacheURL(cacheKey), r)
-	blobstoreauth.Apply(req)
-	resp, err := http.DefaultClient.Do(req)
-	if err := <-errCh; err != nil {
+	req, err := http.NewRequest("PUT", blobstoreCacheURL(cacheKey), r)
+	if err != nil {
+		r.CloseWithError(err)
+		<-errCh
 		return err
 	}
-	resp.Body.Close()
-	return err
+	blobstoreauth.Apply(req)
+	resp, err := repoCacheClient.Do(req)
+	// Do closes the body on error, so the archive goroutine always ends.
+	tarErr := <-errCh
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if tarErr != nil {
+		return fmt.Errorf("archiving repo: %w", tarErr)
+	}
+	if err != nil {
+		return fmt.Errorf("uploading cached repo: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return &repoUploadError{Status: resp.StatusCode, Body: strings.TrimSpace(string(msg))}
+	}
+	return nil
+}
+
+// repoUploadError is a blobstore response other than 2xx to a repo upload.
+type repoUploadError struct {
+	Status int
+	Body   string
+}
+
+func (e *repoUploadError) Error() string {
+	msg := fmt.Sprintf("blobstore refused the cached repo: %d %s", e.Status, http.StatusText(e.Status))
+	if e.Body != "" {
+		msg += ": " + e.Body
+	}
+	return msg
+}
+
+// repoUploadAttempts bounds storeRepo's retries of one repo upload.
+const repoUploadAttempts = 3
+
+// storeRepo uploads the repo after a push, retrying a transport error or a
+// 5xx. A 4xx (for example a 401 from a bad key) will not change on retry.
+// The git response is already sent by then, so a final failure is only
+// logged: the build is deployed, and the next push starts from the older
+// cache and sends the missing objects again.
+func (h *gitHandler) storeRepo(path, cacheKey string) error {
+	upload := h.upload
+	if upload == nil {
+		upload = uploadRepo
+	}
+	delay := h.uploadRetryDelay
+	if delay == 0 {
+		delay = time.Second
+	}
+	var err error
+	for attempt := 1; attempt <= repoUploadAttempts; attempt++ {
+		if err = upload(path, cacheKey); err == nil {
+			return nil
+		}
+		var refused *repoUploadError
+		if errors.As(err, &refused) && refused.Status < 500 {
+			return err
+		}
+		if attempt < repoUploadAttempts {
+			time.Sleep(delay * time.Duration(attempt))
+		}
+	}
+	return fmt.Errorf("after %d attempts: %w", repoUploadAttempts, err)
 }
 
 func (h *gitHandler) proxyGitHubWebhook(w http.ResponseWriter, r *http.Request) {
