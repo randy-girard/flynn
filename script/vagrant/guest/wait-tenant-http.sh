@@ -1,7 +1,8 @@
 #!/bin/bash
 # After a node crash/reboot, wait until tenant HTTP apps answer again.
 # Platform status can be "healthy" while app-one still has no web job (503).
-# LIST_ONLY=1 prints app names (snapshot before a crash). TENANT_APPS pins
+# LIST_ONLY=1 prints app names (snapshot before a crash) and exits non-zero
+# when discoverd or any host cannot be read. TENANT_APPS pins
 # that list so wait still covers apps whose jobs died with the host.
 # A pinned app that has no route any more (deleted while the snapshot was
 # taken: the router fails TLS for its hostname and answers HTTP with 404) is
@@ -42,22 +43,45 @@ def get(url, headers=None, timeout=5):
     except Exception as e:
         return 0, str(e).encode()
 
-def tenant_apps(env):
+class ListError(Exception):
+    pass
+
+def tenant_apps(env, strict=False):
+    # strict (LIST_ONLY): any unreadable source is an error. An empty list
+    # from a failed read would make the reload miss apps whose jobs die with
+    # the rebooted node.
     dk = env.get("DISCOVERD_AUTH_KEY") or ""
     hk = env.get("FLYNN_HOST_AUTH_KEY") or ""
-    code, body = get("http://127.0.0.1:1111/services/flynn-host/instances", {"Auth-Key": dk})
-    hosts = json.loads(body.decode() or "[]") if code == 200 else []
+    discoverd = os.environ.get("DISCOVERD_URL") or "http://127.0.0.1:1111"
+    code, body = get(discoverd + "/services/flynn-host/instances", {"Auth-Key": dk})
+    hosts = []
+    if code == 200:
+        try:
+            hosts = json.loads(body.decode() or "[]") or []
+        except Exception:
+            if strict:
+                raise ListError("discoverd returned bad JSON for flynn-host")
+    elif strict:
+        raise ListError("discoverd flynn-host instances: HTTP %s" % code)
+    if strict and not hosts:
+        raise ListError("discoverd lists no flynn-host instances")
     names = set()
     for h in hosts:
         addr = (h.get("addr") or "").strip()
         if not addr:
+            if strict:
+                raise ListError("flynn-host instance without an address")
             continue
         c, b = get("http://%s/host/jobs?active=true" % addr, {"Auth-Key": hk}, timeout=8)
         if c != 200:
+            if strict:
+                raise ListError("jobs on host %s: HTTP %s" % (addr, c))
             continue
         try:
             data = json.loads(b.decode() or "{}")
         except Exception:
+            if strict:
+                raise ListError("jobs on host %s: bad JSON" % addr)
             continue
         items = data.values() if isinstance(data, dict) else data
         for job in items or []:
@@ -102,10 +126,18 @@ def no_route(app):
     return out.decode().strip() == "404"
 
 pinned = [a for a in os.environ.get("TENANT_APPS", "").split() if a]
-apps = pinned or tenant_apps(load_env())
+list_only = os.environ.get("LIST_ONLY") == "1"
+if pinned:
+    apps = pinned
+else:
+    try:
+        apps = tenant_apps(load_env(), strict=list_only)
+    except (ListError, OSError, ValueError) as e:
+        print("cannot list tenant apps: %s" % e, file=sys.stderr)
+        raise SystemExit(1)
 gone_tries = int(os.environ["GONE_TRIES"])
 pause = float(os.environ["SLEEP"])
-if os.environ.get("LIST_ONLY") == "1":
+if list_only:
     for a in apps:
         print(a)
     raise SystemExit(0)

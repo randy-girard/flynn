@@ -86,4 +86,62 @@ if grep -Fq "has no route" "${tmp}/out"; then
 fi
 grep -Fq "tenant HTTP ok: flap-app=200" "${tmp}/out" || fail "flapping app must end ok"
 
+# LIST_ONLY=1 is the pre-reload snapshot. It must fail, not print an empty
+# list, when discoverd or a host cannot be read: rolling reload would otherwise
+# take the list again after the crash and miss apps whose jobs died with it.
+# A small fake serves discoverd's flynn-host instances and each host's jobs.
+port_file="${tmp}/port"
+cat > "${tmp}/fake.py" <<'FAKE'
+import http.server, json, sys
+mode = sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        port = self.server.server_address[1]
+        if self.path.startswith("/services/flynn-host/instances"):
+            if mode == "discoverd-down":
+                return self.send_error(503)
+            hosts = [] if mode == "no-hosts" else [
+                {"addr": "127.0.0.1:%d" % port},
+                {"addr": "127.0.0.1:%d" % (1 if mode == "host-down" else port)},
+            ]
+            body = json.dumps(hosts).encode()
+        elif self.path.startswith("/host/jobs"):
+            body = json.dumps({
+                "a": {"job": {"metadata": {"flynn-controller.app_name": "app-one"}}},
+                "b": {"job": {"metadata": {"flynn-controller.app_name": "router", "flynn-system-app": "true"}}},
+            }).encode()
+        else:
+            return self.send_error(404)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(body)
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[1], "w").write(str(s.server_address[1]))
+s.serve_forever()
+FAKE
+list_with() {
+  local mode="$1" pid st=0
+  rm -f "${port_file}"
+  python3 "${tmp}/fake.py" "${port_file}" "${mode}" &
+  pid=$!
+  for _ in $(seq 1 50); do [[ -s "${port_file}" ]] && break; sleep 0.1; done
+  DISCOVERD_URL="http://127.0.0.1:$(cat "${port_file}")" LIST_ONLY=1 TENANT_APPS="" run || st=$?
+  kill "${pid}" 2>/dev/null || true
+  wait "${pid}" 2>/dev/null || true
+  return "${st}"
+}
+list_with ok || fail "LIST_ONLY must succeed when discoverd and every host answer"
+[[ "$(cat "${tmp}/out")" == "app-one" ]] || fail "LIST_ONLY must print only tenant apps"
+if list_with discoverd-down; then
+  fail "LIST_ONLY must fail when discoverd cannot be read"
+fi
+grep -Fq "cannot list tenant apps" "${tmp}/out" || fail "LIST_ONLY must say why the list failed"
+if list_with host-down; then
+  fail "LIST_ONLY must fail when a host's jobs cannot be read"
+fi
+if list_with no-hosts; then
+  fail "LIST_ONLY must fail when discoverd lists no hosts"
+fi
+
 echo "wait-tenant-http ok"
