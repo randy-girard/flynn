@@ -609,6 +609,11 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		// POST /apps/:id/builds is the cluster key or a gitreceive:build
 		// token for that app. Spec, token mint, and other methods stay
 		// cluster-only. The handler also rejects a cluster:admin JWT.
+		// The build lease (EDGE-09) is gitreceive's and flynn-receiver's
+		// with the cluster key. A tenant holding it could block every deploy.
+		if len(parts) >= 3 && parts[2] == "build-lock" {
+			return rkCluster, "", ""
+		}
 		if len(parts) >= 3 && parts[2] == "builds" {
 			if m == http.MethodPost && len(parts) == 3 {
 				return rkGitreceiveBuild, appID, ""

@@ -189,6 +189,9 @@ var preparedStatements = map[string]string{
 	"github_repo_insert":                       githubRepoInsertQuery,
 	"github_repo_update":                       githubRepoUpdateQuery,
 	"github_repo_delete":                       githubRepoDeleteQuery,
+	"app_build_lock_acquire":                   appBuildLockAcquireQuery,
+	"app_build_lock_select":                    appBuildLockSelectQuery,
+	"app_build_lock_release":                   appBuildLockReleaseQuery,
 }
 
 // PreparedSQL is the SQL text of a prepared statement, "" if the name is
@@ -209,6 +212,24 @@ func PrepareStatements(conn *pgx.Conn) error {
 const (
 	// misc
 	pingQuery = `SELECT 1`
+	// app build locks (EDGE-09): the insert takes a free or expired lease, or
+	// renews the caller's own; it returns no row while another holder's
+	// lease is live.
+	appBuildLockAcquireQuery = `
+INSERT INTO app_build_locks (app_id, holder, description, acquired_at, expires_at)
+VALUES ($1, $2, $3, now(), now() + $4::int * interval '1 second')
+ON CONFLICT (app_id) DO UPDATE SET
+	holder = EXCLUDED.holder,
+	description = EXCLUDED.description,
+	acquired_at = CASE WHEN app_build_locks.holder = EXCLUDED.holder AND app_build_locks.expires_at > now()
+		THEN app_build_locks.acquired_at ELSE now() END,
+	expires_at = EXCLUDED.expires_at
+WHERE app_build_locks.holder = EXCLUDED.holder OR app_build_locks.expires_at <= now()
+RETURNING app_id, holder, description, acquired_at, expires_at`
+	appBuildLockSelectQuery = `
+SELECT app_id, holder, description, acquired_at, expires_at FROM app_build_locks
+WHERE app_id = $1 AND expires_at > now()`
+	appBuildLockReleaseQuery = `DELETE FROM app_build_locks WHERE app_id = $1 AND holder = $2`
 	// apps
 	appListQuery = `
 SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by

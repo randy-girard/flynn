@@ -647,3 +647,33 @@ func TestServiceScopesDenyUserSessionRoutes(t *testing.T) {
 		t.Fatal("acme:issue must keep its own routes")
 	}
 }
+
+// TestBuildLockIsClusterOnly (EDGE-09): the build lease is gitreceive's and
+// flynn-receiver's, with the cluster key. An app admin or a receive token
+// holding it could block every deploy of the app.
+func TestBuildLockIsClusterOnly(t *testing.T) {
+	owner := &authorizer.Token{
+		UserID: "acct-a",
+		AppGrants: []authorizer.AppGrant{{
+			AppID:       "app-a",
+			Permissions: []string{"app:admin", "app:write", "app:deploy"},
+		}},
+	}
+	receive := &authorizer.Token{
+		UserID:    "acct-a",
+		Scopes:    []string{"gitreceive:build"},
+		AppGrants: []authorizer.AppGrant{{AppID: "app-a", Permissions: []string{"app:write"}}},
+	}
+	key := &authorizer.Token{ClusterKey: true}
+	for _, req := range []struct{ method, path string }{
+		{http.MethodPut, "/apps/app-a/build-lock"},
+		{http.MethodDelete, "/apps/app-a/build-lock/holder-1"},
+	} {
+		if HTTPAllowed(owner, req.method, req.path) || HTTPAllowed(receive, req.method, req.path) {
+			t.Fatalf("%s %s is open to an app grant", req.method, req.path)
+		}
+		if !HTTPAllowed(key, req.method, req.path) {
+			t.Fatalf("%s %s refused the cluster key", req.method, req.path)
+		}
+	}
+}

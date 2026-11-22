@@ -1616,6 +1616,20 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 		`ALTER TABLE verified_domains ADD COLUMN checked_at timestamptz`,
 		`UPDATE verified_domains SET checked_at = verified_at WHERE verified_at IS NOT NULL`,
 	)
+
+	// One build per app at a time (EDGE-09). gitreceive holds the lease from
+	// before it downloads the repo cache until after it uploads it, and
+	// flynn-receiver holds it for a GitHub or preview deploy. A holder that
+	// stops renewing loses it at expires_at.
+	migrations.Add(101,
+		`CREATE TABLE app_build_locks (
+			app_id uuid PRIMARY KEY REFERENCES apps (app_id) ON DELETE CASCADE,
+			holder text NOT NULL,
+			description text NOT NULL DEFAULT '',
+			acquired_at timestamptz NOT NULL DEFAULT now(),
+			expires_at timestamptz NOT NULL
+		)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

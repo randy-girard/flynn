@@ -1604,6 +1604,30 @@ func (c *Client) DeployAppGitHub(appID string, req *ct.GitHubDeployRequest) (*ct
 	return out, c.Post("/apps/"+appID+"/github/deploy", req, out)
 }
 
+// AcquireBuildLock takes or renews the app's build lease for lock.Holder
+// (EDGE-09). Another holder's live lease is a *ct.BuildLockHeldError naming
+// it.
+func (c *Client) AcquireBuildLock(appID string, lock *ct.BuildLock) (*ct.BuildLock, error) {
+	out := &ct.BuildLock{}
+	err := c.Put(fmt.Sprintf("/apps/%s/build-lock", appID), lock, out)
+	if jsonErr, ok := err.(httphelper.JSONError); ok && jsonErr.Code == httphelper.ConflictErrorCode {
+		held := &ct.BuildLock{}
+		if len(jsonErr.Detail) > 0 && json.Unmarshal(jsonErr.Detail, held) == nil && held.Holder != "" {
+			return nil, &ct.BuildLockHeldError{Lock: held}
+		}
+		return nil, &ct.BuildLockHeldError{}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ReleaseBuildLock drops the app's build lease if holder still has it.
+func (c *Client) ReleaseBuildLock(appID, holder string) error {
+	return c.Delete(fmt.Sprintf("/apps/%s/build-lock/%s", appID, url.PathEscape(holder)), nil)
+}
+
 func (c *Client) Put(path string, in, out interface{}) error {
 	return c.send("PUT", path, in, out)
 }

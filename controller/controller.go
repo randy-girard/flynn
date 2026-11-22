@@ -232,6 +232,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		acmeConfigRepo:         acmeConfigRepo,
 		runtimeProfileRepo:     runtimeProfileRepo,
 		dbRuntimeRepo:          dbRuntimeRepo,
+		buildLockRepo:          data.NewBuildLockRepo(c.db),
 		tenancy:                data.NewTenancyRepo(c.db),
 		githubStore:            githubAppRepo,
 		githubHTTP:             c.githubHTTP,
@@ -341,6 +342,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.DELETE("/apps/:apps_id/routes/:routes_type/:routes_id", httphelper.WrapHandler(api.appLookup(api.DeleteRoute)))
 
 	httpRouter.POST("/apps/:apps_id/meta", httphelper.WrapHandler(api.appLookup(api.UpdateApp)))
+	httpRouter.PUT("/apps/:apps_id/build-lock", httphelper.WrapHandler(api.appLookup(api.AcquireBuildLock)))
+	httpRouter.DELETE("/apps/:apps_id/build-lock/:holder", httphelper.WrapHandler(api.appLookup(api.ReleaseBuildLock)))
 
 	httpRouter.GET("/events", httphelper.WrapHandler(api.Events))
 	httpRouter.GET("/events/:id", httphelper.WrapHandler(api.GetEvent))
@@ -610,6 +613,7 @@ type controllerAPI struct {
 	acmeConfigRepo         *data.ACMEConfigRepo
 	runtimeProfileRepo     *data.RuntimeProfileRepo
 	dbRuntimeRepo          *data.DBRuntimeRepo
+	buildLockRepo          *data.BuildLockRepo
 	tenancy                *data.TenancyRepo
 	// buildJobMemoryLimits overrides the shipped host default for one-off
 	// build jobs. Nil counts 12 GiB. False rejects the job.
