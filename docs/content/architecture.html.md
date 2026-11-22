@@ -108,6 +108,16 @@ selecting the oldest instance of each service as the leader.
 Services are also exposed via DNS to allow clients that are not aware of
 discoverd's HTTP API to find and communicate with each other.
 
+Each `*.discoverd` query first finds the client's job class from its source
+IP. discoverd keeps the four netpolicy services (`flynn-net-user`,
+`flynn-net-sys`, `flynn-net-data`, `flynn-net-build`) indexed by address,
+updated as Raft entries are applied, so that lookup is one map read under a
+shared read lock and does not grow with the number of user jobs. Queries run
+in parallel and do not hold up Raft apply or heartbeats. A discoverd that is
+not a Raft peer builds the same index from event streams of those four
+services to the peers. Until a stream has sent its current snapshot, or while
+it reconnects, that service is listed over HTTP instead.
+
 ## flannel
 
 An overlay network is automatically configured using the Linux kernel's native

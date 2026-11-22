@@ -3,17 +3,20 @@ package server
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	. "github.com/flynn/go-check"
+	"github.com/hashicorp/raft"
 	"github.com/miekg/dns"
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/netpolicy"
@@ -1088,4 +1091,209 @@ func (s *DNSServerStore) Instances(service string) ([]*discoverd.Instance, error
 
 func (s *DNSServerStore) ServiceLeader(service string) (*discoverd.Instance, error) {
 	return s.ServiceLeaderFn(service)
+}
+
+// fsmStore is a Store that is fed raft log entries directly, without raft.
+type fsmStore struct {
+	*Store
+	index uint64
+}
+
+func newFSMStore(tb testing.TB) *fsmStore {
+	tb.Helper()
+	return &fsmStore{Store: NewStore(tb.TempDir())}
+}
+
+func (s *fsmStore) apply(tb testing.TB, typ byte, cmd interface{}) {
+	tb.Helper()
+	buf, err := json.Marshal(cmd)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	s.index++
+	if res := s.Apply(&raft.Log{Index: s.index, Data: append([]byte{typ}, buf...)}); res != nil {
+		if err, ok := res.(error); ok {
+			tb.Fatal(err)
+		}
+	}
+}
+
+// tryApply applies cmd and ignores the command's own error.
+func (s *fsmStore) tryApply(tb testing.TB, typ byte, cmd interface{}) {
+	tb.Helper()
+	buf, err := json.Marshal(cmd)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	s.index++
+	s.Apply(&raft.Log{Index: s.index, Data: append([]byte{typ}, buf...)})
+}
+
+func (s *fsmStore) addService(tb testing.TB, service string) {
+	s.apply(tb, addServiceCommandType, &addServiceCommand{Service: service, Config: DefaultServiceConfig})
+}
+
+func (s *fsmStore) addInstance(tb testing.TB, service string, inst *discoverd.Instance) {
+	s.apply(tb, addInstanceCommandType, &addInstanceCommand{Service: service, Instance: inst})
+}
+
+func (s *fsmStore) removeInstance(tb testing.TB, service, id string) {
+	s.apply(tb, removeInstanceCommandType, &removeInstanceCommand{Service: service, ID: id})
+}
+
+func (s *fsmStore) expireInstance(tb testing.TB, service, id string) {
+	s.apply(tb, expireInstancesCommandType, &expireInstancesCommand{Instances: []expireInstance{{Service: service, InstanceID: id}}})
+}
+
+// netUserInst is a flynn-net-user registration for ip with an allowlist.
+func netUserInst(id, ip, allow string) *discoverd.Instance {
+	return &discoverd.Instance{
+		ID:    id,
+		Addr:  net.JoinHostPort(ip, "0"),
+		Proto: "tcp",
+		Meta:  map[string]string{"class": "user", netpolicy.MetaDiscoverdAllow: allow},
+	}
+}
+
+// manyUserJobsStore registers n user jobs (none of them 127.0.0.1) plus a
+// postgres leader and a redis datastore leader.
+func manyUserJobsStore(tb testing.TB, n int) *fsmStore {
+	tb.Helper()
+	s := newFSMStore(tb)
+	for _, svc := range []string{netpolicy.ServiceUser, netpolicy.ServiceSys, netpolicy.ServiceData, netpolicy.ServiceBuild, "postgres", "redis-lagoon-59415"} {
+		s.addService(tb, svc)
+	}
+	for i := 0; i < n; i++ {
+		ip := fmt.Sprintf("100.100.%d.%d", 1+i/250, 1+i%250)
+		s.addInstance(tb, netpolicy.ServiceUser, netUserInst(fmt.Sprintf("user%d", i), ip, "redis-other"))
+	}
+	s.addInstance(tb, "postgres", &discoverd.Instance{ID: "pg0", Addr: "10.0.0.5:5432", Proto: "tcp"})
+	s.addInstance(tb, "redis-lagoon-59415", &discoverd.Instance{ID: "redis0", Addr: "10.0.0.6:6379", Proto: "tcp"})
+	return s
+}
+
+// countingDNSStore counts the Instances calls the DNS server makes.
+type countingDNSStore struct {
+	*fsmStore
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (s *countingDNSStore) Instances(service string) ([]*discoverd.Instance, error) {
+	s.mu.Lock()
+	s.calls[service]++
+	s.mu.Unlock()
+	return s.fsmStore.Instances(service)
+}
+
+func (s *countingDNSStore) netPolicyCalls() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make(map[string]int)
+	for svc, n := range s.calls {
+		if strings.HasPrefix(svc, "flynn-net-") {
+			res[svc] = n
+		}
+	}
+	return res
+}
+
+// CORE-41: the DNS server finds the client's netpolicy registration without
+// listing (and so copying and sorting) every instance of the netpolicy
+// services. Before the fix each *.discoverd query called
+// Instances("flynn-net-user"), and a system client also listed the other
+// three services.
+func TestUserNetLookupDoesNotCopyInstances(t *testing.T) {
+	fsm := manyUserJobsStore(t, 500)
+	store := &countingDNSStore{fsmStore: fsm, calls: make(map[string]int)}
+	srv := &DNSServer{UDPAddr: "127.0.0.1:0", Overlay: &net.IPNet{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)}}
+	srv.SetStore(store)
+	if err := srv.ListenAndServe(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	lookup := func(name string) int {
+		t.Helper()
+		req := &dns.Msg{}
+		req.SetQuestion(name, dns.TypeA)
+		res, _, err := (&dns.Client{Net: "udp"}).Exchange(req, srv.UDPAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Rcode
+	}
+
+	// A user job (the test client, 127.0.0.1) gets its allowlist.
+	fsm.addInstance(t, netpolicy.ServiceUser, netUserInst("me", "127.0.0.1", "redis-lagoon-59415"))
+	if rc := lookup("leader.redis-lagoon-59415.discoverd."); rc != dns.RcodeSuccess {
+		t.Fatalf("user job: attached leader rcode %d, want success", rc)
+	}
+	if rc := lookup("leader.postgres.discoverd."); rc != dns.RcodeNameError {
+		t.Fatalf("user job: postgres leader rcode %d, want NXDOMAIN", rc)
+	}
+
+	// The same IP re-registered as a system job gets every answer.
+	fsm.removeInstance(t, netpolicy.ServiceUser, "me")
+	fsm.addInstance(t, netpolicy.ServiceSys, &discoverd.Instance{ID: "sys", Addr: "127.0.0.1:0", Proto: "tcp", Meta: map[string]string{"class": "system"}})
+	if rc := lookup("postgres.discoverd."); rc != dns.RcodeSuccess {
+		t.Fatalf("system job: postgres rcode %d, want success", rc)
+	}
+
+	// Gone from every netpolicy service: an unknown overlay client fails closed.
+	fsm.expireInstance(t, netpolicy.ServiceSys, "sys")
+	if rc := lookup("postgres.discoverd."); rc != dns.RcodeNameError {
+		t.Fatalf("unregistered overlay client: postgres rcode %d, want NXDOMAIN", rc)
+	}
+
+	if calls := store.netPolicyCalls(); len(calls) != 0 {
+		t.Fatalf("DNS lookups listed netpolicy services: %v", calls)
+	}
+}
+
+// fakeDNSWriter is a dns.ResponseWriter for calling ServiceLookup directly.
+type fakeDNSWriter struct {
+	remote net.Addr
+	msg    *dns.Msg
+}
+
+func (w *fakeDNSWriter) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
+}
+func (w *fakeDNSWriter) RemoteAddr() net.Addr      { return w.remote }
+func (w *fakeDNSWriter) WriteMsg(m *dns.Msg) error { w.msg = m; return nil }
+func (w *fakeDNSWriter) Write([]byte) (int, error) { return 0, nil }
+func (w *fakeDNSWriter) Close() error              { return nil }
+func (w *fakeDNSWriter) TsigStatus() error         { return nil }
+func (w *fakeDNSWriter) TsigTimersOnly(bool)       {}
+func (w *fakeDNSWriter) Hijack()                   {}
+
+// BenchmarkServiceLookupManyUserJobs measures one *.discoverd lookup from a
+// user job and from a system job while n user jobs are registered.
+func BenchmarkServiceLookupManyUserJobs(b *testing.B) {
+	for _, n := range []int{100, 1000, 5000} {
+		store := manyUserJobsStore(b, n)
+		store.addInstance(b, netpolicy.ServiceUser, netUserInst("me", "100.101.0.1", "redis-lagoon-59415"))
+		store.addInstance(b, netpolicy.ServiceSys, &discoverd.Instance{ID: "sys", Addr: "100.101.0.2:0", Proto: "tcp"})
+		srv := &DNSServer{Domain: dnsDomain, Overlay: &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}}
+		srv.SetStore(store.Store)
+		api := dnsAPI{srv}
+		for _, client := range []struct{ name, ip, query string }{
+			{"user", "100.101.0.1", "leader.redis-lagoon-59415.discoverd."},
+			{"system", "100.101.0.2", "postgres.discoverd."},
+		} {
+			b.Run(fmt.Sprintf("%s/n=%d", client.name, n), func(b *testing.B) {
+				req := &dns.Msg{}
+				req.SetQuestion(client.query, dns.TypeA)
+				w := &fakeDNSWriter{remote: &net.UDPAddr{IP: net.ParseIP(client.ip), Port: 5353}}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					api.ServiceLookup(w, req)
+					if w.msg.Rcode != dns.RcodeSuccess {
+						b.Fatalf("rcode %d", w.msg.Rcode)
+					}
+				}
+			})
+		}
+	}
 }

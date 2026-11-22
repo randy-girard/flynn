@@ -88,3 +88,23 @@ func TestHostLocalJobsOverlayInstance(t *testing.T) {
 		t.Fatalf("lookup took %s, want the 100ms timeout", d)
 	}
 }
+
+// CORE-41: a proxy-mode DNS server keeps one ProxyStore (and so one set of
+// netpolicy streams) while it stays a proxy, and closes it on promotion.
+func TestSetDNSStoreReusesAndClosesProxy(t *testing.T) {
+	m := &Main{peers: []string{"127.0.0.1:1"}, store: server.NewStore(t.TempDir())}
+	s := &server.DNSServer{}
+	m.setDNSStore(s, true)
+	first, ok := s.GetStore().(*server.ProxyStore)
+	if !ok || first != m.dnsProxy {
+		t.Fatalf("proxy store = %T, want the Main's ProxyStore", s.GetStore())
+	}
+	m.setDNSStore(s, true)
+	if s.GetStore() != server.DNSStore(first) {
+		t.Fatal("a second demotion made a new ProxyStore")
+	}
+	m.setDNSStore(s, false)
+	if s.GetStore() != server.DNSStore(m.store) || m.dnsProxy != nil {
+		t.Fatalf("promotion: store %T, proxy %v", s.GetStore(), m.dnsProxy)
+	}
+}

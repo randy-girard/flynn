@@ -84,6 +84,9 @@ type Store struct {
 
 	data        *raftData
 	subscribers map[string]*list.List
+	// netIdx indexes the netpolicy services of data by address for DNS
+	// (CORE-41). It changes with data, under mu.
+	netIdx *netIndex
 
 	leaderCh   chan bool // channel for notifying when leadership changes
 	leaderTime time.Time // time when leadership was established
@@ -142,6 +145,7 @@ func NewStore(path string) *Store {
 		path:        path,
 		data:        newRaftData(),
 		subscribers: make(map[string]*list.List),
+		netIdx:      newNetIndex(),
 
 		leaderCh:   make(chan bool),
 		heartbeats: newHeartbeatClock(),
@@ -532,8 +536,8 @@ func (s *Store) applyRemoveServiceCommand(cmd []byte) error {
 
 // Instances returns a list of instances for service.
 func (s *Store) Instances(service string) ([]*discoverd.Instance, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.instances(service), nil
 }
 
@@ -653,6 +657,7 @@ func (s *Store) applyAddInstanceCommand(cmd []byte, index uint64) error {
 
 	// Update entry.
 	s.data.Instances[c.Service][c.Instance.ID] = c.Instance
+	s.netIdx.put(c.Service, c.Instance)
 
 	// Broadcast "up" event if new instance.
 	if prev == nil {
@@ -711,6 +716,7 @@ func (s *Store) applyRemoveInstanceCommand(cmd []byte) error {
 	// Remove instance data.
 	inst := s.data.Instances[c.Service][c.ID]
 	delete(s.data.Instances[c.Service], c.ID)
+	s.netIdx.remove(c.Service, c.ID)
 
 	// Broadcast "down" event for instance.
 	if inst != nil {
@@ -729,8 +735,8 @@ func (s *Store) applyRemoveInstanceCommand(cmd []byte) error {
 
 // ServiceMeta returns the meta data for a service.
 func (s *Store) ServiceMeta(service string) *discoverd.ServiceMeta {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.serviceMeta(service)
 }
 
@@ -854,8 +860,8 @@ func (s *Store) applySetLeaderCommand(cmd []byte) error {
 }
 
 func (s *Store) ServiceLeader(service string) (*discoverd.Instance, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.serviceLeader(service), nil
 }
 
@@ -1087,6 +1093,7 @@ func (s *Store) applyExpireInstancesCommand(cmd []byte) error {
 
 		// Remove instance.
 		delete(m, expireInstance.InstanceID)
+		s.netIdx.remove(expireInstance.Service, expireInstance.InstanceID)
 
 		// Broadcast down event.
 		s.broadcast(&discoverd.Event{
@@ -1198,6 +1205,7 @@ func (s *Store) Restore(r io.ReadCloser) error {
 		return err
 	}
 	s.data = data
+	s.netIdx = rebuildNetIndex(data)
 	// The snapshot has no clock. A leader that restored must wait 2×TTL
 	// again so the install cannot expire every instance.
 	s.heartbeats.clear()
@@ -1601,8 +1609,48 @@ func ValidServiceName(service string) error {
 // Only the subset of methods required for DNSServer.Store are implemented.
 // Heartbeats are not answered here. Expiry reads the leader clock, so a
 // local answer would drop live instances. Instances and DNS stay unfiltered.
+//
+// NetInstance answers from event streams of the netpolicy services, opened
+// on first use; Close ends them.
 type ProxyStore struct {
 	Peers []string
+
+	netOnce sync.Once
+	netIdx  *proxyNetIndex
+}
+
+// NetInstance implements NetPolicyIndex. A service whose stream is not
+// current yet is listed over HTTP instead.
+func (s *ProxyStore) NetInstance(ip net.IP) (string, *discoverd.Instance) {
+	s.netOnce.Do(func() {
+		if len(s.Peers) > 0 {
+			s.netIdx = startProxyNetIndex(s.Peers)
+		}
+	})
+	for _, service := range netPolicyServices {
+		var inst *discoverd.Instance
+		if s.netIdx != nil {
+			var ok bool
+			if inst, ok = s.netIdx.lookup(service, ip); !ok {
+				inst = scanNetInstance(s, service, ip)
+			}
+		} else {
+			inst = scanNetInstance(s, service, ip)
+		}
+		if inst != nil {
+			return service, inst
+		}
+	}
+	return "", nil
+}
+
+// Close ends the netpolicy streams. NetInstance then lists services over
+// HTTP.
+func (s *ProxyStore) Close() {
+	s.netOnce.Do(func() {})
+	if s.netIdx != nil {
+		s.netIdx.close()
+	}
 }
 
 // Instances returns a list of instances for a service.

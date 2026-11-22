@@ -531,7 +531,8 @@ func (d dnsAPI) userNetInstance(addr net.Addr) *discoverd.Instance {
 	if ip == nil {
 		return nil
 	}
-	if inst := d.netInstance(netpolicy.ServiceUser, ip); inst != nil {
+	service, inst := d.netInstance(ip)
+	if service == netpolicy.ServiceUser {
 		return inst
 	}
 	if d.Overlay == nil || !d.Overlay.Contains(ip) {
@@ -542,10 +543,9 @@ func (d dnsAPI) userNetInstance(addr net.Addr) *discoverd.Instance {
 			return nil
 		}
 	}
-	for _, svc := range []string{netpolicy.ServiceSys, netpolicy.ServiceData, netpolicy.ServiceBuild} {
-		if d.netInstance(svc, ip) != nil {
-			return nil
-		}
+	if service != "" {
+		// flynn-net-sys, flynn-net-data or flynn-net-build.
+		return nil
 	}
 	if d.LocalJobs != nil && d.LocalSubnet != nil && d.LocalSubnet.Contains(ip) {
 		inst, err := d.LocalJobs.OverlayInstance(ip)
@@ -567,23 +567,18 @@ func (d dnsAPI) userNetInstance(addr net.Addr) *discoverd.Instance {
 	return failClosedInstance
 }
 
-// netInstance is the instance of a netpolicy service whose address is ip.
-func (d dnsAPI) netInstance(service string, ip net.IP) *discoverd.Instance {
-	insts, err := d.GetStore().Instances(service)
-	if err != nil || len(insts) == 0 {
-		return nil
+// netInstance returns the first netpolicy service (user, sys, data, build)
+// that lists ip, and its instance. Stores with an address index answer in
+// one lookup (CORE-41); others are scanned service by service.
+func (d dnsAPI) netInstance(ip net.IP) (string, *discoverd.Instance) {
+	store := d.GetStore()
+	if idx, ok := store.(NetPolicyIndex); ok {
+		return idx.NetInstance(ip)
 	}
-	for _, inst := range insts {
-		if inst == nil {
-			continue
-		}
-		host, _, err := net.SplitHostPort(inst.Addr)
-		if err != nil {
-			host = inst.Addr
-		}
-		if parsed := net.ParseIP(host); parsed != nil && parsed.Equal(ip) {
-			return inst
+	for _, service := range netPolicyServices {
+		if inst := scanNetInstance(store, service, ip); inst != nil {
+			return service, inst
 		}
 	}
-	return nil
+	return "", nil
 }

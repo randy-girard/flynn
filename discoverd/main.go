@@ -57,10 +57,13 @@ func main() {
 
 // Main represents the main program execution.
 type Main struct {
-	mu         sync.Mutex
-	status     host.DiscoverdConfig
-	store      *server.Store
-	dnsServer  *server.DNSServer
+	mu        sync.Mutex
+	status    host.DiscoverdConfig
+	store     *server.Store
+	dnsServer *server.DNSServer
+	// dnsProxy is the DNS store while this discoverd is not a Raft peer.
+	// It holds event streams to the peers, so it is closed on promotion.
+	dnsProxy   *server.ProxyStore
 	httpServer *http.Server
 	ln         net.Listener
 	hb         discoverd.Heartbeater
@@ -210,7 +213,7 @@ func (m *Main) Run(args ...string) error {
 	// Otherwise wait for the host network to come up and then start a DNS
 	// server.
 	if m.dnsServer != nil && m.store != nil {
-		m.dnsServer.SetStore(m.store)
+		m.setDNSStore(m.dnsServer, false)
 	} else if opt.DNSAddr != "" {
 		if err := m.openDNSServer(opt.DNSAddr, opt.Recursors, nil); err != nil {
 			return fmt.Errorf("Failed to start DNS server: %s", err)
@@ -331,7 +334,7 @@ func (m *Main) Promote() error {
 
 	// Update the DNS server to use the local store.
 	if m.dnsServer != nil {
-		m.dnsServer.SetStore(m.store)
+		m.setDNSStore(m.dnsServer, false)
 	}
 
 	// Update the HTTP server to use the local store.
@@ -365,7 +368,7 @@ func (m *Main) Demote() error {
 
 	// Update the dns server to use proxy store
 	if m.dnsServer != nil {
-		m.dnsServer.SetStore(&server.ProxyStore{Peers: m.peers})
+		m.setDNSStore(m.dnsServer, true)
 	}
 
 	// Set handler into proxy mode
@@ -374,7 +377,7 @@ func (m *Main) Demote() error {
 	// If we fail from here on out we should attempt to rollback
 	rollback := func() {
 		if m.dnsServer != nil {
-			m.dnsServer.SetStore(m.store)
+			m.setDNSStore(m.dnsServer, false)
 		}
 		m.handler.Proxy.Store(false)
 	}
@@ -491,11 +494,7 @@ func (m *Main) openDNSServer(addr string, recursors []string, netcfg *host.Netwo
 	}
 
 	// If store is available then attach it. Otherwise use a proxy.
-	if m.store != nil {
-		s.SetStore(m.store)
-	} else {
-		s.SetStore(&server.ProxyStore{Peers: m.peers})
-	}
+	m.setDNSStore(s, m.store == nil)
 
 	if err := s.ListenAndServe(); err != nil {
 		return err
@@ -691,4 +690,22 @@ func SetPortSlice(peers []string, addr string) ([]string, error) {
 	}
 
 	return other, nil
+}
+
+// setDNSStore points s at the local store, or at a proxy to the Raft peers.
+// The proxy is reused while this discoverd stays a proxy and closed when it
+// switches to the local store.
+func (m *Main) setDNSStore(s *server.DNSServer, proxy bool) {
+	if proxy {
+		if m.dnsProxy == nil {
+			m.dnsProxy = &server.ProxyStore{Peers: m.peers}
+		}
+		s.SetStore(m.dnsProxy)
+		return
+	}
+	s.SetStore(m.store)
+	if m.dnsProxy != nil {
+		m.dnsProxy.Close()
+		m.dnsProxy = nil
+	}
 }
