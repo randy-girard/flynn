@@ -251,6 +251,71 @@ func TestRemoveServiceStopsHeartbeatsAndClearsLeader(t *testing.T) {
 	}
 }
 
+// The purge replicates: a follower peer, which also answers reads and DNS,
+// drops the removed service's instances and leader too (CORE-43).
+func TestRemoveServicePurgeReachesFollower(t *testing.T) {
+	a := MustOpenStore()
+	defer a.Close()
+	b := NewStore()
+	b.EnableSingleNode = false
+	if err := b.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err := a.AddPeer(b.Advertise.String()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := a.AddService("db", &discoverd.ServiceConfig{LeaderType: discoverd.LeaderTypeManual}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddInstance("db", &discoverd.Instance{ID: "inst0", Addr: "10.0.0.1:5432", Proto: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetServiceLeader("db", "inst0"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "follower sees leader", func() bool {
+		l, _ := b.ServiceLeader("db")
+		return l != nil && l.ID == "inst0"
+	})
+
+	if err := a.RemoveService("db"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "follower purges", func() bool {
+		insts, _ := b.Instances("db")
+		l, _ := b.ServiceLeader("db")
+		return b.Config("db") == nil && len(insts) == 0 && l == nil
+	})
+
+	// A later service of the same name starts empty on the follower too.
+	if err := a.AddService("db", &discoverd.ServiceConfig{LeaderType: discoverd.LeaderTypeManual}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.AddInstance("db", &discoverd.Instance{ID: "inst0", Addr: "10.0.0.1:5432", Proto: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "follower sees re-added instance", func() bool {
+		insts, _ := b.Instances("db")
+		return len(insts) == 1
+	})
+	if l, _ := b.ServiceLeader("db"); l != nil {
+		t.Fatalf("follower: re-added service inherited leader %+v", l)
+	}
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out: %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // A live job whose service was removed re-creates it on its next heartbeat
 // through the client's repair path, and the new service holds only that
 // registration and the leader it claims again (CORE-43). Before the fix the
