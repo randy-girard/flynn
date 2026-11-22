@@ -577,7 +577,7 @@ func (r *TenancyRepo) InsertDomain(hostname, owner, token string, hold time.Dura
 	err := r.db.QueryRow(`
 		INSERT INTO verified_domains (hostname, owner_account, token, verified_at, claimed_at)
 		VALUES ($1, $2, $3, NULL, now())
-		ON CONFLICT (hostname) DO UPDATE SET owner_account=EXCLUDED.owner_account, token=EXCLUDED.token, verified_at=NULL,
+		ON CONFLICT (hostname) DO UPDATE SET owner_account=EXCLUDED.owner_account, token=EXCLUDED.token, verified_at=NULL, checked_at=NULL,
 			claimed_at = CASE
 				WHEN verified_domains.owner_account=EXCLUDED.owner_account
 					AND verified_domains.claimed_at >= now() - $4::bigint * interval '1 second'
@@ -592,12 +592,12 @@ func (r *TenancyRepo) InsertDomain(hostname, owner, token string, hold time.Dura
 	return err
 }
 
-const domainColumns = `hostname, owner_account, token, verified_at, claimed_at`
+const domainColumns = `hostname, owner_account, token, verified_at, claimed_at, checked_at`
 
 func scanDomain(s postgres.Scanner) (*ct.DomainVerification, error) {
 	d := &ct.DomainVerification{}
 	var claimed time.Time
-	if err := s.Scan(&d.Hostname, &d.OwnerAccount, &d.Token, &d.VerifiedAt, &claimed); err != nil {
+	if err := s.Scan(&d.Hostname, &d.OwnerAccount, &d.Token, &d.VerifiedAt, &claimed, &d.CheckedAt); err != nil {
 		return nil, err
 	}
 	d.ClaimedAt = &claimed
@@ -640,27 +640,50 @@ func (r *TenancyRepo) DeleteDomain(hostname string) error {
 	return err
 }
 
+// MarkDomainVerified records a matching TXT check: verified_at and
+// checked_at are both set to at.
 func (r *TenancyRepo) MarkDomainVerified(hostname string, at time.Time) error {
-	err := r.db.QueryRow(`UPDATE verified_domains SET verified_at=$2 WHERE hostname=$1 RETURNING hostname`, hostname, at).Scan(&hostname)
+	err := r.db.QueryRow(`UPDATE verified_domains SET verified_at=$2, checked_at=$2 WHERE hostname=$1 RETURNING hostname`, hostname, at).Scan(&hostname)
 	if err == pgx.ErrNoRows {
 		return ErrNotFound
 	}
 	return err
 }
 
-func (r *TenancyRepo) VerifiedHostnames(owner string) ([]string, error) {
-	rows, err := r.db.Query(`SELECT hostname FROM verified_domains WHERE owner_account=$1 AND verified_at IS NOT NULL`, owner)
+// MarkDomainChecked moves checked_at after a re-check found the record
+// again. It changes nothing when the claim was re-claimed (new token) or
+// unverified meanwhile.
+func (r *TenancyRepo) MarkDomainChecked(hostname, token string, at time.Time) error {
+	return r.db.Exec(`UPDATE verified_domains SET checked_at=$3 WHERE hostname=$1 AND token=$2 AND verified_at IS NOT NULL`, hostname, token, at)
+}
+
+// ClearDomainVerification unverifies a claim whose TXT record a re-check
+// no longer found (CORE-56). The claim, token and claimed_at stay, so the
+// owner can publish the record and check again. It reports whether the row
+// changed; a re-claim (new token) meanwhile is left alone.
+func (r *TenancyRepo) ClearDomainVerification(hostname, token string) (bool, error) {
+	err := r.db.QueryRow(`UPDATE verified_domains SET verified_at=NULL, checked_at=NULL WHERE hostname=$1 AND token=$2 AND verified_at IS NOT NULL RETURNING hostname`, hostname, token).Scan(&hostname)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// VerifiedDomains returns the verified claims of owner. Callers decide from
+// CheckedAt whether each one is fresh enough to trust.
+func (r *TenancyRepo) VerifiedDomains(owner string) ([]*ct.DomainVerification, error) {
+	rows, err := r.db.Query(`SELECT `+domainColumns+` FROM verified_domains WHERE owner_account=$1 AND verified_at IS NOT NULL ORDER BY hostname`, owner)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []*ct.DomainVerification
 	for rows.Next() {
-		var h string
-		if err := rows.Scan(&h); err != nil {
+		d, err := scanDomain(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, h)
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }

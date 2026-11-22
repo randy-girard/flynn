@@ -811,3 +811,161 @@ func (s *S) TestPatchUserSuspendReportsAccountStateFailure(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(got.Suspended, Equals, false)
 }
+
+// ageDomainCheck makes a verified row look last checked longer ago than
+// domainRecheckAge, the way it would after a day without a re-check.
+func (s *S) ageDomainCheck(c *C, hostname string) {
+	c.Assert(s.hc.db.Exec(`UPDATE verified_domains SET verified_at = now() - $2::bigint * interval '1 second', checked_at = now() - $2::bigint * interval '1 second' WHERE hostname = $1`,
+		hostname, int64((domainRecheckAge+time.Hour)/time.Second)), IsNil)
+}
+
+func (s *S) domainCheckedAt(c *C, hostname string) *time.Time {
+	var at *time.Time
+	c.Assert(s.hc.db.QueryRow(`SELECT checked_at FROM verified_domains WHERE hostname = $1`, hostname).Scan(&at), IsNil)
+	return at
+}
+
+// TestHostedRouteNeedsFreshVerification: CORE-56. verified_at used to stay
+// set forever, so after a domain expired or changed hands the old account
+// could still add routes under it. A verification last checked more than
+// domainRecheckAge ago is no longer trusted on its own: checkHostname looks
+// the TXT record up again. A match refreshes checked_at; NXDOMAIN or a
+// wrong value clears verification; a failed lookup refuses the route and
+// keeps the row as it is.
+func (s *S) TestHostedRouteNeedsFreshVerification(c *C) {
+	defer s.restoreTenancyDefaults(c)
+	userID := "core56-" + core20Suffix()
+	owner := "user:" + userID
+	host := userID + ".example.com"
+	route := "www." + host
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname = $1`, host)
+	d := s.claimDomain(c, authKey, host, owner)
+	code, raw := s.domainCall(c, authKey, "/domains/verify/"+host+"/check", fmt.Sprintf(`{"records":[%q]}`, d.Token))
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	c.Assert(s.domainCheckedAt(c, host), NotNil)
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeHosted, nil), IsNil)
+	app := &ct.App{ID: random.UUID(), Name: userID, OwnerAccount: owner}
+
+	var looked []string
+	answer := func(ctx context.Context, name string) ([]string, error) { return nil, fmt.Errorf("unexpected lookup") }
+	defer s.withTXT(func(ctx context.Context, name string) ([]string, error) {
+		looked = append(looked, name)
+		return answer(ctx, name)
+	})()
+
+	// Fresh: no lookup.
+	c.Assert(s.api.checkHostname(context.Background(), app, route), IsNil)
+	c.Assert(looked, HasLen, 0)
+
+	// Stale and the record is still published: allowed, checked_at moves.
+	s.ageDomainCheck(c, host)
+	answer = func(ctx context.Context, name string) ([]string, error) { return []string{d.Token}, nil }
+	c.Assert(s.api.checkHostname(context.Background(), app, route), IsNil)
+	c.Assert(looked, DeepEquals, []string{"_flynn-verify." + host})
+	checked := s.domainCheckedAt(c, host)
+	c.Assert(checked, NotNil)
+	c.Assert(time.Since(*checked) < time.Minute, Equals, true, Commentf("checked_at=%v", checked))
+	c.Assert(s.api.checkHostname(context.Background(), app, route), IsNil)
+	c.Assert(looked, HasLen, 1)
+
+	// Stale and the lookup fails: refused, verification kept.
+	s.ageDomainCheck(c, host)
+	answer = func(ctx context.Context, name string) ([]string, error) {
+		return nil, &net.DNSError{Err: "server misbehaving", Name: name, IsTemporary: true}
+	}
+	err := s.api.checkHostname(context.Background(), app, route)
+	c.Assert(err, ErrorMatches, ".*could not re-check.*")
+	c.Assert(s.domainVerifiedAt(c, host), NotNil)
+
+	// Stale and the record is gone (the domain expired or changed hands):
+	// refused and the row is unverified.
+	answer = func(ctx context.Context, name string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	err = s.api.checkHostname(context.Background(), app, route)
+	c.Assert(err, ErrorMatches, ".*requires a verified domain.*")
+	c.Assert(s.domainVerifiedAt(c, host), IsNil)
+	c.Assert(s.domainCheckedAt(c, host), IsNil)
+	var n int
+	c.Assert(s.hc.db.QueryRow(`SELECT COUNT(*) FROM core_audit WHERE action = 'domain.unverify' AND data->>'hostname' = $1`, host).Scan(&n), IsNil)
+	c.Assert(n, Equals, 1)
+
+	// A wrong value clears it the same way.
+	code, raw = s.domainCall(c, authKey, "/domains/verify/"+host+"/check", fmt.Sprintf(`{"records":[%q]}`, d.Token))
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	s.ageDomainCheck(c, host)
+	answer = func(ctx context.Context, name string) ([]string, error) { return []string{"someone-else"}, nil }
+	c.Assert(s.api.checkHostname(context.Background(), app, route), ErrorMatches, ".*requires a verified domain.*")
+	c.Assert(s.domainVerifiedAt(c, host), IsNil)
+}
+
+// TestVerifyDomainRechecksStaleVerifiedClaim: CORE-56. A verified claim
+// blocked every other account forever, even after the domain changed hands.
+// A claim by another account on a stale verified name re-checks the TXT
+// record first: still published keeps the 409; gone clears verification so
+// the hold rules apply.
+func (s *S) TestVerifyDomainRechecksStaleVerifiedClaim(c *C) {
+	a := "core56-a-" + core20Suffix()
+	b := "core56-b-" + core20Suffix()
+	tokA, tokB := s.signUser(c, a, nil), s.signUser(c, b, nil)
+	host := "shop." + a + ".example.com"
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname = $1`, host)
+	first := s.claimDomain(c, tokA, host, "user:"+a)
+	c.Assert(s.hc.db.Exec(`UPDATE verified_domains SET claimed_at = now() - interval '365 days' WHERE hostname = $1`, host), IsNil)
+	code, raw := s.domainCall(c, authKey, "/domains/verify/"+host+"/check", fmt.Sprintf(`{"records":[%q]}`, first.Token))
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+
+	var looked int
+	answer := func(name string) ([]string, error) { return nil, fmt.Errorf("unexpected lookup") }
+	defer s.withTXT(func(ctx context.Context, name string) ([]string, error) {
+		looked++
+		return answer(name)
+	})()
+	claimB := func() (int, []byte) {
+		return s.domainCall(c, tokB, "/domains/verify", fmt.Sprintf(`{"hostname":%q,"owner_account":%q}`, host, "user:"+b))
+	}
+
+	// Fresh verified claim: 409 with no lookup.
+	code, raw = claimB()
+	c.Assert(code, Equals, 409, Commentf("%s", raw))
+	c.Assert(looked, Equals, 0)
+
+	// Stale, still published: 409 and checked_at refreshed.
+	s.ageDomainCheck(c, host)
+	answer = func(name string) ([]string, error) { return []string{first.Token}, nil }
+	code, raw = claimB()
+	c.Assert(code, Equals, 409, Commentf("%s", raw))
+	c.Assert(looked, Equals, 1)
+	checked := s.domainCheckedAt(c, host)
+	c.Assert(checked, NotNil)
+	c.Assert(time.Since(*checked) < time.Minute, Equals, true)
+
+	// Stale, record gone: B takes the name.
+	s.ageDomainCheck(c, host)
+	answer = func(name string) ([]string, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	code, raw = claimB()
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	owner, _, verified := s.domainRow(c, host)
+	c.Assert(owner, Equals, "user:"+b)
+	c.Assert(verified, Equals, false)
+}
+
+// TestReclaimClearsCheckedAt: an owner re-claim (new token) clears
+// checked_at with verified_at, so a later check starts from scratch.
+func (s *S) TestReclaimClearsCheckedAt(c *C) {
+	a := "core56-" + core20Suffix()
+	tokA := s.signUser(c, a, nil)
+	host := a + ".example.org"
+	defer s.hc.db.Exec(`DELETE FROM verified_domains WHERE hostname = $1`, host)
+	d := s.claimDomain(c, tokA, host, "user:"+a)
+	code, raw := s.domainCall(c, authKey, "/domains/verify/"+host+"/check", fmt.Sprintf(`{"records":[%q]}`, d.Token))
+	c.Assert(code, Equals, 200, Commentf("%s", raw))
+	var got ct.DomainVerification
+	c.Assert(json.Unmarshal(raw, &got), IsNil)
+	c.Assert(got.CheckedAt, NotNil)
+	s.claimDomain(c, tokA, host, "user:"+a)
+	c.Assert(s.domainVerifiedAt(c, host), IsNil)
+	c.Assert(s.domainCheckedAt(c, host), IsNil)
+}

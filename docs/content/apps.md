@@ -485,7 +485,8 @@ DNS will also need to be configured for the domain, in this example
 
 On a hosted cluster the app's owner account must first verify the domain
 (or a parent such as `example.com`) with a `_flynn-verify` TXT record. The
-controller looks the record up itself. See
+controller looks the record up itself, and again before a new route once the
+last check is a day old, so leave the record in place. See
 [Hosted custom domains](security.md#hosted-custom-domains).
 
 ### Path-based HTTP routes

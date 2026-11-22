@@ -1017,6 +1017,32 @@ func (MigrateSuite) TestMigrateResetsDomainVerification(c *C) {
 	c.Assert(token, Equals, "tok-shop.example.com")
 }
 
+// TestMigrateSetsDomainCheckedAt checks that migration 100 adds checked_at
+// to verified_domains (CORE-56) and starts it at verified_at for rows that
+// are verified, so they are re-checked domainRecheckAge after their last
+// check rather than all at once or never.
+func (MigrateSuite) TestMigrateSetsDomainCheckedAt(c *C) {
+	db := setupTestDB(c, "controllertest_domain_checked")
+	var before, rest postgres.Migrations
+	for _, m := range *migrations {
+		if m.ID < 100 {
+			before = append(before, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	c.Assert(before.Migrate(db), IsNil)
+	c.Assert(db.Exec(`INSERT INTO verified_domains (hostname, owner_account, token, verified_at) VALUES ('shop.example.com', 'user:core56', 't1', now() - interval '3 days')`), IsNil)
+	c.Assert(db.Exec(`INSERT INTO verified_domains (hostname, owner_account, token, verified_at) VALUES ('pending.example.com', 'user:core56', 't2', NULL)`), IsNil)
+	c.Assert(rest.Migrate(db), IsNil)
+	var same bool
+	c.Assert(db.QueryRow(`SELECT checked_at = verified_at FROM verified_domains WHERE hostname = 'shop.example.com'`).Scan(&same), IsNil)
+	c.Assert(same, Equals, true)
+	var checked *time.Time
+	c.Assert(db.QueryRow(`SELECT checked_at FROM verified_domains WHERE hostname = 'pending.example.com'`).Scan(&checked), IsNil)
+	c.Assert(checked, IsNil)
+}
+
 // TestMigrateScrubsAuditPasswords checks that migration 94 removes the clear
 // text password that PATCH /users/:id stored in user.update rows before
 // CORE-21, and keeps only whether a password was set.

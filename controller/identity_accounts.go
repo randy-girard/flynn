@@ -705,6 +705,13 @@ func (c *controllerAPI) VerifyDomain(ctx context.Context, w http.ResponseWriter,
 		httphelper.ValidationError(w, "hostname", err.Error())
 		return
 	}
+	// A verified claim of another account keeps the name only while its
+	// TXT record is still published. Look a stale one up again first, so a
+	// domain that expired or changed hands does not stay blocked (CORE-56).
+	// A failed lookup leaves the claim as it is and the insert below is 409.
+	if prev, err := c.tenancy.GetDomain(body.Hostname); err == nil && prev.OwnerAccount != body.OwnerAccount && domainStale(prev) {
+		_, _ = c.recheckDomain(ctx, prev)
+	}
 	token := random.Hex(16)
 	if err := c.tenancy.InsertDomain(body.Hostname, body.OwnerAccount, token, domainClaimTTL); err != nil {
 		if err == data.ErrDomainClaimed {
@@ -814,9 +821,66 @@ func (c *controllerAPI) CheckDomain(ctx context.Context, w http.ResponseWriter, 
 		respondWithError(w, err)
 		return
 	}
-	d.VerifiedAt = &now
+	d.VerifiedAt, d.CheckedAt = &now, &now
 	d.TXTName = tenancy.TXTName(hostname)
 	httphelper.JSON(w, 200, d)
+}
+
+// domainRecheckAge is how long a TXT check stays trusted (CORE-56). After
+// that a verified name is looked up again before it allows a new route.
+const domainRecheckAge = 24 * time.Hour
+
+// domainLastChecked is when d's TXT record was last found: checked_at, or
+// verified_at for a row verified with no checked_at.
+func domainLastChecked(d *ct.DomainVerification) time.Time {
+	if d.CheckedAt != nil {
+		return *d.CheckedAt
+	}
+	if d.VerifiedAt != nil {
+		return *d.VerifiedAt
+	}
+	return time.Time{}
+}
+
+// domainStale reports whether a verified claim must be looked up again
+// before it is trusted.
+func domainStale(d *ct.DomainVerification) bool {
+	return d.VerifiedAt != nil && time.Since(domainLastChecked(d)) > domainRecheckAge
+}
+
+// recheckDomain looks a verified claim's TXT record up again (CORE-56).
+// When the token is still published it moves checked_at and returns true.
+// When the lookup answers without it (no record, NXDOMAIN, another value)
+// it clears verification, writes a domain.unverify audit row and returns
+// false. A failed lookup returns the error and changes nothing.
+func (c *controllerAPI) recheckDomain(ctx context.Context, d *ct.DomainVerification) (bool, error) {
+	records, err := c.resolveTXT(ctx, tenancy.TXTName(d.Hostname))
+	if err != nil {
+		var dnsErr *net.DNSError
+		if !errors.As(err, &dnsErr) || !dnsErr.IsNotFound {
+			return false, err
+		}
+		records = nil
+	}
+	if tenancy.VerifyTXT(records, d.Token) {
+		now := time.Now().UTC()
+		if err := c.tenancy.MarkDomainChecked(d.Hostname, d.Token, now); err != nil {
+			return false, err
+		}
+		d.CheckedAt = &now
+		return true, nil
+	}
+	cleared, err := c.tenancy.ClearDomainVerification(d.Hostname, d.Token)
+	if err != nil {
+		return false, err
+	}
+	if cleared {
+		_ = c.tenancy.Audit(c.actor(ctx), "domain.unverify", d.OwnerAccount, "", map[string]string{
+			"hostname": d.Hostname, "reason": "TXT record not found at re-check",
+		})
+	}
+	d.VerifiedAt, d.CheckedAt = nil, nil
+	return false, nil
 }
 
 // domainTXTTimeout bounds the controller's own TXT lookup for CheckDomain.

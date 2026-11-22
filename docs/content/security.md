@@ -396,15 +396,34 @@ migration 99 any account could overwrite an unverified claim and its token,
 so it could keep the real owner from verifying. Migration 99 adds
 `claimed_at`, set to the upgrade time for existing claims.
 
+Keep the TXT record published after the check. The controller stores when
+it last found the record (`checked_at`) and trusts a verification for 24
+hours after that. A route create or hostname update that needs a verified
+name whose last check is older looks the record up again: if the token is
+still there `checked_at` moves and the route is allowed; if the lookup
+answers without it (no record, NXDOMAIN, another value) the claim is
+unverified, a `domain.unverify` audit row is written, and the route is
+refused until the record is published and `flynn domain:check` runs again.
+A lookup that fails (timeout, server error) refuses the route and leaves the
+claim verified. A claim by another account on a verified name whose last
+check is older than 24 hours looks the record up the same way first, so a
+domain that expired or changed hands does not stay with the old account;
+once it is unverified the 7-day hold above applies. Routes already added
+under a name stay when it is unverified. Before controller migration 100 a
+verification never lapsed; migration 100 adds `checked_at` and sets it to
+`verified_at` for verified rows.
+
 `GET /domains?owner_account=<account>` lists that account's claims
-(hostname, owner, token, `txt_name`, `verified_at`, `claimed_at`) for an
+(hostname, owner, token, `txt_name`, `verified_at`, `claimed_at`,
+`checked_at`) for an
 admin of the account (`flynn domain:list`). Without `owner_account` only the
 cluster key or a cluster admin may list, and gets every claim
 (`flynn domain:list --all`). `DELETE /domains/<hostname>` removes a claim,
 verified or not, for an admin of the owning account or the cluster key
 (`flynn domain:remove`). Routes already added under a deleted name stay; new
 routes under it need the name claimed and verified again. Claims and deletes
-are written to the audit log (`domain.claim`, `domain.delete`).
+are written to the audit log (`domain.claim`, `domain.delete`, and
+`domain.unverify` when a re-check no longer finds the record).
 
 The claim is refused when the name is a single label, an IP address, a
 wildcard, not a valid DNS name, a special-use name (`localhost`, `.local`,

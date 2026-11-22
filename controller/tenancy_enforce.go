@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -351,21 +352,52 @@ func (c *controllerAPI) checkHostname(ctx context.Context, app *ct.App, hostname
 	if err != nil {
 		return err
 	}
-	var verified []string
-	if app.OwnerAccount != "" {
-		verified, err = c.tenancy.VerifiedHostnames(app.OwnerAccount)
-		if err != nil {
-			return err
-		}
-	}
 	domain := ""
 	if c.appRepo != nil {
 		domain = c.appRepo.DefaultDomain()
 	}
-	if err := tenancy.HostnameAllowed(settings.Mode, hostname, app.Name, domain, verified); err != nil {
-		return ct.ValidationError{Field: "domain", Message: err.Error()}
+	if settings.Mode != tenancy.ModeHosted {
+		return nil
 	}
-	return nil
+	var rows []*ct.DomainVerification
+	if app.OwnerAccount != "" {
+		rows, err = c.tenancy.VerifiedDomains(app.OwnerAccount)
+		if err != nil {
+			return err
+		}
+	}
+	// Trust a verification only while its last TXT check is recent
+	// (CORE-56). Stale ones are looked up again below, only when no fresh
+	// one already allows the name.
+	var fresh []string
+	var stale []*ct.DomainVerification
+	for _, d := range rows {
+		if domainStale(d) {
+			stale = append(stale, d)
+		} else {
+			fresh = append(fresh, d.Hostname)
+		}
+	}
+	allowErr := tenancy.HostnameAllowed(settings.Mode, hostname, app.Name, domain, fresh)
+	if allowErr == nil {
+		return nil
+	}
+	for _, d := range stale {
+		if tenancy.HostnameAllowed(settings.Mode, hostname, app.Name, domain, []string{d.Hostname}) != nil {
+			continue
+		}
+		ok, err := c.recheckDomain(ctx, d)
+		if err != nil {
+			return ct.ValidationError{Field: "domain", Message: fmt.Sprintf(
+				"could not re-check the TXT record for %s (%s); try again or run flynn domain:check %s", d.Hostname, tenancy.TXTName(d.Hostname), d.Hostname)}
+		}
+		if ok {
+			return nil
+		}
+		allowErr = fmt.Errorf("%s (the TXT record at %s is no longer published; publish it and run flynn domain:check %s)",
+			allowErr.Error(), tenancy.TXTName(d.Hostname), d.Hostname)
+	}
+	return ct.ValidationError{Field: "domain", Message: allowErr.Error()}
 }
 
 func existingProcesses(c *controllerAPI, appID, releaseID string) map[string]int {

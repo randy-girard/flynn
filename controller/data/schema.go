@@ -1607,6 +1607,15 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 		`ALTER TABLE verified_domains ADD COLUMN claimed_at timestamptz NOT NULL DEFAULT now()`,
 		`CREATE INDEX verified_domains_owner_account_idx ON verified_domains (owner_account)`,
 	)
+
+	// A verified domain is looked up again once its last TXT check is older
+	// than a day (CORE-56). Before 100 verified_at stayed set forever, even
+	// after the domain expired or changed hands. Verified rows start from
+	// their verified_at.
+	migrations.Add(100,
+		`ALTER TABLE verified_domains ADD COLUMN checked_at timestamptz`,
+		`UPDATE verified_domains SET checked_at = verified_at WHERE verified_at IS NOT NULL`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

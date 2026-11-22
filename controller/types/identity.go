@@ -236,6 +236,10 @@ type DomainVerification struct {
 	// may replace an unverified claim only once it is older than the
 	// controller's claim hold (7 days).
 	ClaimedAt *time.Time `json:"claimed_at,omitempty"`
+	// CheckedAt is the last time the controller found the TXT record. A
+	// verified name last checked more than a day ago is looked up again
+	// before it allows a new route or keeps out another account's claim.
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
 }
 
 // DomainCheck is the body of POST /domains/verify/:hostname/check. Records
