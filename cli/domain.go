@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/flynn/go-docopt"
 	controller "github.com/randy-girard/flynn/controller/client"
@@ -54,7 +55,9 @@ Examples:
 usage: flynn domain:check <hostname>
 
 Look up the TXT record for a claimed domain and mark it verified when it
-matches the token.
+matches the token. Keep the record published: a verified name whose last
+check is more than a day old is looked up again before it allows a new
+route, and loses its verification when the record is gone.
 `)
 	register("domain:remove", runDomainRemove, `
 usage: flynn domain:remove <hostname>
@@ -105,13 +108,17 @@ func domainList(args *docopt.Args, c controller.Client, out io.Writer) error {
 		return err
 	}
 	w := tabwriter.NewWriter(out, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(w, "HOSTNAME\tOWNER\tSTATUS\tTXT NAME\tTOKEN")
+	fmt.Fprintln(w, "HOSTNAME\tOWNER\tSTATUS\tCHECKED\tTXT NAME\tTOKEN")
 	for _, d := range list {
 		status := "pending"
 		if d.VerifiedAt != nil {
 			status = "verified"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", d.Hostname, d.OwnerAccount, status, d.TXTName, d.Token)
+		checked := "-"
+		if d.CheckedAt != nil {
+			checked = d.CheckedAt.UTC().Format(time.RFC3339)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", d.Hostname, d.OwnerAccount, status, checked, d.TXTName, d.Token)
 	}
 	return w.Flush()
 }

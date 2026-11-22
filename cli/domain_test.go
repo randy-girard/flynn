@@ -143,3 +143,27 @@ func TestDomainCommandsRegistered(t *testing.T) {
 		t.Fatalf("domain:claim help needs examples:\n%s", formatHelp("domain:claim"))
 	}
 }
+
+// TestDomainListShowsLastCheck: CORE-56. A verified name is re-checked when
+// its last TXT check is old; the list shows when that was.
+func TestDomainListShowsLastCheck(t *testing.T) {
+	checked := time.Date(2026, 11, 20, 9, 30, 0, 0, time.UTC)
+	c, _ := domainTestServer(t, func(r *http.Request) (int, interface{}) {
+		return 200, []ct.DomainVerification{
+			{Hostname: "example.com", OwnerAccount: "user:u1", Token: "tok1", TXTName: "_flynn-verify.example.com", VerifiedAt: &checked, CheckedAt: &checked},
+			{Hostname: "pending.example.com", OwnerAccount: "user:u1", Token: "tok2", TXTName: "_flynn-verify.pending.example.com"},
+		}
+	})
+	var out bytes.Buffer
+	args := &docopt.Args{String: map[string]string{"--owner": "user:u1"}, Bool: map[string]bool{}}
+	if err := domainList(args, c, &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[0], "CHECKED") || !strings.Contains(lines[1], "2026-11-20T09:30:00Z") {
+		t.Fatalf("output:\n%s", out.String())
+	}
+	if !strings.Contains(lines[2], " - ") {
+		t.Fatalf("pending row needs a - for CHECKED:\n%s", out.String())
+	}
+}
