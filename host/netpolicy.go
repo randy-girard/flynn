@@ -73,6 +73,7 @@ func (p *netPolicy) Start(client *discoverd.Client) {
 	for _, svc := range iptables.IsolationSets() {
 		go p.watch(svc)
 	}
+	watchServiceSets(client, p.log)
 }
 
 // Track puts a job's overlay IP into its class's ipset and registers it in

@@ -155,7 +155,11 @@ func EnableOutboundNAT(bridge, network string) error {
 // router. Datastore and local-bridge exceptions must be inserted before this
 // rule.
 func UserOverlayDropArgs(overlay string) []string {
-	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-d", overlay, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+	return overlayDropArgs(netpolicy.ServiceUser, overlay)
+}
+
+func overlayDropArgs(set, overlay string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", set, "src", "-d", overlay, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
 }
 
 // LegacyUserOverlayDropArgs is the pre-fix DROP that matched every state,
@@ -311,6 +315,62 @@ func BuildToUserDropArgs() []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceBuild, "src", "-m", "set", "--match-set", netpolicy.ServiceUser, "dst", "-j", "DROP"}
 }
 
+// BuildServiceSet holds the overlay IPs of netpolicy.BuildServices. Build
+// jobs may open these and nothing else on the overlay. LogaggregatorSet holds
+// the logaggregator instances, which datastore engines may not open. Both
+// are filled by flynn-host from discoverd; they are not discoverd services.
+const (
+	BuildServiceSet  = "flynn-net-build-svc"
+	LogaggregatorSet = "flynn-net-logagg"
+)
+
+// BuildOverlayDropArgs drops NEW overlay packets from build jobs. It must
+// sit after BuildToServicesArgs. Like the user drop it is NEW-only.
+func BuildOverlayDropArgs(overlay string) []string {
+	return overlayDropArgs(netpolicy.ServiceBuild, overlay)
+}
+
+// BuildToServicesArgs lets build jobs reach the controller, blobstore and
+// tarreceive.
+func BuildToServicesArgs() []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceBuild, "src", "-m", "set", "--match-set", BuildServiceSet, "dst", "-j", "ACCEPT"}
+}
+
+// DataToLogaggregatorDropArgs stops datastore engines from opening the
+// logaggregator (forged syslog lines, the log API). User and build jobs are
+// already covered by their overlay drops, and flynn-host's own connections do
+// not traverse FORWARD, so only the host and platform jobs (gitreceive) ship
+// syslog.
+func DataToLogaggregatorDropArgs() []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-m", "set", "--match-set", LogaggregatorSet, "dst", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// JobIsolationSets are every ipset JobIsolationForwardRules references.
+func JobIsolationSets() []string {
+	return append(IsolationSets(), NodeSet, BuildServiceSet, LogaggregatorSet)
+}
+
+// JobIsolationForwardRules is the FORWARD rule list EnableJobIsolation
+// inserts, each at the head of the chain, so the kernel order is the
+// reverse: datastore ACCEPTs (per port), DNS ACCEPT, build→services ACCEPT,
+// then the drops, with the user and build overlay drops last.
+func JobIsolationForwardRules(overlay, bridgeAddr string) [][]string {
+	iso := [][]string{
+		UserOverlayDropArgs(overlay),
+		BuildOverlayDropArgs(overlay),
+		UserToNodeDropArgs(),
+		BuildToNodeDropArgs(),
+		DataToNodePortDropArgs("22"),
+		DataToNodePortDropArgs("1113"),
+		DataToLogaggregatorDropArgs(),
+		BuildToUserDropArgs(),
+		BuildToServicesArgs(),
+		UserToBridgeDNSArgs(bridgeAddr, "tcp"),
+		UserToBridgeDNSArgs(bridgeAddr, "udp"),
+	}
+	return append(iso, UserToDatastoreRules()...)
+}
+
 // IsolationSets are the ipsets mirrored from discoverd netpolicy services.
 func IsolationSets() []string {
 	return []string{netpolicy.ServiceUser, netpolicy.ServiceBuild, netpolicy.ServiceData, netpolicy.ServiceSys}
@@ -323,7 +383,7 @@ func IsolationSets() []string {
 // EgressDenyCIDRs) is dropped for user and build jobs ahead of the bridge
 // egress ACCEPT.
 func EnableJobIsolation(overlay, bridgeAddr string, egressDeny []string) error {
-	if err := EnsureSets(append(IsolationSets(), NodeSet)...); err != nil {
+	if err := EnsureSets(JobIsolationSets()...); err != nil {
 		return err
 	}
 	legacyDrop := LegacyUserOverlayDropArgs(overlay)
@@ -338,20 +398,7 @@ func EnableJobIsolation(overlay, bridgeAddr string, egressDeny []string) error {
 	if Exists(legacyData...) {
 		_, _ = Raw(append([]string{"-D"}, legacyData...)...)
 	}
-	// Insert last-to-first so the chain order is: data ACCEPT (per port),
-	// DNS ACCEPT, build→user DROP, node DROP, user overlay DROP.
-	iso := [][]string{
-		UserOverlayDropArgs(overlay),
-		UserToNodeDropArgs(),
-		BuildToNodeDropArgs(),
-		DataToNodePortDropArgs("22"),
-		DataToNodePortDropArgs("1113"),
-		BuildToUserDropArgs(),
-		UserToBridgeDNSArgs(bridgeAddr, "tcp"),
-		UserToBridgeDNSArgs(bridgeAddr, "udp"),
-	}
-	iso = append(iso, UserToDatastoreRules()...)
-	for _, args := range iso {
+	for _, args := range JobIsolationForwardRules(overlay, bridgeAddr) {
 		if err := insertIfMissing("FORWARD isolation", args); err != nil {
 			return err
 		}
@@ -451,6 +498,15 @@ func PlanMasquerade(save, bridge, hostSubnet, keep string) RulePlan {
 // Datastore and other accepts are not deleted. InsertBefore is that ACCEPT's
 // current 1-based line so the caller inserts before deleting.
 func PlanForwardDrop(save, bridge, keep string) RulePlan {
+	return PlanForwardDropFor(save, bridge, keep, netpolicy.ServiceUser)
+}
+
+// overlayDropSets are the job classes with an overlay-wide NEW drop.
+var overlayDropSets = []string{netpolicy.ServiceUser, netpolicy.ServiceBuild}
+
+// PlanForwardDropFor is PlanForwardDrop for the overlay drop of one job
+// class set (flynn-net-user or flynn-net-build).
+func PlanForwardDropFor(save, bridge, keep, set string) RulePlan {
 	keepNet := canonicalCIDR(keep)
 	var plan RulePlan
 	have := false
@@ -458,7 +514,7 @@ func PlanForwardDrop(save, bridge, keep string) RulePlan {
 		if isBridgeEgress(rule, bridge) && plan.InsertBefore == 0 {
 			plan.InsertBefore = i + 1
 		}
-		dest, ok := userOverlayDropDest(rule)
+		dest, ok := overlayDropDest(rule, set)
 		if !ok {
 			continue
 		}
@@ -469,7 +525,7 @@ func PlanForwardDrop(save, bridge, keep string) RulePlan {
 		plan.Delete = append(plan.Delete, append([]string{"FORWARD"}, rule...))
 	}
 	if !have {
-		plan.Insert = UserOverlayDropArgs(keepNet)
+		plan.Insert = overlayDropArgs(set, keepNet)
 	}
 	return plan
 }
@@ -499,26 +555,30 @@ func ApplyOverlayRules(run IPTables, bridge, hostSubnet, overlay string) error {
 			return fmt.Errorf("removing stale masquerade: %s", err)
 		}
 	}
-	fwdSave, err := run("-S", "FORWARD")
-	if err != nil {
-		return fmt.Errorf("reading filter rules: %s", err)
-	}
-	fwd := PlanForwardDrop(string(fwdSave), bridge, overlay)
-	if len(fwd.Insert) > 0 {
-		args := []string{"-I", "FORWARD"}
-		if fwd.InsertBefore > 0 {
-			args = append(args, strconv.Itoa(fwd.InsertBefore))
+	// The user drop and the build drop both name the overlay; a wider
+	// overlay that moved only one would let builds reach the added range.
+	for _, set := range overlayDropSets {
+		fwdSave, err := run("-S", "FORWARD")
+		if err != nil {
+			return fmt.Errorf("reading filter rules: %s", err)
 		}
-		if len(fwd.Insert) > 1 {
-			args = append(args, fwd.Insert[1:]...)
+		fwd := PlanForwardDropFor(string(fwdSave), bridge, overlay, set)
+		if len(fwd.Insert) > 0 {
+			args := []string{"-I", "FORWARD"}
+			if fwd.InsertBefore > 0 {
+				args = append(args, strconv.Itoa(fwd.InsertBefore))
+			}
+			if len(fwd.Insert) > 1 {
+				args = append(args, fwd.Insert[1:]...)
+			}
+			if _, err := run(args...); err != nil {
+				return fmt.Errorf("installing overlay drop for %s: %s", set, err)
+			}
 		}
-		if _, err := run(args...); err != nil {
-			return fmt.Errorf("installing overlay drop: %s", err)
-		}
-	}
-	for _, rule := range fwd.Delete {
-		if _, err := run(append([]string{"-D"}, rule...)...); err != nil {
-			return fmt.Errorf("removing stale overlay drop: %s", err)
+		for _, rule := range fwd.Delete {
+			if _, err := run(append([]string{"-D"}, rule...)...); err != nil {
+				return fmt.Errorf("removing stale overlay drop for %s: %s", set, err)
+			}
 		}
 	}
 	return nil
@@ -567,15 +627,27 @@ func isBridgeEgress(rule []string, bridge string) bool {
 		flagValueExact(rule, "-j") == "ACCEPT"
 }
 
-func userOverlayDropDest(rule []string) (string, bool) {
+// overlayDropDest is the -d of an overlay DROP whose only set match is
+// `--match-set <set> src` (UserOverlayDropArgs / BuildOverlayDropArgs, and
+// the legacy all-states user drop).
+func overlayDropDest(rule []string, set string) (string, bool) {
 	if flagValueExact(rule, "-j") != "DROP" {
 		return "", false
 	}
 	if _, ok := egressDenyKey(rule); ok {
 		return "", false
 	}
-	joined := strings.Join(rule, " ")
-	if !strings.Contains(joined, netpolicy.ServiceUser) || !strings.Contains(joined, "src") {
+	matches := 0
+	for i := 0; i < len(rule); i++ {
+		if rule[i] != "--match-set" {
+			continue
+		}
+		matches++
+		if i+2 >= len(rule) || rule[i+1] != set || rule[i+2] != "src" {
+			return "", false
+		}
+	}
+	if matches != 1 {
 		return "", false
 	}
 	dest := flagValueExact(rule, "-d")

@@ -390,20 +390,16 @@ func TestDatastoreHostRulesDropSSHAndAPIOnly(t *testing.T) {
 			t.Fatalf("EnableHostIsolation missing %s", needle)
 		}
 	}
-	jobIso := body
-	if i := strings.Index(body, "func EnableJobIsolation"); i >= 0 {
-		if j := strings.Index(body[i+1:], "\nfunc "); j >= 0 {
-			jobIso = body[i : i+1+j]
-		} else {
-			jobIso = body[i:]
+	rules := flatten(JobIsolationForwardRules("100.64.0.0/16", "100.64.57.1"))
+	for _, want := range [][]string{DataToNodePortDropArgs("22"), DataToNodePortDropArgs("1113")} {
+		found := false
+		for _, r := range rules {
+			if r == strings.Join(want, " ") {
+				found = true
+			}
 		}
-	}
-	for _, needle := range []string{
-		`DataToNodePortDropArgs("22")`,
-		`DataToNodePortDropArgs("1113")`,
-	} {
-		if !strings.Contains(jobIso, needle) {
-			t.Fatalf("EnableJobIsolation missing %s", needle)
+		if !found {
+			t.Fatalf("JobIsolationForwardRules missing %v", want)
 		}
 	}
 }

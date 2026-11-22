@@ -217,3 +217,9 @@ func isUUIDApplianceName(name string) bool {
 func isHex(c rune) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }
+
+// BuildServices are the discoverd services slugbuilder and dockerbuilder
+// jobs may open on the overlay: the controller (artifacts, releases),
+// the blobstore (slugs, build cache) and tarreceive (docker layers). Every
+// other overlay address is dropped for build jobs; they run tenant code.
+var BuildServices = []string{"controller", "blobstore", "tarreceive"}

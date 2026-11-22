@@ -507,8 +507,10 @@ your `addons:destroy` or `flynn delete`. The check reads every app's owner,
 current release env and attachments in one database query.
 
 These rules match ipsets that hold the overlay IPs of each job class
-(`flynn-net-user`, `flynn-net-build`, `flynn-net-data`, `flynn-net-sys`) and
-the cluster node IPs (`flynn-net-nodes`). flynn-host adds a job's IP when it
+(`flynn-net-user`, `flynn-net-build`, `flynn-net-data`, `flynn-net-sys`), the
+cluster node IPs (`flynn-net-nodes`), and two per-service sets that flynn-host
+fills from discoverd: `flynn-net-build-svc` (the controller, blobstore and
+tarreceive instances) and `flynn-net-logagg` (the logaggregator instances). flynn-host adds a job's IP when it
 starts the job and learns other hosts' jobs from discoverd. A finished job's IP
 is not given to another job until its veth is off the bridge and two minutes
 have passed, so traffic still addressed to the old job is not matched to a
@@ -541,8 +543,30 @@ default identity, and passes it to ssh only for an opted-in app's submodule
 `SSH_CLIENT_HOSTS`). See [Apps — Git submodules](apps.md#git-submodules).
 
 Build jobs (slugbuilder / dockerbuilder) are a separate overlay class. They
-cannot reach user jobs or the host control plane, but they can still reach
-cluster services the build needs, including blobstore. Blobstore HTTP
+run tenant code (`bin/compile`, custom buildpacks, Dockerfile `RUN`), so on
+the overlay they may open only the services a build needs: the controller,
+blobstore and tarreceive (`flynn-net-build-svc`). Every other overlay address
+is dropped for new connections from a build job: logaggregator, the system
+Postgres, every tenant datastore (data and admin ports), other system jobs,
+user jobs, and overlay IPs not yet in any set. Build jobs also cannot reach the
+host control plane or the node underlay (which holds the router API). The
+internet stays open for buildpack downloads. A set rebuilds on every
+instance change of its services and every 15 seconds; a failed discoverd
+lookup keeps the previous contents. `flynn-host overlay:set` moves the build
+drop to the new overlay with the user drop.
+
+The logaggregator API (`/log/:app`, `/snapshot`, `/cursors`) serves every
+app's buffered logs, and the router API (`/events`, `/metrics`, `/debug`)
+lists every route and backend address. Both require the cluster key
+(`CONTROLLER_KEY` or an `AUTH_KEY` entry, as HTTP Basic password or Bearer);
+only `/.well-known/status` is public, and a release with no key refuses every
+other request. The controller, the scheduler and logaggregator itself send the
+key from their env; flynn-host sends the key of a controller or logaggregator
+job on the host, or one it looks up from the cluster. The logaggregator syslog
+port has no authentication, so it is reachable only from hosts and platform
+jobs (gitreceive ships push progress there): user and build jobs are covered
+by their overlay drops, and datastore engines are dropped by
+`flynn-net-logagg`. Blobstore HTTP
 requires the cluster `AUTH_KEY` / `CONTROLLER_KEY` (Basic or Bearer) for
 object GET/PUT/DELETE. `/.well-known/status` and `HEAD /` stay
 unauthenticated so bootstrap and health checks work. Per-app
