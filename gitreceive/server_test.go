@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -899,5 +901,90 @@ func TestGitHandlerTenantGrantsFromController(t *testing.T) {
 	}
 	if callers.calls != 0 {
 		t.Fatalf("controller asked %d times for locally decided credentials", callers.calls)
+	}
+}
+
+// EDGE-08: a push whose body passes MAX_PUSH_SIZE is refused with 413, git
+// stops reading it and the ref does not move. A push under the limit still
+// lands.
+func TestGitHandlerRejectsOversizePush(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	auth := authorizer.New([]string{"cluster-secret"}, nil, nil, 0)
+	h := newGitHandler(&fakeApps{apps: map[string]*ct.App{"myapp": {ID: "app-1", Name: "myapp"}}}, auth)
+	h.maxPushSize = 64 << 10
+
+	repo := t.TempDir()
+	if err := initRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".git", "hooks", "pre-receive"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	h.prepare = func(string) (string, error) {
+		// the handler removes the returned directory; hand it a copy
+		dest := t.TempDir()
+		if out, err := exec.Command("cp", "-a", repo+"/.", dest).CombinedOutput(); err != nil {
+			return "", fmt.Errorf("cp: %s: %s", err, out)
+		}
+		return dest, nil
+	}
+	var uploads int
+	h.upload = func(path, _ string) error {
+		uploads++
+		// keep the pushed refs for the next request, as the blobstore would
+		if err := os.RemoveAll(repo); err != nil {
+			return err
+		}
+		out, err := exec.Command("cp", "-a", path, repo).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("cp: %s: %s", err, out)
+		}
+		return nil
+	}
+	srv := httptest.NewServer(httphelper.ContextInjector("gitreceive", httphelper.NewRequestLogger(h)))
+	defer srv.Close()
+	remote := strings.Replace(srv.URL, "http://", "http://user:cluster-secret@", 1) + "/myapp.git"
+
+	src := t.TempDir()
+	runGit(t, src, "init", "-q", "-b", "main")
+	runGit(t, src, "config", "user.email", "t@example.com")
+	runGit(t, src, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(src, "small.txt"), []byte("small\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, src, "add", "small.txt")
+	runGit(t, src, "commit", "-q", "-m", "small")
+	if out, err := gitCmd(src, "push", remote, "HEAD:refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("small push failed: %s\n%s", err, out)
+	}
+	if uploads != 1 {
+		t.Fatalf("uploads after the small push = %d, want 1", uploads)
+	}
+
+	// random bytes do not compress, so the pack is about this size
+	big := make([]byte, 1<<20)
+	if _, err := rand.Read(big); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "big.bin"), big, 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, src, "add", "big.bin")
+	runGit(t, src, "commit", "-q", "-m", "big")
+	out, err := gitCmd(src, "push", remote, "HEAD:refs/heads/main").CombinedOutput()
+	if err == nil {
+		t.Fatalf("oversize push succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), "413") {
+		t.Fatalf("oversize push did not report 413:\n%s", out)
+	}
+	// git sends a tiny probe RPC before a large chunked body; that probe
+	// may upload the unchanged repo, but the refused pack never lands
+	head := strings.TrimSpace(string(mustGit(t, repo, "rev-parse", "refs/heads/main")))
+	small := strings.TrimSpace(string(mustGit(t, src, "rev-parse", "HEAD~1")))
+	if head != small {
+		t.Fatalf("main moved to %s after the refused push, want %s", head, small)
 	}
 }

@@ -38,6 +38,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/uploadlimit"
 )
 
 func main() {
@@ -77,6 +78,10 @@ func main() {
 
 	h := newGitHandler(cc, auth)
 	h.signer = receiveSigner()
+	if h.maxPushSize, err = uploadlimit.FromEnv("MAX_PUSH_SIZE", defaultMaxPushSize); err != nil {
+		log.Fatalln("error parsing MAX_PUSH_SIZE:", err)
+	}
+	log.Printf("push limit: MAX_PUSH_SIZE=%d (0 is unlimited)", h.maxPushSize)
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), httphelper.ContextInjector("gitreceive", httphelper.NewRequestLogger(h))))
 }
 
@@ -112,7 +117,14 @@ type gitHandler struct {
 	httpClient *http.Client
 	prepare    func(cacheKey string) (string, error)
 	upload     func(path, cacheKey string) error
+	// maxPushSize caps the request body of a git RPC; 0 is no limit.
+	maxPushSize int64
 }
+
+// defaultMaxPushSize caps one push (the pack git sends) unless MAX_PUSH_SIZE
+// says otherwise (EDGE-08). GitHub refuses pushes over 2 GiB; 8 GiB leaves
+// room for repositories with large committed assets.
+const defaultMaxPushSize = 8 << 30
 
 type gitService struct {
 	method     string
@@ -126,6 +138,8 @@ type gitEnv struct {
 	AppName      string
 	Pipeline     string
 	ReceiveToken string
+	// MaxBody caps the RPC request body; 0 is no limit.
+	MaxBody int64
 }
 
 // Routing table
@@ -149,6 +163,8 @@ func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandle
 		httpClient: http.DefaultClient,
 		prepare:    prepareRepo,
 		upload:     uploadRepo,
+
+		maxPushSize: defaultMaxPushSize,
 	}
 }
 
@@ -234,13 +250,17 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(repoPath)
 
-	env := gitEnv{App: app.ID, AppName: app.Name}
+	env := gitEnv{App: app.ID, AppName: app.Name, MaxBody: h.maxPushSize}
 	if rpc == "git-receive-pack" {
 		env.ReceiveToken = h.receiveToken(app)
 	}
 	success := g.handleFunc(env, g.rpc, repoPath, w, r)
 	if success && g.rpc == "git-receive-pack" {
-		if err := uploadRepo(repoPath, app.ID); err != nil {
+		upload := h.upload
+		if upload == nil {
+			upload = uploadRepo
+		}
+		if err := upload(repoPath, app.ID); err != nil {
 			logError(w, "uploadRepo", err)
 		}
 	}
@@ -315,9 +335,13 @@ func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *a
 		}
 	}
 
-	success := g.handleFunc(gitEnv{Pipeline: pipeline}, g.rpc, repoPath, w, r)
+	success := g.handleFunc(gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize}, g.rpc, repoPath, w, r)
 	if success && g.rpc == "git-receive-pack" {
-		if err := uploadRepo(repoPath, cacheKey); err != nil {
+		upload := h.upload
+		if upload == nil {
+			upload = uploadRepo
+		}
+		if err := upload(repoPath, cacheKey); err != nil {
 			logError(w, "uploadRepo", err)
 		}
 	}
@@ -389,10 +413,27 @@ func handleGetInfoRefs(env gitEnv, _ string, path string, w http.ResponseWriter,
 	return true
 }
 
-func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r *http.Request) bool {
+// pushTooLarge answers 413 naming the limit and the setting that raises it.
+// git prints the status ("RPC failed; HTTP 413") and stops the push.
+func pushTooLarge(w http.ResponseWriter, limit int64) {
+	msg := fmt.Sprintf("push exceeds the gitreceive limit of %s; an operator can raise it with `flynn -a gitreceive env:set MAX_PUSH_SIZE=<size>`",
+		uploadlimit.Format(limit))
+	http.Error(w, msg, http.StatusRequestEntityTooLarge)
+	if _, ok := w.(*httphelper.ResponseWriter); ok {
+		logError(w, "handlePostRPC", errors.New(msg))
+	}
+}
 
-	// The client request body may have been gzipped.
-	body := r.Body
+func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r *http.Request) bool {
+	// EDGE-08: refuse a body over the limit before git sees any of it.
+	if env.MaxBody > 0 && r.ContentLength > env.MaxBody {
+		pushTooLarge(w, env.MaxBody)
+		return false
+	}
+
+	// The client request body may have been gzipped. The limit counts the
+	// bytes git reads, so a small gzip body cannot expand past it.
+	var body io.Reader = r.Body
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		var err error
 		body, err = gzip.NewReader(r.Body)
@@ -401,6 +442,8 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 			return false
 		}
 	}
+	limited := uploadlimit.NewReader(body, env.MaxBody)
+	body = limited
 
 	// Prepare our Git subprocess
 	cmd, pipe := gitCommand(env, "git", subCommand(rpc), "--stateless-rpc", path)
@@ -421,6 +464,13 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 
 	// Write the client request body to Git's standard input
 	if _, err := io.Copy(stdin, body); err != nil {
+		if limited.Exceeded {
+			// stop git before it finishes a truncated pack or runs the
+			// pre-receive hook
+			cleanUpProcessGroup(cmd)
+			pushTooLarge(w, env.MaxBody)
+			return false
+		}
 		fail500(w, "handlePostRPC write to subprocess", err)
 		return false
 	}
