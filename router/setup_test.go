@@ -450,3 +450,48 @@ func TestError503PageFetch(t *testing.T) {
 		t.Fatalf("expected no custom page for a 404, got %q", page)
 	}
 }
+
+// main starts the fetch after the listeners are up. It must return at once,
+// even when the page host stalls, and leave the built-in page in place.
+func TestLoadError503PageDoesNotBlock(t *testing.T) {
+	url, cleanup := stallingListener(t, "")
+	defer cleanup()
+	prev := error503PageTimeout
+	error503PageTimeout = 200 * time.Millisecond
+	defer func() { error503PageTimeout = prev }()
+
+	page := &error503Page{}
+	start := time.Now()
+	done := loadError503Page(page, url)
+	if d := time.Since(start); d > 100*time.Millisecond {
+		t.Fatalf("loadError503Page blocked for %s", d)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background fetch did not give up within the timeout")
+	}
+	if got := page.Get(); got != nil {
+		t.Fatalf("expected the built-in page after a stalled fetch, got %q", got)
+	}
+}
+
+func TestLoadError503PageSetsPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html>custom</html>"))
+	}))
+	defer srv.Close()
+	page := &error503Page{}
+	select {
+	case <-loadError503Page(page, srv.URL):
+	case <-time.After(5 * time.Second):
+		t.Fatal("fetch did not finish")
+	}
+	if got := string(page.Get()); got != "<html>custom</html>" {
+		t.Fatalf("page = %q", got)
+	}
+	var nilPage *error503Page
+	if nilPage.Get() != nil {
+		t.Fatal("nil holder must return no page")
+	}
+}

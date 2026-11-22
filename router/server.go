@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/inconshreveable/log15"
@@ -179,10 +180,7 @@ func main() {
 		}
 	}
 
-	var error503Page []byte
-	if error503PageURL := os.Getenv("ERROR_503_PAGE_URL"); error503PageURL != "" {
-		error503Page = fetchError503Page(error503PageURL)
-	}
+	error503Page := &error503Page{}
 
 	log.Info("initializing the controller route store")
 	store, err := NewControllerStore()
@@ -230,6 +228,12 @@ func main() {
 	}
 	shutdown.BeforeExit(r.Close)
 
+	// Fetch the custom 503 page only after the listeners are up, so a page
+	// host that is slow or down never holds back ingress.
+	if error503PageURL := os.Getenv("ERROR_503_PAGE_URL"); error503PageURL != "" {
+		loadError503Page(error503Page, error503PageURL)
+	}
+
 	apiAddr := net.JoinHostPort(os.Getenv("LISTEN_IP"), *apiPort)
 	log.Info("starting API listener")
 	listener, err := listenFunc("tcp4", apiAddr)
@@ -262,13 +266,46 @@ func main() {
 }
 
 // error503PageTimeout bounds the whole ERROR_503_PAGE_URL fetch (connect,
-// headers and body). main runs it before any listener is opened, so a page
-// host that stalls must not stop the router from serving.
+// headers and body) so a stalled page host does not hold a goroutine and a
+// connection open for the life of the router.
 var error503PageTimeout = 10 * time.Second
+
+// error503Page holds the custom 503 page. Routes read it on every 503, so
+// a page fetched after the listeners started applies to every route. A nil
+// holder or an empty page means the built-in page.
+type error503Page struct {
+	page atomic.Value // []byte
+}
+
+func (p *error503Page) Get() []byte {
+	if p == nil {
+		return nil
+	}
+	page, _ := p.page.Load().([]byte)
+	return page
+}
+
+func (p *error503Page) Set(page []byte) {
+	p.page.Store(page)
+}
+
+// loadError503Page fetches url in the background and stores the page when
+// the fetch succeeds. The returned channel is closed when the fetch ends.
+func loadError503Page(p *error503Page, url string) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if page := fetchError503Page(url); page != nil {
+			p.Set(page)
+			logger.Info("using the custom 503 page from ERROR_503_PAGE_URL", "url", url, "bytes", len(page))
+		}
+	}()
+	return done
+}
 
 // fetchError503Page downloads the custom 503 page. It returns nil on any
 // error, including a fetch that takes longer than error503PageTimeout, so the
-// router falls back to its built-in page and goes on to open its listeners.
+// router keeps its built-in page.
 func fetchError503Page(url string) []byte {
 	log := logger.New("fn", "fetchError503Page", "url", url)
 	client := &http.Client{Timeout: error503PageTimeout}

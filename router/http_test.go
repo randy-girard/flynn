@@ -1088,6 +1088,34 @@ func (s *S) TestStickyHTTPRouteWebsocket(c *C) {
 	}
 }
 
+// ERROR_503_PAGE_URL is fetched after the listeners are up, so a page that
+// arrives later must reach routes added before it as well as after it.
+func (s *S) TestError503PageSetAfterStart(c *C) {
+	l := s.buildHTTPListener(c)
+	l.error503Page = &error503Page{}
+	c.Assert(l.Start(), IsNil)
+	defer l.Close()
+	l.defaultPorts = getDefaultPortsFromAddrs(l)
+
+	get := func(domain string) string {
+		res, err := newHTTPClient(domain).Do(newReq("http://"+l.Addrs[0], domain))
+		c.Assert(err, IsNil)
+		defer res.Body.Close()
+		c.Assert(res.StatusCode, Equals, 503)
+		data, err := ioutil.ReadAll(res.Body)
+		c.Assert(err, IsNil)
+		return string(data)
+	}
+
+	s.addRoute(c, l, router.HTTPRoute{Domain: "before.example.com", Service: "before-com"}.ToRoute())
+	c.Assert(strings.Contains(get("before.example.com"), "Service unavailable"), Equals, true)
+
+	l.error503Page.Set([]byte("<html>custom maintenance</html>"))
+	s.addRoute(c, l, router.HTTPRoute{Domain: "after.example.com", Service: "after-com"}.ToRoute())
+	c.Assert(get("before.example.com"), Equals, "<html>custom maintenance</html>")
+	c.Assert(get("after.example.com"), Equals, "<html>custom maintenance</html>")
+}
+
 func (s *S) TestNoBackends(c *C) {
 	l := s.newHTTPListener(c)
 	defer l.Close()

@@ -59,7 +59,10 @@ type ReverseProxy struct {
 	// Logger is the logger for the proxy.
 	Logger log15.Logger
 
-	Error503Page []byte
+	// Error503Page returns the custom 503 page, or nil for the built-in one.
+	// It is read on every 503 so a page fetched after start applies to
+	// existing routes.
+	Error503Page func() []byte
 
 	// Service is the discoverd service this proxy fronts; used for latency metrics.
 	Service string
@@ -229,8 +232,10 @@ func (p *ReverseProxy) errResponse(err error, rw http.ResponseWriter) int {
 		return 499
 	}
 	page := serviceUnavailable
-	if len(p.Error503Page) > 0 {
-		page = p.Error503Page
+	if p.Error503Page != nil {
+		if custom := p.Error503Page(); len(custom) > 0 {
+			page = custom
+		}
 	}
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(http.StatusServiceUnavailable)

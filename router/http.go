@@ -52,7 +52,7 @@ type HTTPListener struct {
 	keypair       tls.Certificate
 	proxyProtocol bool
 
-	error503Page []byte
+	error503Page *error503Page
 
 	// caps is the per-app in-flight HTTP limit for this process. The request
 	// path must not take mtx to touch it.
@@ -281,7 +281,7 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 		Logger:            logger.New("service", r.Service),
 		Service:           r.Service,
 	})
-	r.rp.Error503Page = h.l.error503Page
+	r.rp.Error503Page = h.l.error503Page.Get
 	r.service = service
 	r.caps = h.l.caps
 	if h.l.caps != nil {
