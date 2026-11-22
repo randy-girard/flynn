@@ -35,6 +35,7 @@ import (
 	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/pkg/archiver"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
+	"github.com/randy-girard/flynn/pkg/buildlock"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/status"
@@ -77,6 +78,7 @@ func main() {
 	auth := authorizer.New([]string{key}, nil, tokenKey, tokenMaxValidity)
 
 	h := newGitHandler(cc, auth)
+	h.locks = cc
 	h.signer = receiveSigner()
 	if h.maxPushSize, err = uploadlimit.FromEnv("MAX_PUSH_SIZE", defaultMaxPushSize); err != nil {
 		log.Fatalln("error parsing MAX_PUSH_SIZE:", err)
@@ -119,6 +121,10 @@ type gitHandler struct {
 	upload     func(path, cacheKey string) error
 	// maxPushSize caps the request body of a git RPC; 0 is no limit.
 	maxPushSize int64
+	// locks holds the app's build lease for a push (EDGE-09); nil pushes
+	// unlocked. lockTTL is the lease length, renewed while the push runs.
+	locks   buildlock.Store
+	lockTTL time.Duration
 }
 
 // defaultMaxPushSize caps one push (the pack git sends) unless MAX_PUSH_SIZE
@@ -140,6 +146,12 @@ type gitEnv struct {
 	ReceiveToken string
 	// MaxBody caps the RPC request body; 0 is no limit.
 	MaxBody int64
+	// LockHolder is the build lease this push holds (EDGE-09), passed to
+	// flynn-receiver so it does not try to take it again.
+	LockHolder string
+	// Refusal, when set, is printed by the pre-receive hook, which then
+	// declines the push before anything is built.
+	Refusal string
 }
 
 // Routing table
@@ -165,6 +177,7 @@ func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandle
 		upload:     uploadRepo,
 
 		maxPushSize: defaultMaxPushSize,
+		lockTTL:     buildlock.DefaultTTL,
 	}
 }
 
@@ -239,6 +252,18 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	env := gitEnv{App: app.ID, AppName: app.Name, MaxBody: h.maxPushSize}
+	// EDGE-09: the receive RPC holds the app's build lease from before the
+	// repo cache download until after the upload. A second push while it is
+	// held still runs receive-pack (git only shows hook output), but the
+	// hook declines it and nothing is built or uploaded.
+	if g.rpc == "git-receive-pack" {
+		lease, refusal := h.lockPush(w, app)
+		defer lease.Release()
+		env.LockHolder = lease.Holder()
+		env.Refusal = refusal
+	}
+
 	prepare := h.prepare
 	if prepare == nil {
 		prepare = prepareRepo
@@ -250,12 +275,11 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(repoPath)
 
-	env := gitEnv{App: app.ID, AppName: app.Name, MaxBody: h.maxPushSize}
 	if rpc == "git-receive-pack" {
 		env.ReceiveToken = h.receiveToken(app)
 	}
 	success := g.handleFunc(env, g.rpc, repoPath, w, r)
-	if success && g.rpc == "git-receive-pack" {
+	if success && g.rpc == "git-receive-pack" && env.Refusal == "" {
 		upload := h.upload
 		if upload == nil {
 			upload = uploadRepo
@@ -371,6 +395,30 @@ func previewGitAllowed(tok *authorizer.Token, info *previewRemoteInfo, allow fun
 		}
 	}
 	return false
+}
+
+// lockPush takes app's build lease for one receive RPC. It returns the lease
+// (nil when the controller has no lease API, see buildlock.ErrUnsupported)
+// or the message the hook prints when the push must be refused.
+func (h *gitHandler) lockPush(w http.ResponseWriter, app *ct.App) (*buildlock.Lease, string) {
+	if h.locks == nil {
+		return nil, ""
+	}
+	lease, err := buildlock.Acquire(h.locks, app.ID, "a git push", h.lockTTL)
+	if err == nil {
+		return lease, ""
+	}
+	var held *ct.BuildLockHeldError
+	switch {
+	case errors.As(err, &held):
+		return nil, fmt.Sprintf("-----> Push refused: %s. Wait for it to finish, then pull and push again.", held)
+	case errors.Is(err, buildlock.ErrUnsupported):
+		logError(w, "buildLock", err)
+		return nil, ""
+	default:
+		logError(w, "buildLock", err)
+		return nil, fmt.Sprintf("-----> Push refused: could not take the build lock for %s: %s. Try the push again.", app.Name, err)
+	}
 }
 
 func handleGetInfoRefs(env gitEnv, _ string, path string, w http.ResponseWriter, r *http.Request) bool {
@@ -531,6 +579,12 @@ func gitCommand(env gitEnv, name string, args ...string) (*exec.Cmd, io.Reader) 
 	if tok := strings.TrimSpace(env.ReceiveToken); tok != "" {
 		cmd.Env = append(cmd.Env, "FLYNN_RECEIVE_TOKEN="+tok)
 	}
+	if env.LockHolder != "" {
+		cmd.Env = append(cmd.Env, buildlock.HolderEnv+"="+env.LockHolder)
+	}
+	if env.Refusal != "" {
+		cmd.Env = append(cmd.Env, "FLYNN_PUSH_REFUSED="+env.Refusal)
+	}
 
 	r, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout
@@ -665,14 +719,30 @@ const archiveTreeFunc = `git-archive-all() {
 }
 `
 
+// The hook declines a push gitreceive refused (FLYNN_PUSH_REFUSED: another
+// push holds the app's build lease) and a push whose old rev is no longer
+// the branch tip. Smart HTTP advertises refs and receives the pack in two
+// requests, each on a fresh repo cache download, so a push that landed in
+// between leaves this one stale; receive-pack would only reject its ref
+// update after this hook had built and released it (EDGE-09).
 var prereceiveHook = []byte(`#!/bin/bash
 set -eo pipefail;
+
+if [[ -n "${FLYNN_PUSH_REFUSED}" ]]; then
+	printf '%s\n' "${FLYNN_PUSH_REFUSED}"
+	exit 1
+fi
 
 ` + archiveTreeFunc + `
 
 while read oldrev newrev refname; do
 	if [[ $refname = "refs/heads/master" ]] || [[ $refname = "refs/heads/main" ]]; then
-		git-archive-all $newrev "$RECEIVE_APP" "$RECEIVE_APP_NAME" | stdbuf -oL -eL /bin/flynn-receiver "$RECEIVE_APP" "$newrev" --meta git=true --meta "git.commit=$newrev"| sed -u "s/^/"$'\e[1G\e[K'"/"
+		current="$(git rev-parse --verify -q "$refname" || true)"
+		if { [[ -z "$current" ]] && [[ ! $oldrev =~ ^0+$ ]]; } || { [[ -n "$current" ]] && [[ "$current" != "$oldrev" ]]; }; then
+			echo "-----> Push refused: ${refname#refs/heads/} changed since this push started (another push landed first). Pull, then push again."
+			exit 1
+		fi
+		git-archive-all $newrev "$RECEIVE_APP" "$RECEIVE_APP_NAME" | stdbuf -oL -eL "${FLYNN_RECEIVER:-/bin/flynn-receiver}" "$RECEIVE_APP" "$newrev" --meta git=true --meta "git.commit=$newrev"| sed -u "s/^/"$'\e[1G\e[K'"/"
 		deploy_pushed=1
 		break
 	fi
