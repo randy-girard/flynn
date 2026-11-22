@@ -237,7 +237,13 @@ func streamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request,
 				continue
 			}
 			e = presentEvent(ctx, app, e)
-			ch <- e
+			// the SSE writer stops reading ch once the client has gone,
+			// so every send must also watch s.Done (CORE-44)
+			select {
+			case <-s.Done:
+				return nil
+			case ch <- e:
+			}
 			currID = e.ID
 		}
 	}
@@ -256,7 +262,11 @@ func streamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request,
 			if hide && dropInternalEvent(event) {
 				continue
 			}
-			ch <- presentEvent(ctx, app, event)
+			select {
+			case <-s.Done:
+				return nil
+			case ch <- presentEvent(ctx, app, event):
+			}
 		}
 	}
 }

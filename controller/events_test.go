@@ -2,12 +2,19 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"sync"
 	"time"
+
+	log15 "github.com/inconshreveable/log15"
 
 	. "github.com/flynn/go-check"
 	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/random"
+	"golang.org/x/net/context"
 )
 
 func (s *S) TestEvents(c *C) {
@@ -507,4 +514,94 @@ func (s *S) TestGetEvent(c *C) {
 	event, err := s.c.GetEvent(events[0].ID)
 	c.Assert(err, IsNil)
 	c.Assert(event, DeepEquals, events[0])
+}
+
+// goneWriter is an http.ResponseWriter for a client that has gone away:
+// once release is closed, every body write fails, as a write to a closed
+// connection would. Until then writes block, which keeps the SSE writer
+// goroutine busy so the handler's next send has nobody to receive it.
+type goneWriter struct {
+	header  http.Header
+	release chan struct{}
+	writing chan struct{}
+	once    sync.Once
+}
+
+func newGoneWriter() *goneWriter {
+	return &goneWriter{header: make(http.Header), release: make(chan struct{}), writing: make(chan struct{})}
+}
+
+func (w *goneWriter) Header() http.Header { return w.header }
+func (w *goneWriter) WriteHeader(int)     {}
+func (w *goneWriter) Write([]byte) (int, error) {
+	w.once.Do(func() { close(w.writing) })
+	<-w.release
+	return 0, errors.New("write: broken pipe")
+}
+
+func (s *S) runStreamEvents(c *C, w http.ResponseWriter, query string, app *ct.App, listener *data.EventListener) chan error {
+	req, err := http.NewRequest("GET", "/events?"+query, nil)
+	c.Assert(err, IsNil)
+	ctx := ctxhelper.NewContextLogger(context.Background(), log15.New())
+	done := make(chan error, 1)
+	go func() { done <- streamEvents(ctx, w, req, listener, app, data.NewEventRepo(s.hc.db)) }()
+	return done
+}
+
+// TestStreamEventsReturnsWhenClientGone covers CORE-44: when the client goes
+// away during the replay of past events, the handler must return instead of
+// blocking forever on a send nobody will receive.
+func (s *S) TestStreamEventsReturnsWhenClientGone(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "events-gone-replay"})
+	for i := 0; i < 3; i++ {
+		s.createTestRelease(c, app.ID, &ct.Release{})
+	}
+	listener := data.NewEventListener(data.NewEventRepo(s.hc.db))
+	c.Assert(listener.Listen(), IsNil)
+	defer listener.CloseWithError(nil)
+
+	w := newGoneWriter()
+	close(w.release) // every write fails: the client is already gone
+	done := s.runStreamEvents(c, w, "past=true", app, listener)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		c.Fatal("streamEvents did not return within 1s of the client going away during replay")
+	}
+}
+
+// TestStreamEventsReturnsWhenClientGoneWithLiveEventPending covers the live
+// half of CORE-44: an event is waiting to be sent when the SSE writer stops.
+func (s *S) TestStreamEventsReturnsWhenClientGoneWithLiveEventPending(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "events-gone-live"})
+	listener := data.NewEventListener(data.NewEventRepo(s.hc.db))
+	c.Assert(listener.Listen(), IsNil)
+	defer listener.CloseWithError(nil)
+
+	w := newGoneWriter()
+	done := s.runStreamEvents(c, w, "", app, listener)
+
+	// wait for the subscription to be in place before creating events
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.createTestRelease(c, app.ID, &ct.Release{})
+		select {
+		case <-w.writing:
+		case <-time.After(100 * time.Millisecond):
+			c.Assert(time.Now().Before(deadline), Equals, true, Commentf("no event reached the SSE writer"))
+			continue
+		}
+		break
+	}
+	// the writer is stuck on the first event; give the handler a second
+	// event so it is blocked handing it over, then drop the client
+	s.createTestRelease(c, app.ID, &ct.Release{})
+	time.Sleep(200 * time.Millisecond)
+	close(w.release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		c.Fatal("streamEvents did not return within 1s of the client going away with an event pending")
+	}
 }
