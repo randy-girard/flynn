@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"testing"
@@ -183,6 +184,125 @@ func TestStore_RemoveService_ErrNotFound(t *testing.T) {
 	defer s.Close()
 	if err := s.RemoveService("no_such_service"); !server.IsNotFound(err) {
 		t.Fatalf("unexpected error: %s", err)
+	}
+}
+
+// CORE-43: removing a service drops its instances and leader. A heartbeat
+// for an instance of a removed service is refused, so the client sees the
+// service is gone, and a service added again under the same name starts
+// empty with no leader. Set-leader for an unknown service is refused.
+func TestRemoveServiceStopsHeartbeatsAndClearsLeader(t *testing.T) {
+	s := MustOpenStore()
+	defer s.Close()
+	manual := &discoverd.ServiceConfig{LeaderType: discoverd.LeaderTypeManual}
+	if err := s.AddService("db", manual); err != nil {
+		t.Fatal(err)
+	}
+	inst := &discoverd.Instance{ID: "inst0", Addr: "10.0.0.1:5432", Proto: "tcp"}
+	if err := s.AddInstance("db", inst); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetServiceLeader("db", "inst0"); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.ServiceLeader("db"); l == nil || l.ID != "inst0" {
+		t.Fatalf("leader before remove = %+v", l)
+	}
+
+	if err := s.RemoveService("db"); err != nil {
+		t.Fatal(err)
+	}
+
+	if a, _ := s.Instances("db"); len(a) != 0 {
+		t.Fatalf("instances after remove: %+v", a)
+	}
+	if l, _ := s.ServiceLeader("db"); l != nil {
+		t.Fatalf("leader after remove: %+v", l)
+	}
+
+	// An unchanged heartbeat must not keep the instance alive.
+	if err := s.AddInstance("db", &discoverd.Instance{ID: "inst0", Addr: "10.0.0.1:5432", Proto: "tcp"}); !server.IsNotFound(err) {
+		t.Fatalf("heartbeat for removed service: err = %v, want not found", err)
+	}
+	res, err := s.HeartbeatBatch([]discoverd.HeartbeatStamp{{Service: "db", ID: "inst0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Missing) != 1 || res.Missing[0].ID != "inst0" {
+		t.Fatalf("batch heartbeat for removed service: missing = %+v", res.Missing)
+	}
+
+	// Re-creating the service inherits nothing.
+	if err := s.AddService("db", manual); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := s.Instances("db"); len(a) != 0 {
+		t.Fatalf("re-added service inherited instances: %+v", a)
+	}
+	if err := s.AddInstance("db", &discoverd.Instance{ID: "inst0", Addr: "10.0.0.1:5432", Proto: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.ServiceLeader("db"); l != nil {
+		t.Fatalf("re-added manual service inherited leader: %+v", l)
+	}
+
+	if err := s.SetServiceLeader("no_such_service", "inst0"); !server.IsNotFound(err) {
+		t.Fatalf("set leader on unknown service: err = %v, want not found", err)
+	}
+}
+
+// A live job whose service was removed re-creates it on its next heartbeat
+// through the client's repair path, and the new service holds only that
+// registration and the leader it claims again (CORE-43). Before the fix the
+// heartbeat kept stamping the old record and the service stayed gone.
+func TestRemoveServiceHeartbeaterRecreatesFreshService(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits for a real heartbeat period")
+	}
+	s := MustOpenStore()
+	defer s.Close()
+	h := server.NewHandler(false, nil)
+	h.Store = s.Store
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	client := discoverd.NewClientWithURL(srv.URL)
+
+	manual := &discoverd.ServiceConfig{LeaderType: discoverd.LeaderTypeManual}
+	if err := client.AddService("db", manual); err != nil {
+		t.Fatal(err)
+	}
+	hb, err := client.RegisterInstanceOptions("db", &discoverd.Instance{Addr: "10.0.0.1:5432"},
+		discoverd.HeartbeatOptions{Service: manual, ClaimLeader: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hb.Close()
+	// A second registration that stops heartbeating must not come back.
+	if err := s.AddInstance("db", &discoverd.Instance{ID: "stale", Addr: "10.0.0.2:5432", Proto: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := client.RemoveService("db"); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		insts, _ := s.Instances("db")
+		leader, _ := s.ServiceLeader("db")
+		if s.Config("db") != nil && len(insts) == 1 && leader != nil {
+			if insts[0].Addr != "10.0.0.1:5432" || leader.ID != insts[0].ID {
+				t.Fatalf("re-created service: instances %+v, leader %+v", insts, leader)
+			}
+			if c := s.Config("db"); c.LeaderType != discoverd.LeaderTypeManual {
+				t.Fatalf("re-created leader type %q", c.LeaderType)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("service not re-created: config %+v, instances %+v, leader %+v", s.Config("db"), insts, leader)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -697,12 +817,13 @@ func TestStore_SetLeader(t *testing.T) {
 	}
 }
 
-// Ensure the store does not error when setting a leader for a non-existent service.
+// Ensure the store refuses a leader for a non-existent service, so a later
+// service of that name does not inherit it (CORE-43).
 func TestStore_SetLeader_NoService(t *testing.T) {
 	s := MustOpenStore()
 	defer s.Close()
-	if err := s.SetServiceLeader("service0", "inst1"); err != nil {
-		t.Fatal(err)
+	if err := s.SetServiceLeader("service0", "inst1"); !server.IsNotFound(err) {
+		t.Fatalf("unexpected error: %v", err)
 	} else if inst, err := s.ServiceLeader("service0"); err != nil {
 		t.Fatal(err)
 	} else if inst != nil {

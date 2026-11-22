@@ -105,6 +105,15 @@ consensus cluster act as a cache and redirect relevant requests to the leader.
 Leader election for each registered service is performed automatically,
 selecting the oldest instance of each service as the leader.
 
+`DELETE /services/:service` removes the service, its metadata, its instances
+and its leader. Heartbeats for an instance of a removed service are refused,
+so a job that is still running re-creates the service on its next heartbeat
+and registers again, and the new service starts with only the jobs that came
+back. A manual-leader service has no leader until one is set again. Setting
+a leader on a service that does not exist is refused. A leader that took
+over from an older discoverd also drops what removed services left behind,
+on its first expiry sweep.
+
 Services are also exposed via DNS to allow clients that are not aware of
 discoverd's HTTP API to find and communicate with each other.
 

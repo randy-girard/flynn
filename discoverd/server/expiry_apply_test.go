@@ -289,8 +289,8 @@ func TestRemoveServiceStillExpiresInstances(t *testing.T) {
 	if err := s.RemoveService("web"); err != nil {
 		t.Fatal(err)
 	}
-	// The remove command leaves the instance record. Expiry still drops it,
-	// and that apply drops the stamp.
+	// RemoveService purges the instance and its stamp (CORE-43). Expiry
+	// then has nothing left to do.
 	if err := s.EnforceExpiry(); err != nil {
 		t.Fatal(err)
 	}
@@ -299,6 +299,100 @@ func TestRemoveServiceStillExpiresInstances(t *testing.T) {
 	}
 	if ids := instanceIDs(t, s, "web"); len(ids) != 0 {
 		t.Fatalf("expiry left instances: %v", ids)
+	}
+}
+
+// A purge that runs after the service was added again must not touch the
+// new service (CORE-43). Between the remove and the purge entries a client
+// can re-create the service and register.
+func TestPurgeServicesKeepsReAddedService(t *testing.T) {
+	s := newFSMStore(t)
+	s.apply(t, addServiceCommandType, &addServiceCommand{Service: "db", Config: &discoverd.ServiceConfig{LeaderType: discoverd.LeaderTypeManual}})
+	s.addInstance(t, "db", &discoverd.Instance{ID: "old", Addr: "10.0.0.1:1", Proto: "tcp"})
+	s.apply(t, setLeaderCommandType, &setLeaderCommand{Service: "db", ID: "old"})
+	s.apply(t, removeServiceCommandType, &removeServiceCommand{Service: "db"})
+	// Adding the service again drops what the remove left, so it does not
+	// inherit the old instance or the old manual leader.
+	s.apply(t, addServiceCommandType, &addServiceCommand{Service: "db", Config: &discoverd.ServiceConfig{LeaderType: discoverd.LeaderTypeManual}})
+	if ids := instanceIDs(t, s.Store, "db"); len(ids) != 0 {
+		t.Fatalf("re-added service inherited instances: %v", ids)
+	}
+	if id := s.data.Leaders["db"]; id != "" {
+		t.Fatalf("re-added service inherited leader %q", id)
+	}
+	s.addInstance(t, "db", &discoverd.Instance{ID: "new", Addr: "10.0.0.2:1", Proto: "tcp"})
+	s.apply(t, purgeServicesCommandType, &purgeServicesCommand{Services: []string{"db"}})
+	if ids := instanceIDs(t, s.Store, "db"); !ids["new"] {
+		t.Fatalf("purge touched a re-added service: %v", ids)
+	}
+
+	// Purging a removed service drops instances, leader, stamps and the map
+	// keys, so uniquely named services do not leave entries behind.
+	s.apply(t, setLeaderCommandType, &setLeaderCommand{Service: "db", ID: "new"})
+	s.apply(t, removeServiceCommandType, &removeServiceCommand{Service: "db"})
+	s.heartbeats.stamp(instanceKey{"db", "new"}, time.Now())
+	s.apply(t, purgeServicesCommandType, &purgeServicesCommand{Services: []string{"db"}})
+	if _, ok := s.data.Instances["db"]; ok {
+		t.Fatal("purge left the instance map")
+	}
+	if _, ok := s.data.Leaders["db"]; ok {
+		t.Fatal("purge left the leader")
+	}
+	if s.heartbeats.has(instanceKey{"db", "new"}) {
+		t.Fatal("purge left the heartbeat stamp")
+	}
+}
+
+// Set-leader for a service that does not exist is refused and writes
+// nothing (CORE-43).
+func TestSetLeaderUnknownServiceWritesNothing(t *testing.T) {
+	s := newFSMStore(t)
+	buf, _ := json.Marshal(&setLeaderCommand{Service: "gone", ID: "x"})
+	s.index++
+	res := s.Apply(&raft.Log{Index: s.index, Data: append([]byte{setLeaderCommandType}, buf...)})
+	if err, _ := res.(error); !IsNotFound(err) {
+		t.Fatalf("apply = %v, want not found", res)
+	}
+	if _, ok := s.data.Leaders["gone"]; ok {
+		t.Fatal("set-leader wrote a leader for an unknown service")
+	}
+}
+
+// Leftovers from an older leader (remove without purge) or a lost purge are
+// cleaned by the first full sweep of a new leader (CORE-43).
+func TestLeaderSweepPurgesOrphanedServices(t *testing.T) {
+	clock := newFrozenClock(time.Unix(1_700_000_000, 0).UTC())
+	s := openLeaderStoreAt(t, clock.Now)
+	s.InstanceTTL = 10 * time.Second
+	if err := s.AddService("web", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddInstance("web", &discoverd.Instance{ID: "a", Addr: "10.0.0.1:1", Proto: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+	// What an older leader's RemoveService leaves: the remove entry only.
+	buf, _ := json.Marshal(&removeServiceCommand{Service: "web"})
+	if _, err := s.raftApply(removeServiceCommandType, buf); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.data.Leaders["gone"] = "x"
+	s.data.Instances["empty"] = map[string]*discoverd.Instance{}
+	s.mu.Unlock()
+
+	clock.Advance(2*s.InstanceTTL + time.Second)
+	if err := s.EnforceExpiry(); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, svc := range []string{"web", "gone", "empty"} {
+		if _, ok := s.data.Instances[svc]; ok {
+			t.Errorf("sweep left instances of %s", svc)
+		}
+		if _, ok := s.data.Leaders[svc]; ok {
+			t.Errorf("sweep left leader of %s", svc)
+		}
 	}
 }
 

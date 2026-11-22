@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -475,6 +476,15 @@ func (s *Store) applyAddServiceCommand(cmd []byte) error {
 		return ServiceExistsError(c.Service)
 	}
 
+	// A service of the same name that was removed may have left instances
+	// or a leader behind (an older leader sends no purge). The new service
+	// must not inherit them (CORE-43).
+	_, hasInstances := s.data.Instances[c.Service]
+	_, hasLeader := s.data.Leaders[c.Service]
+	if hasInstances || hasLeader {
+		s.dropServiceState(c.Service)
+	}
+
 	// Create new named service with configuration.
 	s.data.Services[c.Service] = c.Config
 
@@ -488,7 +498,14 @@ func (s *Store) Config(service string) *discoverd.ServiceConfig {
 	return s.data.Services[service]
 }
 
-// RemoveService deletes the service from the store.
+// RemoveService deletes the service from the store, then purges its
+// instances and leader.
+//
+// The remove entry keeps its original meaning, so a peer still on an older
+// binary applies it as before. The purge is a separate entry type that such
+// a peer rejects as unknown and skips. If the purge entry is lost (leadership
+// moved between the two), the next leader's first full expiry sweep purges
+// the leftovers (CORE-43).
 func (s *Store) RemoveService(service string) error {
 	// Serialize command.
 	cmd, err := json.Marshal(&removeServiceCommand{Service: service})
@@ -499,7 +516,72 @@ func (s *Store) RemoveService(service string) error {
 	if _, err := s.raftApply(removeServiceCommandType, cmd); err != nil {
 		return err
 	}
+	if err := s.purgeServices([]string{service}); err != nil {
+		logger.Warn("purge after service remove failed, the next leader sweep retries",
+			"fn", "RemoveService", "service", service, "err", err)
+	}
 	return nil
+}
+
+func (s *Store) purgeServices(services []string) error {
+	cmd, err := json.Marshal(&purgeServicesCommand{Services: services})
+	if err != nil {
+		return err
+	}
+	_, err = s.raftApply(purgeServicesCommandType, cmd)
+	return err
+}
+
+// applyPurgeServicesCommand drops the instances and leader of each listed
+// service that no longer exists. A service that was added again since is
+// left alone. The remove entry already broadcast a down event per instance.
+func (s *Store) applyPurgeServicesCommand(cmd []byte) error {
+	var c purgeServicesCommand
+	if err := json.Unmarshal(cmd, &c); err != nil {
+		return err
+	}
+	for _, service := range c.Services {
+		if s.data.Services[service] != nil {
+			continue
+		}
+		hadLeader := s.data.Leaders[service] != ""
+		s.dropServiceState(service)
+		if hadLeader {
+			s.broadcast(&discoverd.Event{Service: service, Kind: discoverd.EventKindLeader})
+		}
+	}
+	return nil
+}
+
+// dropServiceState removes the instances, leader, address index entries and
+// heartbeat stamps of service. Requires s.mu.
+func (s *Store) dropServiceState(service string) {
+	delete(s.data.Instances, service)
+	delete(s.data.Leaders, service)
+	s.netIdx.clear(service)
+	s.heartbeats.removeService(service)
+}
+
+// orphanedServicesLocked lists services that have instances or a leader but
+// no config. Requires s.mu.
+func (s *Store) orphanedServicesLocked() []string {
+	seen := make(map[string]struct{})
+	var a []string
+	add := func(service string) {
+		if _, ok := seen[service]; ok || s.data.Services[service] != nil {
+			return
+		}
+		seen[service] = struct{}{}
+		a = append(a, service)
+	}
+	for service := range s.data.Instances {
+		add(service)
+	}
+	for service := range s.data.Leaders {
+		add(service)
+	}
+	sort.Strings(a)
+	return a
 }
 
 func (s *Store) applyRemoveServiceCommand(cmd []byte) error {
@@ -520,8 +602,8 @@ func (s *Store) applyRemoveServiceCommand(cmd []byte) error {
 	delete(s.data.Metas, c.Service)
 
 	// Broadcast EventKindDown for all instances on the service.
-	// Instance records stay in the log's data until expiry, matching the
-	// existing command. Deleting them here would make a mixed-version
+	// Instance records stay until the purge entry that RemoveService
+	// appends next (CORE-43). Deleting them here would make a mixed-version
 	// cluster apply this command differently.
 	for _, inst := range s.data.ServiceInstances(c.Service) {
 		s.broadcast(&discoverd.Event{
@@ -563,6 +645,13 @@ func (s *Store) AddInstance(service string, inst *discoverd.Instance) error {
 		if prev := m[inst.ID]; prev != nil && inst.Equal(prev) {
 			unchanged = true
 		}
+	}
+
+	// A removed service takes no heartbeats, so the client sees it is gone
+	// and its instances are not kept alive (CORE-43).
+	if s.data.Services[service] == nil {
+		s.mu.RUnlock()
+		return NotFoundError{Service: service}
 	}
 	s.mu.RUnlock()
 
@@ -614,7 +703,7 @@ func (s *Store) HeartbeatBatch(stamps []discoverd.HeartbeatStamp) (discoverd.Hea
 		}
 		seen[k] = struct{}{}
 		m := s.data.Instances[st.Service]
-		if m == nil || m[st.ID] == nil {
+		if s.data.Services[st.Service] == nil || m == nil || m[st.ID] == nil {
 			missing = append(missing, discoverd.HeartbeatStamp{Service: st.Service, ID: st.ID})
 			continue
 		}
@@ -845,6 +934,12 @@ func (s *Store) applySetLeaderCommand(cmd []byte) error {
 		return err
 	}
 
+	// A leader for a service that does not exist would be inherited by a
+	// later service of the same name (CORE-43).
+	if s.data.Services[c.Service] == nil {
+		return NotFoundError{Service: c.Service}
+	}
+
 	s.data.Leaders[c.Service] = c.ID
 
 	// Notify new leadership.
@@ -959,6 +1054,9 @@ func (s *Store) EnforceExpiry() error {
 		return err
 	}
 	if len(doomed) == 0 {
+		if err := s.purgeOrphans(full); err != nil {
+			return err
+		}
 		s.finishSweep(full, gen)
 		return nil
 	}
@@ -970,8 +1068,29 @@ func (s *Store) EnforceExpiry() error {
 	if _, err := s.raftApply(expireInstancesCommandType, buf); err != nil {
 		return err
 	}
+	if err := s.purgeOrphans(full); err != nil {
+		return err
+	}
 	s.finishSweep(full, gen)
 	return nil
+}
+
+// purgeOrphans purges instances and leaders left by removed services, on a
+// full sweep only (once per leadership or restore). They come from a remove
+// applied by an older leader, a purge entry lost to a leader change, or a
+// snapshot taken before CORE-43.
+func (s *Store) purgeOrphans(full bool) error {
+	if !full {
+		return nil
+	}
+	s.mu.RLock()
+	orphans := s.orphanedServicesLocked()
+	s.mu.RUnlock()
+	if len(orphans) == 0 {
+		return nil
+	}
+	logger.Info("purging state of removed services", "fn", "EnforceExpiry", "services", strings.Join(orphans, ","))
+	return s.purgeServices(orphans)
 }
 
 func (s *Store) finishSweep(full bool, gen uint64) {
@@ -1178,6 +1297,8 @@ func (s *Store) Apply(l *raft.Log) interface{} {
 		return s.applyRemoveInstanceCommand(cmd)
 	case expireInstancesCommandType:
 		return s.applyExpireInstancesCommand(cmd)
+	case purgeServicesCommandType:
+		return s.applyPurgeServicesCommand(cmd)
 	default:
 		return fmt.Errorf("invalid command type: %d", typ)
 	}
@@ -1415,6 +1536,9 @@ const (
 	addInstanceCommandType     = byte(4)
 	removeInstanceCommandType  = byte(5)
 	expireInstancesCommandType = byte(6)
+	// purgeServicesCommandType is new in CORE-43. A peer on an older binary
+	// answers "invalid command type" and leaves its data as it was.
+	purgeServicesCommandType = byte(7)
 )
 
 // addServiceCommand represents a command object to create a service.
@@ -1456,6 +1580,11 @@ type removeInstanceCommand struct {
 // expireInstancesCommand represents a command object to expire multiple instances.
 type expireInstancesCommand struct {
 	Instances []expireInstance
+}
+
+// purgeServicesCommand drops the instances and leader of removed services.
+type purgeServicesCommand struct {
+	Services []string
 }
 
 // expireInstance represents a single instance to expire.

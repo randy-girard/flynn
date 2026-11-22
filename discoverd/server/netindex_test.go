@@ -83,10 +83,16 @@ func TestStoreNetInstanceMatchesScan(t *testing.T) {
 		assertNetInstanceMatchesScan(t, s.Store, ips, fmt.Sprintf("step %d %s %s/%s", step, name, svc, id))
 	}
 
-	// RemoveService keeps instance records (see applyRemoveServiceCommand),
-	// so DNS keeps matching them, as before.
+	// The remove command alone keeps instance records (an older leader sends
+	// only that), so DNS keeps matching them. The purge that follows drops
+	// them from the data and from the index (CORE-43).
 	s.apply(t, removeServiceCommandType, &removeServiceCommand{Service: netpolicy.ServiceSys})
 	assertNetInstanceMatchesScan(t, s.Store, ips, "remove service")
+	s.apply(t, purgeServicesCommandType, &purgeServicesCommand{Services: []string{netpolicy.ServiceSys}})
+	assertNetInstanceMatchesScan(t, s.Store, ips, "purge service")
+	if n := len(s.netIdx.ipOf[netpolicy.ServiceSys]) + len(s.netIdx.byIP[netpolicy.ServiceSys]); n != 0 {
+		t.Fatalf("purge left %d index entries for %s", n, netpolicy.ServiceSys)
+	}
 
 	snap, err := s.Snapshot()
 	if err != nil {
