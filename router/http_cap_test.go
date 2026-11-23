@@ -573,3 +573,64 @@ func waitForRouteSet(c *C, l *HTTPListener, id string, limit int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func capKeys(h *httpConcurrency) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	keys := make([]string, 0, len(h.apps))
+	for k := range h.apps {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (s *S) TestHTTPConcurrencyLastRouteRemovalDeletesCounter(c *C) {
+	h := newHTTPConcurrency()
+	h.setRoute("r1", "app", 10)
+	h.setRoute("r2", "app", 5)
+	h.setRoute("r1", "app", 10) // an update of the same route
+	h.removeRoute("r1")
+	c.Assert(capKeys(h), DeepEquals, []string{"app:app"})
+	c.Assert(h.limitFor("app"), Equals, int64(5))
+	h.removeRoute("r2")
+	c.Assert(capKeys(h), HasLen, 0)
+
+	// a route without a ParentRef has its own key
+	h.setRoute("r3", "", 10)
+	h.removeRoute("r3")
+	c.Assert(capKeys(h), HasLen, 0)
+}
+
+func (s *S) TestHTTPConcurrencyParentChangeDeletesOldCounter(c *C) {
+	h := newHTTPConcurrency()
+	h.setRoute("r1", "a", 10)
+	h.setRoute("r1", "b", 10)
+	c.Assert(capKeys(h), DeepEquals, []string{"app:b"})
+}
+
+func (s *S) TestHTTPConcurrencyInFlightOutlivesRemovedRoute(c *C) {
+	h := newHTTPConcurrency()
+	h.setRoute("r1", "app", 1)
+	_, _, ok := h.tryAcquire("r1", "app")
+	c.Assert(ok, Equals, true)
+
+	// the last route goes while a request is in flight: the slot is still
+	// counted if the route comes back before that request ends
+	h.removeRoute("r1")
+	c.Assert(capKeys(h), DeepEquals, []string{"app:app"})
+	h.setRoute("r1", "app", 1)
+	_, _, ok = h.tryAcquire("r1", "app")
+	c.Assert(ok, Equals, false)
+	h.removeRoute("r1")
+
+	h.release("r1", "app")
+	c.Assert(capKeys(h), HasLen, 0)
+}
+
+func (s *S) TestHTTPConcurrencyStrayRequestDoesNotLeaveCounter(c *C) {
+	h := newHTTPConcurrency()
+	_, _, ok := h.tryAcquire("gone", "")
+	c.Assert(ok, Equals, true)
+	h.release("gone", "")
+	c.Assert(capKeys(h), HasLen, 0)
+}

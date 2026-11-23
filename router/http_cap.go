@@ -12,6 +12,9 @@ import (
 // httpConcurrency caps in-flight HTTP requests per ParentRef on this process.
 // The counter is local. It is not a connection limit, a file-descriptor limit,
 // or a cluster-wide lock. TCP accepts are not counted.
+//
+// A key's counter is deleted once no synced route uses it and no request is
+// in flight on it, so removed apps and route ids do not pile up.
 type httpConcurrency struct {
 	mu     sync.Mutex
 	apps   map[string]*httpAppCounter
@@ -26,6 +29,9 @@ type httpCapBinding struct {
 type httpAppCounter struct {
 	limit    atomic.Int64
 	inFlight atomic.Int64
+	// routes is the number of synced routes bound to this key. Guarded by
+	// httpConcurrency.mu.
+	routes int
 }
 
 func newHTTPConcurrency() *httpConcurrency {
@@ -68,7 +74,11 @@ func (h *httpConcurrency) setRoute(id, parent string, limit int) {
 	defer h.mu.Unlock()
 	prev, ok := h.routes[id]
 	h.routes[id] = next
+	if !ok || prev.key != key {
+		h.counterLocked(key).routes++
+	}
 	if ok && prev.key != key {
+		h.counterLocked(prev.key).routes--
 		h.recomputeLocked(prev.key)
 	}
 	h.recomputeLocked(key)
@@ -85,7 +95,27 @@ func (h *httpConcurrency) removeRoute(id string) {
 		return
 	}
 	delete(h.routes, id)
+	h.counterLocked(prev.key).routes--
 	h.recomputeLocked(prev.key)
+}
+
+// counterLocked returns key's counter, creating it with the default limit.
+func (h *httpConcurrency) counterLocked(key string) *httpAppCounter {
+	app := h.apps[key]
+	if app == nil {
+		app = &httpAppCounter{}
+		app.limit.Store(router.DefaultMaxConcurrentRequests)
+		h.apps[key] = app
+	}
+	return app
+}
+
+// dropIfUnusedLocked deletes key's counter when no route uses it and no
+// request holds a slot on it.
+func (h *httpConcurrency) dropIfUnusedLocked(key string, app *httpAppCounter) {
+	if app.routes <= 0 && app.inFlight.Load() <= 0 && h.apps[key] == app {
+		delete(h.apps, key)
+	}
 }
 
 func (h *httpConcurrency) recomputeLocked(key string) {
@@ -100,14 +130,12 @@ func (h *httpConcurrency) recomputeLocked(key string) {
 			found = true
 		}
 	}
-	app := h.apps[key]
-	if app == nil {
-		app = &httpAppCounter{}
-		h.apps[key] = app
-	}
+	app := h.counterLocked(key)
 	if !found {
-		// No synced route. Leave a default so a stray request is still capped.
+		// No synced route. Keep the counter only while requests still hold
+		// slots, at the default so a stray request is still capped.
 		app.limit.Store(router.DefaultMaxConcurrentRequests)
+		h.dropIfUnusedLocked(key, app)
 		return
 	}
 	app.limit.Store(min)
@@ -118,15 +146,16 @@ func (h *httpConcurrency) tryAcquire(routeID, parent string) (limit, inflight in
 		return router.DefaultMaxConcurrentRequests, 0, true
 	}
 	key := httpConcurrencyKey(routeID, parent)
+	// Acquire under mu so release cannot delete the counter between the
+	// lookup and the increment.
 	h.mu.Lock()
-	app := h.apps[key]
-	if app == nil {
-		app = &httpAppCounter{}
-		app.limit.Store(router.DefaultMaxConcurrentRequests)
-		h.apps[key] = app
+	defer h.mu.Unlock()
+	app := h.counterLocked(key)
+	limit, inflight, ok = app.tryAcquire()
+	if !ok {
+		h.dropIfUnusedLocked(key, app)
 	}
-	h.mu.Unlock()
-	return app.tryAcquire()
+	return limit, inflight, ok
 }
 
 func (h *httpConcurrency) release(routeID, parent string) {
@@ -135,12 +164,13 @@ func (h *httpConcurrency) release(routeID, parent string) {
 	}
 	key := httpConcurrencyKey(routeID, parent)
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	app := h.apps[key]
-	h.mu.Unlock()
 	if app == nil {
 		return
 	}
 	app.inFlight.Add(-1)
+	h.dropIfUnusedLocked(key, app)
 }
 
 func (h *httpConcurrency) limitFor(parent string) int64 {
