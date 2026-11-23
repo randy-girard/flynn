@@ -1787,12 +1787,7 @@ func (c *Container) cleanup() error {
 	log.Info("starting cleanup")
 	c.closeJobServices()
 
-	c.l.logStreamMtx.Lock()
-	for _, s := range c.l.logStreams[c.job.ID] {
-		s.Close()
-	}
-	delete(c.l.logStreams, c.job.ID)
-	c.l.logStreamMtx.Unlock()
+	c.closeLogStreams(log)
 
 	if c.IP != nil && c.l.bridgeNet != nil {
 		if c.l.netpol != nil {
@@ -1834,6 +1829,27 @@ func (c *Container) cleanup() error {
 	log.Info("finished cleanup")
 	c.l.State.SendCleanupEvent(c.job.ID)
 	return nil
+}
+
+// logStreamCloseTimeout bounds how long job cleanup and CloseLogs wait for
+// one log stream's follow goroutine to return.
+var logStreamCloseTimeout = 10 * time.Second
+
+// closeLogStreams takes the job's log streams out of the map under
+// logStreamMtx and closes them after unlocking it. Holding the lock across
+// LogStream.Close let one stuck stream stop every later job's followLogs on
+// the host: a host-infra flannel job stayed "starting" and flynn-host update
+// failed on the host-infra step (EDGE-60).
+func (c *Container) closeLogStreams(log log15.Logger) {
+	c.l.logStreamMtx.Lock()
+	streams := c.l.logStreams[c.job.ID]
+	delete(c.l.logStreams, c.job.ID)
+	c.l.logStreamMtx.Unlock()
+	for fd, s := range streams {
+		if _, ok := s.CloseTimeout(logStreamCloseTimeout); !ok {
+			log.Error("log stream did not close, leaving it", "fd", fd, "timeout", logStreamCloseTimeout)
+		}
+	}
 }
 
 func (c *Container) WaitStop(timeout time.Duration) error {
@@ -2325,16 +2341,21 @@ func (l *LibcontainerBackend) OpenLogs(buffers host.LogBuffers) error {
 func (l *LibcontainerBackend) CloseLogs() (host.LogBuffers, error) {
 	log := l.Logger.New("fn", "CloseLogs")
 	l.logStreamMtx.Lock()
-	defer l.logStreamMtx.Unlock()
-	buffers := make(host.LogBuffers, len(l.logStreams))
-	for id, streams := range l.logStreams {
+	all := l.logStreams
+	l.logStreams = make(map[string]map[string]*logmux.LogStream)
+	l.logStreamMtx.Unlock()
+	buffers := make(host.LogBuffers, len(all))
+	for id, streams := range all {
 		log.Info("closing", "job.id", id)
 		buffer := make(host.LogBuffer, len(streams))
 		for fd, stream := range streams {
-			buffer[fd] = stream.Close()
+			buf, ok := stream.CloseTimeout(logStreamCloseTimeout)
+			if !ok {
+				log.Error("log stream did not close, handing over no buffer", "job.id", id, "fd", fd)
+			}
+			buffer[fd] = buf
 		}
 		buffers[id] = buffer
-		delete(l.logStreams, id)
 	}
 	return buffers, nil
 }
