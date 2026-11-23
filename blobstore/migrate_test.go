@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 
 	docopt "github.com/flynn/go-docopt"
@@ -18,6 +19,7 @@ type fakeStream struct{ *bytes.Reader }
 func (fakeStream) Close() error { return nil }
 
 type fakeBackend struct {
+	mtx     sync.Mutex
 	name    string
 	puts    int
 	deletes int
@@ -35,6 +37,8 @@ func (b *fakeBackend) Put(tx *postgres.DBTx, info backend.FileInfo, r io.Reader,
 }
 func (b *fakeBackend) Copy(tx *postgres.DBTx, dst, src backend.FileInfo) error { return nil }
 func (b *fakeBackend) Delete(tx *postgres.DBTx, info backend.FileInfo) error {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
 	b.deletes++
 	return b.delErr
 }

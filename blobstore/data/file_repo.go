@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -127,11 +128,16 @@ func (r *FileRepo) ListFilesExcludingDefaultBackend(prefix string) ([]BackendFil
 		var backendName string
 		var externalID *string
 		var sha512 []byte
-		if rows.Scan(&info.ID, &info.Oid, &externalID, &backendName, &info.Name, &info.Type, &info.Size, &sha512, &info.ModTime); err != nil {
+		// size is NULL on rows carried over from the first schema
+		var size *int64
+		if err := rows.Scan(&info.ID, &info.Oid, &externalID, &backendName, &info.Name, &info.Type, &size, &sha512, &info.ModTime); err != nil {
 			return nil, err
 		}
 		if externalID != nil {
 			info.ExternalID = *externalID
+		}
+		if size != nil {
+			info.Size = *size
 		}
 		info.ETag = base64.StdEncoding.EncodeToString(sha512)
 		f := BackendFile{FileInfo: info}
@@ -156,7 +162,7 @@ func (r *FileRepo) ListDeletedFilesForCleanup() ([]BackendFile, error) {
 		var info backend.FileInfo
 		var backendName string
 		var externalID *string
-		if rows.Scan(&info.ID, &externalID, &backendName, &info.Name); err != nil {
+		if err := rows.Scan(&info.ID, &externalID, &backendName, &info.Name); err != nil {
 			return nil, err
 		}
 		if externalID != nil {
@@ -228,10 +234,10 @@ func (r *FileRepo) Copy(to, from string) error {
 	if err := tx.QueryRow(
 		"SELECT file_id, file_oid, external_id, backend, type, size, sha512, sha512_state, updated_at FROM files WHERE name = $1 AND deleted_at IS NULL", from,
 	).Scan(&info.ID, &info.Oid, &externalID, &backendName, &info.Type, &info.Size, &sha512, &sha512State, &info.ModTime); err != nil {
+		tx.Rollback()
 		if err == pgx.ErrNoRows {
 			return backend.ErrNotFound
 		}
-		tx.Rollback()
 		return err
 	}
 	if externalID != nil {
@@ -446,7 +452,11 @@ func (r *FileRepo) Delete(name string) error {
 		return err
 	}
 
-	var errors []error
+	// The rows are already marked deleted, so an object that is not removed
+	// here stays listed for `flynn-blobstore cleanup`. Every failure is
+	// returned, and a backend that is no longer configured is skipped
+	// instead of stopping the deletes on the others.
+	var errs []error
 	for name, files := range backendFiles {
 		if name == "postgres" {
 			// no need to call delete, it is done automatically by a trigger
@@ -454,18 +464,25 @@ func (r *FileRepo) Delete(name string) error {
 		}
 		b, err := r.getBackend(name)
 		if err != nil {
-			errors = append(errors, err)
+			log.Printf("Not deleting %d file(s) from backend %s, left for cleanup: %s", len(files), name, err)
+			errs = append(errs, err)
+			continue
 		}
 		for _, f := range files {
 			if err := b.Delete(nil, f); err != nil {
-				errors = append(errors, err)
+				log.Printf("Error deleting %s (%s) from backend %s, left for cleanup: %s", f.ExternalID, f.Name, name, err)
+				errs = append(errs, fmt.Errorf("deleting %s from backend %s: %w", f.Name, name, err))
 			}
 		}
 	}
-	if len(errors) > 0 {
-		return errors[0]
-	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// PurgeDeleted removes the row of a deleted file once `flynn-blobstore
+// cleanup` has deleted its backend object, so the next run does not list it
+// again. A live row is never removed.
+func (r *FileRepo) PurgeDeleted(id string) error {
+	return r.db.Exec("DELETE FROM files WHERE file_id = $1 AND deleted_at IS NOT NULL", id)
 }
 
 func (f *FileRepo) SetBackend(tx *postgres.DBTx, id, name string) error {

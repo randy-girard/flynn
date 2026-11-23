@@ -680,6 +680,15 @@ leaves the old content readable. If that delete fails, the replaced object stays
 in the bucket; `flynn -a blobstore run /bin/flynn-blobstore cleanup` removes
 such leftovers.
 
+A `DELETE` works the same way: the objects are marked deleted first, then
+removed from the bucket. When a bucket delete fails, or the objects' backend is
+no longer configured, the request returns an error, the objects are no longer
+served, and they stay listed for `cleanup`. `cleanup` forgets an object once it
+is gone from the bucket (one already missing counts as gone), and exits
+non-zero with a count when any object could not be deleted, including objects
+on a backend this release has no credentials for. Re-run it after fixing the
+cause.
+
 The equivalent `flynn -a blobstore env:set` / `flynn -a blobstore run /bin/flynn-blobstore migrate --delete` path still works.
 
 On Flynn older than v20160924.0 the migrate binary was `/bin/flynn-blobstore-migrate`.

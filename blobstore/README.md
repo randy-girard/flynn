@@ -55,6 +55,13 @@ still served. On the S3, GCS, Azure, and MinIO backends the old object is
 deleted only after the new upload is committed; if that delete fails it is left
 for `flynn-blobstore cleanup`.
 
+A DELETE marks the objects deleted, then removes them from their backend. If a
+backend delete fails, or a backend named by a row is no longer configured, the
+DELETE returns `500` and logs every error, and those objects stay listed for
+`flynn-blobstore cleanup`. `cleanup` drops a row once its object is gone (an
+object that is already missing counts as gone) and exits non-zero when any
+object could not be deleted.
+
 ```shell
 # create /file1.txt
 echo data | curl -u :$AUTH_KEY -X PUT --data-binary @- http://blobstore.discoverd/file1.txt
