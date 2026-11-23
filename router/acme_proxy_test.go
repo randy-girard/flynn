@@ -66,7 +66,10 @@ func (s *S) TestACMEChallengeSkipsUserJobInstances(c *C) {
 	waitACMEStatus(c, url, 200, "acme")
 }
 
-var acmeTestClient = &http.Client{Timeout: 5 * time.Second}
+// acmeTestClient's timeout must stay above the router's whole budget for
+// one challenge request (watch start plus acmeTimeout per responder), so a
+// slow responder shows up as a slow answer, not a client error (EDGE-56).
+var acmeTestClient = &http.Client{Timeout: 15 * time.Second}
 
 // acmeGet is acmeStatus with a client timeout, so a router that hangs on a
 // stuck responder fails the test instead of hanging it.
@@ -110,13 +113,26 @@ func waitACMEInstances(c *C, l *HTTPListener, url string, n int) {
 	}
 }
 
-// deadAddr returns a loopback address nothing listens on.
-func deadAddr(c *C) string {
+// deadAddr returns a loopback address that resets every connection at once,
+// like a dead registration, and the function that frees it. The port stays
+// bound until then: a closed port can be taken by another test or process
+// that accepts and never answers (EDGE-56).
+func deadAddr(c *C) (string, func()) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	c.Assert(err, IsNil)
-	addr := ln.Addr().String()
-	ln.Close()
-	return addr
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*net.TCPConn); ok {
+				tc.SetLinger(0)
+			}
+			conn.Close()
+		}
+	}()
+	return ln.Addr().String(), func() { ln.Close() }
 }
 
 // EDGE-21: a challenge set on one responder must be answered even when
@@ -129,12 +145,16 @@ func (s *S) TestACMEChallengeTriesEveryInstance(c *C) {
 
 	_, err := s.discoverd.AddServiceAndRegister(acmeChallengeService, missing.Listener.Addr().String())
 	c.Assert(err, IsNil)
-	_, err = s.discoverd.AddServiceAndRegister(acmeChallengeService, deadAddr(c))
+	dead, closeDead := deadAddr(c)
+	defer closeDead()
+	_, err = s.discoverd.AddServiceAndRegister(acmeChallengeService, dead)
 	c.Assert(err, IsNil)
 	goodHB, err := s.discoverd.AddServiceAndRegister(acmeChallengeService, good.Listener.Addr().String())
 	c.Assert(err, IsNil)
 
-	l, url := s.startACMEListener(c, nil, nil)
+	// A 1s responder timeout keeps the router's worst case per request
+	// (watch start plus three responders) well under acmeTestClient's.
+	l, url := s.startACMEListener(c, nil, func(l *HTTPListener) { l.acmeTimeout = time.Second })
 	defer l.Close()
 	waitACMEInstances(c, l, url, 3)
 	for i := 0; i < 20; i++ {
@@ -147,6 +167,13 @@ func (s *S) TestACMEChallengeTriesEveryInstance(c *C) {
 	// No responder has the token: the answer is the responder's 404, not
 	// the dead instance's 502.
 	c.Assert(goodHB.Close(), IsNil)
+	// EDGE-56: the dead responder's port stays bound for the whole test. A
+	// free port can be taken by another test or process that accepts and
+	// never answers, and every request below would then stall the router.
+	if ln, err := net.Listen("tcp", dead); err == nil {
+		ln.Close()
+		c.Fatalf("dead responder port %s is free; anything can take it", dead)
+	}
 	waitACMEInstances(c, l, url, 2)
 	for i := 0; i < 10; i++ {
 		code, _, err := acmeGet(url)
