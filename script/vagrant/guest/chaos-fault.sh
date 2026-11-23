@@ -9,16 +9,25 @@
 # APP_MATCH (optional) limits the datastore kinds to apps whose name contains
 # it, e.g. kafka. SEED makes the pick repeatable. Prints "target ..." and exits 3 when no job
 # of that kind is running.
+#
+# It does not guess when a lookup fails. If no controller instance lists the
+# provider resources, datastore apps cannot be told apart from other system
+# or tenant jobs, so it exits 2 without stopping anything (plugin-job does
+# not need that list). A datastore whose discoverd leader lookup fails is
+# left out of both datastore pools; if that leaves the pool empty it exits 2
+# instead of 3. DISCOVERD_URL and HOST_JSON override the local discoverd and
+# /etc/flynn/host.json (tests).
 set -euo pipefail
 export FLYNN_SKIP_UPDATE_CHECK=1
 
 python3 - "${FAULT:?FAULT is required}" "${SEED:-}" "${APP_MATCH:-}" <<'PY'
-import base64, json, random, subprocess, sys, time, urllib.parse, urllib.request
+import base64, json, os, random, subprocess, sys, time, urllib.parse, urllib.request
 
 kind, seed, app_match = sys.argv[1], sys.argv[2], sys.argv[3]
 if seed:
     random.seed(seed)
-env = json.load(open("/etc/flynn/host.json")).get("env") or {}
+DISCOVERD = os.environ.get("DISCOVERD_URL") or "http://127.0.0.1:1111"
+env = json.load(open(os.environ.get("HOST_JSON") or "/etc/flynn/host.json")).get("env") or {}
 D = {"Auth-Key": env.get("DISCOVERD_AUTH_KEY") or ""}
 H = {"Auth-Key": env.get("FLYNN_HOST_AUTH_KEY") or ""}
 C = {"Authorization": "Basic " + base64.b64encode((":" + (env.get("CONTROLLER_KEY") or "")).encode()).decode(),
@@ -31,31 +40,50 @@ def get(url, headers):
 
 
 def leader_ip(svc):
+    """The leader's IP, or None with the reason when discoverd cannot say."""
     try:
-        return get("http://127.0.0.1:1111/services/%s/leader" % svc, D)["addr"].rsplit(":", 1)[0]
-    except Exception:
-        return None
+        return get(DISCOVERD + "/services/%s/leader" % svc, D)["addr"].rsplit(":", 1)[0], None
+    except Exception as e:
+        return None, "%s: %s" % (type(e).__name__, e)
 
 
-# Datastore apps are the discoverd services behind provider resource URLs.
-datastores = set()
-for inst in get("http://127.0.0.1:1111/services/controller/instances", D) or []:
+def list_datastores():
+    """Datastore apps are the discoverd services behind provider resource
+    URLs. Asks each controller instance in turn and returns the first full
+    answer; exits 2 when none gives one."""
+    errors = []
     try:
-        for prov in get("http://%s/providers" % inst["addr"], C) or []:
-            for res in get("http://%s/providers/%s/resources" % (inst["addr"], prov["id"]), C) or []:
-                for key, val in (res.get("env") or {}).items():
-                    if key.endswith("_URL") and "://" in (val or ""):
-                        host = urllib.parse.urlsplit(val).hostname or ""
-                        # leader.<app>.discoverd (mysql, postgres, redis,
-                        # mongodb) or <app>.discoverd (clickhouse, kafka).
-                        if host.endswith(".discoverd"):
-                            datastores.add(host[:-len(".discoverd")].removeprefix("leader."))
-        break
-    except Exception:
-        continue
+        instances = get(DISCOVERD + "/services/controller/instances", D) or []
+    except Exception as e:
+        instances = []
+        errors.append("discoverd controller instances: %s: %s" % (type(e).__name__, e))
+    for inst in instances:
+        found = set()
+        try:
+            for prov in get("http://%s/providers" % inst["addr"], C) or []:
+                for res in get("http://%s/providers/%s/resources" % (inst["addr"], prov["id"]), C) or []:
+                    for key, val in (res.get("env") or {}).items():
+                        if key.endswith("_URL") and "://" in (val or ""):
+                            host = urllib.parse.urlsplit(val).hostname or ""
+                            # leader.<app>.discoverd (mysql, postgres, redis,
+                            # mongodb) or <app>.discoverd (clickhouse, kafka).
+                            if host.endswith(".discoverd"):
+                                found.add(host[:-len(".discoverd")].removeprefix("leader."))
+            return found
+        except Exception as e:
+            errors.append("controller %s: %s: %s" % (inst.get("addr"), type(e).__name__, e))
+    if not errors:
+        errors.append("discoverd lists no controller instances")
+    print("error: cannot list provider resources from the controller, so datastore jobs cannot be told apart; not stopping a job")
+    for e in errors:
+        print("  " + e)
+    raise SystemExit(2)
+
+
+datastores = set() if kind == "plugin-job" else list_datastores()
 
 jobs = []
-for h in get("http://127.0.0.1:1111/services/flynn-host/instances", D) or []:
+for h in get(DISCOVERD + "/services/flynn-host/instances", D) or []:
     try:
         data = get("http://%s/host/jobs?active=true" % h["addr"], H)
     except Exception:
@@ -72,15 +100,23 @@ for h in get("http://127.0.0.1:1111/services/flynn-host/instances", D) or []:
             "system": (md.get("flynn-system-app") or "").lower() == "true",
         })
 
-leaders = {s: leader_ip(s) for s in datastores}
+leaders, unknown = {}, {}
+if kind.startswith("datastore-"):
+    for svc in sorted(datastores):
+        ip, err = leader_ip(svc)
+        if ip:
+            leaders[svc] = ip
+        else:
+            unknown[svc] = err
+            print("note: leader of %s unknown (%s); left out of the datastore pools" % (svc, err))
 if kind == "system-job":
     pool = [j for j in jobs if j["system"] and j["app"] not in datastores and not j["app"].endswith("-plugin")]
 elif kind == "plugin-job":
     pool = [j for j in jobs if j["app"].endswith("-plugin")]
 elif kind == "datastore-primary":
-    pool = [j for j in jobs if j["app"] in datastores and j["ip"] and j["ip"] == leaders.get(j["app"])]
+    pool = [j for j in jobs if j["app"] in leaders and j["ip"] and j["ip"] == leaders[j["app"]]]
 elif kind == "datastore-replica":
-    pool = [j for j in jobs if j["app"] in datastores and j["ip"] != leaders.get(j["app"])]
+    pool = [j for j in jobs if j["app"] in leaders and j["ip"] and j["ip"] != leaders[j["app"]]]
 elif kind == "tenant-job":
     pool = [j for j in jobs if not j["system"] and j["app"] and j["app"] not in datastores
             and not j["app"].endswith("-plugin")]
@@ -89,6 +125,9 @@ else:
 pool = [j for j in pool if j["id"]]
 if app_match and kind.startswith("datastore-"):
     pool = [j for j in pool if app_match in j["app"]]
+if not pool and unknown and any(not app_match or app_match in a for a in unknown):
+    print("error: no %s job with a known leader (unknown: %s); not stopping a job" % (kind, ", ".join(sorted(unknown))))
+    raise SystemExit(2)
 if not pool:
     print("target kind=%s none running" % kind)
     raise SystemExit(3)
