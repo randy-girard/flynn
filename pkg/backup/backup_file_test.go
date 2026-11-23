@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -176,5 +177,34 @@ func TestTenantDumpNotice(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(TenantDumpNotice), "large object") {
 		t.Fatal("the appliance dump already includes large objects")
+	}
+}
+
+// `--file /dev/stdout` with stdout redirected to a regular file: the fd path
+// resolves to a regular file, but its directory is /dev, where no temp file
+// can be created. It must be written in place, as os.Create did.
+func TestWriteFileAtomicFdPathRedirectedToFile(t *testing.T) {
+	dir := t.TempDir()
+	target, err := os.Create(filepath.Join(dir, "redirect.tar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	path := "/dev/fd/" + strconv.Itoa(int(target.Fd()))
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("no %s: %s", path, err)
+	}
+	if err := WriteFileAtomic(path, func(w io.Writer) error {
+		_, err := io.WriteString(w, "export")
+		return err
+	}); err != nil {
+		t.Fatalf("write to %s: %s", path, err)
+	}
+	data, err := os.ReadFile(target.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "export" {
+		t.Fatalf("redirect target = %q, want %q", data, "export")
 	}
 }

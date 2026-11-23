@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/randy-girard/flynn/controller/client"
 )
@@ -25,7 +26,7 @@ func WriteFile(client controller.Client, path string, stderr io.Writer, progress
 	if path == "" {
 		err = Run(client, os.Stdout, progress)
 	} else {
-		err = writeFileAtomic(path, func(w io.Writer) error {
+		err = WriteFileAtomic(path, func(w io.Writer) error {
 			return Run(client, w, progress)
 		})
 	}
@@ -36,10 +37,18 @@ func WriteFile(client controller.Client, path string, stderr io.Writer, progress
 	return nil
 }
 
-func writeFileAtomic(path string, write func(io.Writer) error) error {
-	// A device or pipe (for example /dev/stdout) cannot be renamed over.
-	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
-		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+// WriteFileAtomic writes a file that may hold secrets (a cluster backup, an
+// app export). write gets a 0600 temp file beside path; the temp file is then
+// synced, closed and renamed over path, with every error returned. When write
+// or any later step fails, the temp file is removed and an existing file at
+// path is left as it was. A path that names a device, a pipe, or an open fd
+// (/dev/stdout, /dev/fd/N, /proc/self/fd/N) is written in place instead.
+func WriteFileAtomic(path string, write func(io.Writer) error) error {
+	// A device or pipe (for example /dev/stdout) cannot be renamed over, and
+	// an fd path (/dev/stdout redirected to a file) resolves to a regular file
+	// whose directory is /dev. Both are written in place, as os.Create did.
+	if fi, err := os.Stat(path); err == nil && (!fi.Mode().IsRegular() || isFdPath(path)) {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
 		if err != nil {
 			return err
 		}
@@ -80,4 +89,11 @@ func writeFileAtomic(path string, write func(io.Writer) error) error {
 	}
 	done = true
 	return nil
+}
+
+// isFdPath reports whether path names an already open file through /dev
+// (/dev/stdout, /dev/fd/N) or /proc (/proc/self/fd/N).
+func isFdPath(path string) bool {
+	clean := filepath.Clean(path)
+	return strings.HasPrefix(clean, "/dev/") || strings.HasPrefix(clean, "/proc/")
 }
