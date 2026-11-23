@@ -2008,6 +2008,9 @@ func TestRegisterDoesNotWaitForFormationSnapshot(t *testing.T) {
 	logger := log15.New()
 	logger.SetHandler(log15.DiscardHandler())
 	sched := NewScheduler(newTestCluster(nil), &blockFormations{FakeControllerClient: cc}, disc, logger)
+	// The snapshot never arrives. Left running, this scheduler gives up
+	// after five minutes and exits the test binary (go test -count=N).
+	defer sched.Stop()
 	go sched.Run()
 	select {
 	case <-disc.done:
