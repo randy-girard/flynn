@@ -1199,9 +1199,16 @@ systemd manages the `flynn-host` daemon. Logs are in `/var/log/flynn/flynn-host.
 
 The `flynn-host collect-debug-info` command will collect information about the
 system it is run on along with recent logs from all apps and the `flynn-host`
-daemon. By default it uploads these logs to [GitHub's
-Gist](https://gist.github.com) service, but they can also be saved to a local
-tarball with the `--tarball` flag.
+daemon. By default it writes them to an owner-only (0600) tarball on that
+host (`--filename` picks the path) and sends nothing over the network. Before
+writing, it replaces cluster secrets from `/etc/flynn/host.json`, secret values
+from every job's environment, and secret-looking text (`KEY=value` pairs with
+secret names, URL passwords, `Authorization` headers, password flags such as
+`redis-cli -a`) with `[REDACTED]`. Redaction is best effort, so read the
+archive before you share it. `--upload` sends the redacted files to a secret
+[GitHub Gist](https://gist.github.com) instead; it needs a personal access
+token (`--github-token`, saved to `~/.flynn/github_token`) and lists the files
+and destination before sending.
 
 ### Internal Databases
 

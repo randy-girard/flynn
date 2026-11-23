@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/config"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/plugin"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
@@ -51,15 +54,49 @@ func init() {
 usage: flynn-host collect-debug-info [options]
 
 Options:
-  --tarball              Create a tarball instead of uploading to a gist
-  --include-env          Include sensitive environment variables
+  --tarball              Write a local tarball (the default; kept for compatibility)
+  --upload               Upload to a secret GitHub gist instead of writing a tarball
+  --include-env          Include job environment variables (secret values stay redacted)
   --log-dir=DIR          Path to the log directory [default: /var/log/flynn]
-  --filename=PATH        Path to write tarball, only valid if --tarball is specified
-  --github-token=TOKEN   GitHub personal access token for gist creation (stored for future use)
+  --filename=PATH        Path to write the tarball (not valid with --upload)
+  --github-token=TOKEN   GitHub personal access token for --upload (stored for future use)
 
-Collect debug information into a gist or tarball. GitHub requires authentication
-to create gists. Use --github-token to provide a personal access token on first
-use; the token will be saved to ~/.flynn/github_token for subsequent invocations.`)
+Collect logs and host state for a bug report. By default this writes an
+owner-only (0600) tarball on this host and sends nothing over the network.
+
+Known cluster secrets (from /etc/flynn/host.json, this process's environment
+and every job's environment) and secret-looking values (KEY=value pairs with
+secret names, URL passwords, Authorization headers, password flags) are
+replaced with [REDACTED] before anything is written or uploaded. Review the
+output before sharing it: redaction cannot find every secret.
+
+--upload sends the redacted files to a secret gist on GitHub. It lists the
+files and the destination before sending. GitHub requires a personal access
+token with the gist scope: pass --github-token on first use; the token is saved
+to ~/.flynn/github_token for later runs.`)
+}
+
+// debugInfoOptions says where collect-debug-info output goes.
+type debugInfoOptions struct {
+	Upload   bool
+	Filename string
+	Token    string
+	Out      io.Writer
+}
+
+func debugInfoOptionsFromArgs(args *docopt.Args) (debugInfoOptions, error) {
+	opts := debugInfoOptions{
+		Upload:   args.Bool["--upload"],
+		Filename: args.String["--filename"],
+		Out:      os.Stderr,
+	}
+	if opts.Upload && args.Bool["--tarball"] {
+		return opts, errors.New("--tarball and --upload cannot be used together")
+	}
+	if opts.Upload && opts.Filename != "" {
+		return opts, errors.New("--filename is only valid when writing a tarball (without --upload)")
+	}
+	return opts, nil
 }
 
 func githubTokenPath() string {
@@ -96,14 +133,20 @@ func loadGitHubToken() string {
 
 func runCollectDebugInfo(args *docopt.Args) error {
 	log := log15.New()
-	if args.Bool["--tarball"] {
-		log.Info("creating a tarball containing logs and debug information")
+	opts, err := debugInfoOptionsFromArgs(args)
+	if err != nil {
+		return err
+	}
+	if opts.Upload {
+		log.Info("collecting logs and debug information for upload to a secret gist")
 	} else {
-		log.Info("uploading logs and debug information to a gist")
+		log.Info("creating a local tarball containing logs and debug information (use --upload to send it to a gist)")
 	}
 	log.Info("this may take a while depending on the size of your logs")
 
-	// Resolve GitHub token: flag takes precedence, then stored token
+	// Resolve GitHub token: flag takes precedence, then stored token. It is
+	// only needed (and only loaded) for --upload, but a token passed on the
+	// command line is always redacted from the ps output.
 	token := args.String["--github-token"]
 	if token != "" {
 		if err := saveGitHubToken(token); err != nil {
@@ -111,11 +154,19 @@ func runCollectDebugInfo(args *docopt.Args) error {
 		} else {
 			log.Info(fmt.Sprintf("GitHub token saved to %s", githubTokenPath()))
 		}
-	} else {
+	} else if opts.Upload {
 		token = loadGitHubToken()
 		if token != "" {
 			log.Info("using stored GitHub token")
 		}
+	}
+	opts.Token = token
+
+	redactor := newDebugRedactor()
+	redactor.AddValue(token)
+	redactor.AddEnviron(os.Environ())
+	if err := redactor.AddHostConfig(hostConfigPath); err != nil {
+		log.Error(fmt.Sprintf("error reading secrets from %s", hostConfigPath), "err", err)
 	}
 
 	gist := &Gist{
@@ -144,7 +195,7 @@ func runCollectDebugInfo(args *docopt.Args) error {
 	}
 
 	log.Info("getting job logs")
-	if err := captureJobs(gist, args.Bool["--include-env"]); err != nil {
+	if err := captureJobs(gist, args.Bool["--include-env"], redactor); err != nil {
 		log.Error("error getting job logs, falling back to on-disk logs", "err", err)
 		debugCmds = append(debugCmds, []string{"bash", "-c", fmt.Sprintf("tail -n+1 %s/*.log", logDir)})
 	}
@@ -164,18 +215,30 @@ func runCollectDebugInfo(args *docopt.Args) error {
 	}
 	gist.AddFile("0-debug-output.log", debugOutput)
 
-	// Redact the GitHub token from all collected content to prevent leaking
-	// it via ps output or other sources captured in the debug info.
-	if token != "" {
-		gist.RedactToken(token)
-	}
+	return finishDebugInfo(log, gist, redactor, opts)
+}
 
-	if gist.Size > GistMaxSize {
+// hostConfigPath is the host config whose env secrets are redacted.
+var hostConfigPath = config.DefaultPath
+
+// finishDebugInfo redacts the collected files, then writes them to a local
+// tarball, or uploads them to a gist when opts.Upload is set (falling back to
+// a tarball when they exceed the gist size limit).
+func finishDebugInfo(log log15.Logger, gist *Gist, redactor *debugRedactor, opts debugInfoOptions) error {
+	if opts.Out == nil {
+		opts.Out = os.Stderr
+	}
+	changed := gist.Redact(redactor)
+	log.Info(fmt.Sprintf("redacted secrets in %d of %d files", changed, len(gist.Files)))
+
+	tarball := !opts.Upload
+	if opts.Upload && gist.Size > GistMaxSize {
 		log.Info(fmt.Sprintf("Total size of %d bytes exceeds gist limit, falling back to tarball.", gist.Size))
+		tarball = true
 	}
 
-	if args.Bool["--tarball"] || gist.Size > GistMaxSize {
-		path := args.String["--filename"]
+	if tarball {
+		path := opts.Filename
 		if path == "" {
 			tmpDir, err := ioutil.TempDir("", "flynn-host-debug")
 			if err != nil {
@@ -183,16 +246,23 @@ func runCollectDebugInfo(args *docopt.Args) error {
 			}
 			path = filepath.Join(tmpDir, "flynn-host-debug.tar.gz")
 		}
-		err := gist.CreateTarball(path)
-		if err != nil {
+		if err := gist.CreateTarball(path); err != nil {
 			log.Error("error creating tarball", "err", err)
 			return err
 		}
-		log.Info(fmt.Sprintf("created tarball containing debug information at %s", path))
+		log.Info(fmt.Sprintf("created tarball containing debug information at %s (mode 0600); review it before sharing", path))
 		return nil
 	}
 
-	if err := gist.Upload(log, token); err != nil {
+	if opts.Token == "" {
+		return errors.New("GitHub requires a token to create a gist: pass --github-token=TOKEN (gist scope), or omit --upload to write a local tarball")
+	}
+
+	fmt.Fprintf(opts.Out, "Uploading %d redacted files (%d bytes) to a secret gist at %s:\n", len(gist.Files), gist.Size, gistAPIURL)
+	for _, name := range gist.Names() {
+		fmt.Fprintf(opts.Out, "  %s (%d bytes)\n", name, len(gist.Files[name].Content))
+	}
+	if err := gist.Upload(log, opts.Token); err != nil {
 		return err
 	}
 
@@ -232,12 +302,20 @@ func joinAltCmds(alternatives [][]string) string {
 	return strings.Join(parts, ", ")
 }
 
-func captureJobs(gist *Gist, env bool) error {
+func captureJobs(gist *Gist, env bool, redactor *debugRedactor) error {
 	client := cluster.NewClient()
 
 	jobs, err := jobList(client, true)
 	if err != nil {
 		return err
+	}
+
+	// Every job's secret env values are redacted wherever they show up (ps
+	// command lines, logs, scheduler state), not only for system jobs.
+	for _, job := range jobs {
+		if job.Job != nil {
+			redactor.AddEnv(job.Job.Config.Env)
+		}
 	}
 
 	var buf bytes.Buffer
@@ -258,7 +336,7 @@ func captureJobs(gist *Gist, env bool) error {
 		name += job.Job.ID + ".log"
 
 		var content bytes.Buffer
-		printJobDesc(&job, &content, env, nil)
+		printJobDesc(&job, &content, env, secretEnvNames(job.Job.Config.Env))
 		fmt.Fprint(&content, "\n\n***** ***** ***** ***** ***** ***** ***** ***** ***** *****\n\n")
 		getLog(job.HostID, job.Job.ID, client, false, true, &content, &content)
 		gist.AddFile(name, content.String())

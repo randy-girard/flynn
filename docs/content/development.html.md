@@ -238,10 +238,10 @@ scheduler first if you need a quiet cluster.
 For help on Discord, collect logs:
 
 ```
-$ flynn-host collect-debug-info --tarball
+$ flynn-host collect-debug-info
 ```
 
-`--tarball` writes a local archive. The default gist upload is optional.
+This writes an owner-only local archive with secrets redacted and prints its path. Read it before you share it. `--upload` sends it to a secret gist instead.
 
 ## Tests
 

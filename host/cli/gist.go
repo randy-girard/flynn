@@ -11,16 +11,20 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"strings"
+	"sort"
 	"time"
 
 	"github.com/cheggaaa/pb"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/backup"
 	"github.com/randy-girard/flynn/pkg/term"
 )
 
 // Actual limit is likely ~200mb.
 const GistMaxSize = 195 * 1024 * 1024
+
+// gistAPIURL is where Upload posts. Tests point it at a local stub.
+var gistAPIURL = "https://api.github.com/gists"
 
 type Gist struct {
 	URL         string          `json:"html_url,omitempty"`
@@ -44,16 +48,31 @@ func (g *Gist) AddFile(name, content string) {
 	g.Size = g.Size + len(content)
 }
 
-// RedactToken replaces all occurrences of the given token in every file's
-// content with "[REDACTED]" so that sensitive credentials are not leaked
-// (e.g. via `ps faux` output captured in the debug info).
-func (g *Gist) RedactToken(token string) {
+// Redact applies r to every file's content and returns the number of files
+// that changed. Size is recomputed from the redacted content.
+func (g *Gist) Redact(r *debugRedactor) int {
 	g.Size = 0
+	changed := 0
 	for name, file := range g.Files {
-		file.Content = strings.ReplaceAll(file.Content, token, "[REDACTED]")
+		redacted := r.Redact(file.Content)
+		if redacted != file.Content {
+			changed++
+		}
+		file.Content = redacted
 		g.Files[name] = file
 		g.Size += len(file.Content)
 	}
+	return changed
+}
+
+// Names returns the file names in sorted order.
+func (g *Gist) Names() []string {
+	names := make([]string, 0, len(g.Files))
+	for name := range g.Files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (g *Gist) Upload(log log15.Logger, token string) error {
@@ -76,7 +95,7 @@ func (g *Gist) Upload(log log15.Logger, token string) error {
 		defer bar.Finish()
 		body = bar.NewProxyReader(body)
 	}
-	req, err := http.NewRequest("POST", "https://api.github.com/gists", body)
+	req, err := http.NewRequest("POST", gistAPIURL, body)
 	if err != nil {
 		log.Error("error preparing HTTP request", "err", err)
 		return err
@@ -89,7 +108,7 @@ func (g *Gist) Upload(log log15.Logger, token string) error {
 		log.Info("creating anonymous gist")
 	}
 
-	res, err := http.DefaultClient.Do(req)
+	res, err := (&http.Client{Timeout: 10 * time.Minute}).Do(req)
 	if err != nil {
 		log.Error("error uploading gist content", "err", err)
 		return err
@@ -108,36 +127,44 @@ func (g *Gist) Upload(log log15.Logger, token string) error {
 	return nil
 }
 
+// CreateTarball writes the files to a gzipped tarball at path. The file is
+// created owner-only (0600) and replaced atomically; a failed write or close
+// is returned and leaves no partial file at path.
 func (g *Gist) CreateTarball(path string) error {
-	tmpFile, err := os.Create(path)
+	return backup.WriteFileAtomic(path, g.WriteTarball)
+}
+
+// WriteTarball writes the files to w as a gzipped tarball, checking the tar
+// and gzip close errors (the gzip trailer is only written on Close).
+func (g *Gist) WriteTarball(w io.Writer) error {
+	gz, err := gzip.NewWriterLevel(w, gzip.BestCompression)
 	if err != nil {
 		return err
 	}
-	defer tmpFile.Close()
-	gz, err := gzip.NewWriterLevel(tmpFile, gzip.BestCompression)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
 	tarball := tar.NewWriter(gz)
-	for name, file := range g.Files {
+	now := time.Now()
+	for _, name := range g.Names() {
+		file := g.Files[name]
 		hdr := &tar.Header{
 			Name:    name,
-			Mode:    0644,
-			ModTime: time.Now(),
+			Mode:    0600,
+			ModTime: now,
 			Size:    int64(len(file.Content)),
 		}
 		if err := tarball.WriteHeader(hdr); err != nil {
+			gz.Close()
 			return err
 		}
 		if _, err := tarball.Write([]byte(file.Content)); err != nil {
+			gz.Close()
 			return err
 		}
 	}
 	if err := tarball.Close(); err != nil {
+		gz.Close()
 		return err
 	}
-	return nil
+	return gz.Close()
 }
 
 type File struct {
