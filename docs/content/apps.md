@@ -621,6 +621,27 @@ before the next deploy. Cluster administrators
 may still create routes for platform apps (dashboard, www, discovery,
 controller). TCP routes use the same ownership rule.
 
+### Sticky sessions
+
+`flynn route:add http --sticky` (or `route:update <id> --sticky`) pins each
+client to one backend with an encrypted `_backend` cookie (`Path=/`). The
+router sets it again only when it sends the client to a different backend,
+for example after that backend went away. The cookie is:
+
+- `HttpOnly`: page script cannot read it.
+- `SameSite=Lax`: a link from another site keeps the session, but cross-site
+  subrequests (images, `fetch`, form POSTs) do not carry it. An app embedded
+  cross-site in an iframe is not sticky there.
+- `Secure` only when the request reached the router over HTTPS. Over plain
+  HTTP it is sent without `Secure` so HTTP routes stay sticky. A
+  client-sent `X-Forwarded-Proto` does not count; the router replaces it with
+  the listener's own scheme. Browsers do not send a `Secure` cookie over HTTP
+  and do not let an HTTP response replace it, so a browser that reached the
+  app over HTTPS is not sticky on the same domain over plain HTTP. Redirect
+  HTTP to HTTPS on sticky routes that serve both.
+
+Cookies set before these attributes existed still pin the client.
+
 ### HTTPS
 
 The router can automatically terminate HTTPS traffic, the certificate chain and
