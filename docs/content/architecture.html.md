@@ -204,7 +204,10 @@ leader's placement from the host's event. The leader's loop is the only
 writer of in-memory jobs, volumes, and placements. Host and controller calls from that loop run outside it, and
 the loop only applies the results. When a host rejects a job because a volume
 is missing, the loop resets or blocks the job only if it is still the pending
-job that was sent. A job the loop has already stopped is not placed again. A
+job that was sent. A job the loop has already stopped is not placed again.
+When a host refuses to start a job for another reason, the retry goes to a
+different eligible host if one exists. The refusing host is used again only
+when no other host can take the job. A
 slow host API stalls that host's call.
 Placement onto other hosts continues. This is the same process on a hosted
 cluster and a self-hosted one. Writes back to the controller stay on a

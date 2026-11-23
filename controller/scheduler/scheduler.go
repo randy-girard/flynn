@@ -2270,6 +2270,8 @@ outer:
 			return
 		}
 		log.Error("error adding job to the cluster", "attempts", attempt+1, "err", err)
+		failed := req.Host.ID
+		s.onLoop(func() { s.noteAddJobFailure(job, failed) })
 	}
 }
 

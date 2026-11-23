@@ -504,6 +504,27 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	if s == nil || job == nil {
 		return nil
 	}
+	// A retry after AddJob failed prefers any other eligible host. A random
+	// pick between two hosts kept choosing the refusing one for eleven
+	// retries in CI. The refusing host is still used if nothing else fits.
+	if job.addJobFailedHost != "" {
+		if h := s.pickHostExcept(job, counts, job.addJobFailedHost); h != nil {
+			return h
+		}
+	}
+	return s.pickHostExcept(job, counts, "")
+}
+
+// noteAddJobFailure runs on the loop after hostID refused AddJob for job, so
+// the next placement of the job tries another host first.
+func (s *Scheduler) noteAddJobFailure(job *Job, hostID string) {
+	if job == nil {
+		return
+	}
+	job.addJobFailedHost = hostID
+}
+
+func (s *Scheduler) pickHostExcept(job *Job, counts map[string]int, skip string) *Host {
 	needReserve := s.jobReservesResources(job)
 	spreadPersist := job.isPersistentSingleton() && !job.spreadsAcrossHosts()
 	omniPerHost, omni := job.omniPerHost()
@@ -515,7 +536,7 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	var fitCount int
 	var fitPack int
 	for _, h := range s.ShuffledHosts() {
-		if !hostCanPlace(h) || !s.jobMatchesHost(job, h) || !s.hostAllowsRole(job, h) {
+		if h.ID == skip || !hostCanPlace(h) || !s.jobMatchesHost(job, h) || !s.hostAllowsRole(job, h) {
 			continue
 		}
 		if s.hostAtProcessCap(h, job) {

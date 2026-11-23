@@ -76,6 +76,11 @@ type Job struct {
 	// Compiles always request a new ephemeral /tmp.
 	explicitVolumes []ct.VolumeReq
 
+	// addJobFailedHost is the host whose AddJob last failed for this job.
+	// The next placement prefers any other eligible host. Only the loop
+	// reads or writes it.
+	addJobFailedHost string
+
 	// HostID is the ID of the host the job has been placed on, and is set
 	// when a StartJob goroutine makes a placement request to the scheduler
 	// loop
