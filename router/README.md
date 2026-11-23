@@ -55,6 +55,13 @@ socket. Each route has exactly one listener; the old route stops accepting and
 releases its service as soon as the new one serves, and a deleted route's port
 stops accepting (ports in 3000–3500 go back to the pre-bound pool).
 
+Updating an HTTP route (an edit, a certificate renewal, or the full resync)
+replaces it in place. The router drops the old route's service reference, so
+a service no route uses any more stops its discoverd watch. It closes the
+old route's idle backend connections. A request still running on the old
+route finishes, and its connection is closed after 90 seconds idle. Changing
+the domain stops serving the old domain.
+
 ### Benefits over HAProxy/nginx
 
 The primary benefits are that it uses service discovery natively and supports

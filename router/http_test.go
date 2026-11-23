@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/flynn/go-check"
@@ -1836,6 +1837,8 @@ func (s *S) TestHTTPDisableKeepalive(c *C) {
 	// per request
 	r.DisableKeepAlives = true
 	s.addRoute(c, l, r)
+	// the update closes the idle connection the old route's proxy pooled
+	assertStates(http.StateClosed)
 	assertGet(c, "http://"+l.Addrs[0], "example.com", "1")
 	assertStates(http.StateNew, http.StateActive, http.StateClosed)
 	assertGet(c, "http://"+l.Addrs[0], "example.com", "1")
@@ -1920,4 +1923,208 @@ func (s *S) TestHTTPLoadBalance(c *C) {
 		c.Assert(err, IsNil)
 		c.Assert(string(body), Not(Equals), backendID)
 	}
+}
+
+// listenerService returns the service the listener holds for name, read under
+// the listener lock.
+func listenerService(l *HTTPListener, name string) *service {
+	l.mtx.RLock()
+	defer l.mtx.RUnlock()
+	return l.services[name]
+}
+
+// serviceCacheClosed reports whether the discoverd service cache has been
+// closed: a watcher channel is closed by the cache once it stops.
+func serviceCacheClosed(svc *service, within time.Duration) bool {
+	ch := make(chan *discoverd.Event)
+	st := svc.sc.Watch(ch, false)
+	timeout := time.After(within)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return true
+			}
+		case <-timeout:
+			st.Close()
+			return false
+		}
+	}
+}
+
+// updateHTTPRoute re-sends r to the listener as a route update and waits for
+// it to be applied.
+func (s *S) updateHTTPRoute(c *C, l *HTTPListener, r *router.Route) {
+	wait := waitForEvent(c, l, "set", "")
+	s.store.update(r)
+	wait()
+}
+
+func (s *S) TestRouteUpdateDoesNotLeakServiceRef(c *C) {
+	l := s.newHTTPListener(c)
+	defer l.Close()
+
+	r := s.addRoute(c, l, router.HTTPRoute{
+		Domain:        "leak.example.com",
+		Service:       "leak-ref",
+		ParentRef:     "controller/apps/leak",
+		DrainBackends: true,
+	}.ToRoute())
+	svc := listenerService(l, "leak-ref")
+	c.Assert(svc, NotNil)
+
+	// an edit, a certificate renewal and a resync all reach Set again
+	for i := 0; i < 3; i++ {
+		s.updateHTTPRoute(c, l, r)
+	}
+	l.mtx.RLock()
+	refs := svc.refs
+	l.mtx.RUnlock()
+	c.Assert(refs, Equals, 1)
+	c.Assert(listenerService(l, "leak-ref"), Equals, svc)
+
+	s.removeRoute(c, l, r)
+	c.Assert(listenerService(l, "leak-ref"), IsNil)
+	c.Assert(serviceCacheClosed(svc, 5*time.Second), Equals, true)
+
+	l.caps.mu.Lock()
+	apps := len(l.caps.apps)
+	l.caps.mu.Unlock()
+	c.Assert(apps, Equals, 0)
+}
+
+func (s *S) TestRouteServiceChangeReleasesOldService(c *C) {
+	srv := httptest.NewServer(httpTestHandler("new"))
+	defer srv.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+
+	r := s.addRoute(c, l, router.HTTPRoute{
+		Domain:  "svcchange.example.com",
+		Service: "svc-old",
+	}.ToRoute())
+	old := listenerService(l, "svc-old")
+	c.Assert(old, NotNil)
+
+	r.Service = "svc-new"
+	s.updateHTTPRoute(c, l, r)
+
+	c.Assert(listenerService(l, "svc-old"), IsNil)
+	c.Assert(serviceCacheClosed(old, 5*time.Second), Equals, true)
+	c.Assert(listenerService(l, "svc-new"), NotNil)
+
+	discoverdRegisterHTTPService(c, l, "svc-new", srv.Listener.Addr().String())
+	assertGet(c, "http://"+l.Addrs[0], "svcchange.example.com", "new")
+}
+
+// connTracker counts a backend's open connections.
+type connTracker struct {
+	mtx  sync.Mutex
+	open map[net.Conn]struct{}
+}
+
+func (t *connTracker) hook(conn net.Conn, state http.ConnState) {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+	switch state {
+	case http.StateNew:
+		t.open[conn] = struct{}{}
+	case http.StateClosed, http.StateHijacked:
+		delete(t.open, conn)
+	}
+}
+
+func (t *connTracker) count() int {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+	return len(t.open)
+}
+
+func (t *connTracker) waitFor(n int, within time.Duration) int {
+	deadline := time.Now().Add(within)
+	for {
+		got := t.count()
+		if got == n || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func (s *S) TestRouteUpdateClosesOldBackendConnections(c *C) {
+	tracker := &connTracker{open: make(map[net.Conn]struct{})}
+	srv := httptest.NewUnstartedServer(httpTestHandler("1"))
+	srv.Config.ConnState = tracker.hook
+	srv.Start()
+	defer srv.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+
+	domain := "conns.example.com"
+	r := s.addRoute(c, l, router.HTTPRoute{
+		Domain:  domain,
+		Service: "conns",
+	}.ToRoute())
+	discoverdRegisterHTTPService(c, l, "conns", srv.Listener.Addr().String())
+
+	// every update builds a new proxy; the keep-alive connection the old one
+	// pooled to the backend must not stay open
+	for i := 0; i < 3; i++ {
+		assertGet(c, "http://"+l.Addrs[0], domain, "1")
+		c.Assert(tracker.waitFor(1, 5*time.Second), Equals, 1)
+		s.updateHTTPRoute(c, l, r)
+		c.Assert(tracker.waitFor(0, 5*time.Second), Equals, 0)
+	}
+
+	assertGet(c, "http://"+l.Addrs[0], domain, "1")
+	c.Assert(tracker.waitFor(1, 5*time.Second), Equals, 1)
+	s.removeRoute(c, l, r)
+	c.Assert(tracker.waitFor(0, 5*time.Second), Equals, 0)
+}
+
+func (s *S) TestRouteDomainChangeDropsOldDomain(c *C) {
+	srv := httptest.NewServer(httpTestHandler("1"))
+	defer srv.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+
+	r := s.addRoute(c, l, router.HTTPRoute{
+		Domain:  "before.example.com",
+		Service: "domain-change",
+	}.ToRoute())
+	discoverdRegisterHTTPService(c, l, "domain-change", srv.Listener.Addr().String())
+	assertGet(c, "http://"+l.Addrs[0], "before.example.com", "1")
+
+	r.Domain = "after.example.com"
+	s.updateHTTPRoute(c, l, r)
+	assertGet(c, "http://"+l.Addrs[0], "after.example.com", "1")
+
+	res, err := httpClient.Do(newReq("http://"+l.Addrs[0], "before.example.com"))
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 404)
+}
+
+func (s *S) TestRemoveMixedCaseDomainRoute(c *C) {
+	srv := httptest.NewServer(httpTestHandler("1"))
+	defer srv.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+
+	r := s.addRoute(c, l, router.HTTPRoute{
+		Domain:  "MiXed.example.com",
+		Service: "mixed-case",
+	}.ToRoute())
+	discoverdRegisterHTTPService(c, l, "mixed-case", srv.Listener.Addr().String())
+	assertGet(c, "http://"+l.Addrs[0], "mixed.example.com", "1")
+
+	s.removeRoute(c, l, r)
+	res, err := httpClient.Do(newReq("http://"+l.Addrs[0], "mixed.example.com"))
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 404)
 }

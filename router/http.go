@@ -236,35 +236,30 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 		r.Certificate = nil
 	}
 
-	h.l.mtx.Lock()
-	if h.l.closed {
-		h.l.mtx.Unlock()
-		return nil
-	}
-	if svc := h.l.services[r.Service]; svc != nil && svc.name != r.Service {
-		svc.refs--
-		if svc.refs <= 0 {
-			svc.Close()
-			delete(h.l.services, svc.name)
+	var service *service
+	for {
+		// cache.New waits for discoverd EventKindCurrent. Do that without
+		// the listener mutex or route "set" watchers time out under load.
+		svc, err := bindListenerService(&h.l.mtx, &h.l.closed, h.l.services, h.l.wm, h.l.discoverd, r.Service, r.DrainBackends)
+		if err != nil {
+			return err
 		}
+		if svc == nil {
+			return nil
+		}
+		h.l.mtx.Lock()
+		if h.l.closed {
+			h.l.mtx.Unlock()
+			return nil
+		}
+		if !svc.closed {
+			service = svc
+			break
+		}
+		// the last route using it went while the lock was not held
+		h.l.mtx.Unlock()
 	}
-	h.l.mtx.Unlock()
-
-	// cache.New waits for discoverd EventKindCurrent. Do that without the
-	// listener mutex or route "set" watchers time out under load.
-	service, err := bindListenerService(&h.l.mtx, &h.l.closed, h.l.services, h.l.wm, h.l.discoverd, r.Service, r.DrainBackends)
-	if err != nil {
-		return err
-	}
-	if service == nil {
-		return nil
-	}
-
-	h.l.mtx.Lock()
 	defer h.l.mtx.Unlock()
-	if h.l.closed {
-		return nil
-	}
 	service.refs++
 	var bf proxy.BackendListFunc
 	if r.Leader {
@@ -287,8 +282,18 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 	if h.l.caps != nil {
 		h.l.caps.setRoute(data.ID, r.ParentRef, r.MaxConcurrentRequests)
 	}
+
+	// An update (an edit, a certificate renewal, or every route again after
+	// a resync) replaces the route with this id. Unlink the old one from a
+	// domain or path it no longer serves, then drop its service reference
+	// and its backend connections, or each Set leaks one of each.
+	existing := h.l.routes[data.ID]
+	domain := httpRouteDomainKey(r)
+	if existing != nil && (httpRouteDomainKey(existing) != domain || existing.Path != r.Path) {
+		h.l.unlinkRouteLocked(existing)
+	}
+
 	h.l.routes[data.ID] = r
-	domain := net.JoinHostPort(strings.ToLower(r.Domain), strconv.Itoa(r.Port))
 	if data.Path == "/" {
 		if tree, ok := h.l.domains[domain]; ok {
 			tree.backend = r
@@ -301,6 +306,11 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 		} else {
 			logger.Error("Failed insert of path based route, consistency violation.")
 		}
+	}
+
+	if existing != nil {
+		h.l.releaseService(existing.service)
+		existing.rp.Close()
 	}
 
 	go h.l.wm.Send(&router.Event{Event: router.EventTypeRouteSet, ID: domain, Route: r.ToRoute()})
@@ -318,26 +328,54 @@ func (h *httpSyncHandler) Remove(id string) error {
 		return ErrNotFound
 	}
 
-	r.service.refs--
-	if r.service.refs <= 0 {
-		r.service.sc.Close()
-		delete(h.l.services, r.service.name)
-	}
+	h.l.releaseService(r.service)
+	r.rp.Close()
 
 	if h.l.caps != nil {
 		h.l.caps.removeRoute(id)
 	}
 	delete(h.l.routes, id)
-	domain := net.JoinHostPort(r.Domain, strconv.Itoa(r.Port))
-	if tree, ok := h.l.domains[domain]; ok {
-		if r.Path == "/" && tree.backend == r {
-			delete(h.l.domains, domain)
-		} else if tree.Lookup(r.Path) == r {
-			tree.Remove(r.Path)
-		}
-	}
+	h.l.unlinkRouteLocked(r)
 	go h.l.wm.Send(&router.Event{Event: router.EventTypeRouteRemove, ID: id, Route: r.ToRoute()})
 	return nil
+}
+
+// httpRouteDomainKey is the s.domains key for r. Set and Remove must agree,
+// and domains are matched case-insensitively.
+func httpRouteDomainKey(r *httpRoute) string {
+	return net.JoinHostPort(strings.ToLower(r.Domain), strconv.Itoa(r.Port))
+}
+
+// unlinkRouteLocked removes r from the domain tree if it is still the route
+// serving its domain and path. The caller holds s.mtx.
+func (s *HTTPListener) unlinkRouteLocked(r *httpRoute) {
+	domain := httpRouteDomainKey(r)
+	tree, ok := s.domains[domain]
+	if !ok {
+		return
+	}
+	if r.Path == "/" {
+		if tree.backend == r {
+			delete(s.domains, domain)
+		}
+	} else if tree.Lookup(r.Path) == r {
+		tree.Remove(r.Path)
+	}
+}
+
+// releaseService drops one route's reference to svc and closes it when no
+// route uses it any more. The caller holds s.mtx.
+func (s *HTTPListener) releaseService(svc *service) {
+	if svc == nil {
+		return
+	}
+	svc.refs--
+	if svc.refs <= 0 {
+		svc.Close()
+		if s.services[svc.name] == svc {
+			delete(s.services, svc.name)
+		}
+	}
 }
 
 const (
@@ -537,6 +575,9 @@ type service struct {
 	stream stream.Stream
 	reqs   map[string]int64
 	cond   *sync.Cond
+	// closed is set once the last route released the service. Guarded by
+	// the owning listener's mtx.
+	closed bool
 }
 
 // bindListenerService returns a discoverd-backed service, creating it if needed.
@@ -611,6 +652,10 @@ func (s *service) TrackRequestDone(backend string) {
 }
 
 func (s *service) Close() {
+	if s.closed {
+		return
+	}
+	s.closed = true
 	if s.stream != nil {
 		s.stream.Close()
 	}
