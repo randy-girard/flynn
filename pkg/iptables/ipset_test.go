@@ -231,3 +231,41 @@ func stubIPSetExec(t *testing.T, fn func(stdin []byte, args ...string) ([]byte, 
 	ipsetExec = fn
 	return func() { ipsetExec = old }
 }
+
+// TestReplaceSetPairsIsAtomicAndTyped (EDGE-29): the datastore peer set
+// holds (source, destination) pairs, so it is a hash:net,net set; it is
+// rebuilt with one restore and a swap like the per-IP sets, and a pair kept
+// across the rebuild never leaves the live set.
+func TestReplaceSetPairsIsAtomicAndTyped(t *testing.T) {
+	k := &fakeIPSetKernel{
+		t:       t,
+		live:    DataPeerSet,
+		sets:    map[string]map[string]bool{DataPeerSet: {"100.64.1.2,100.64.2.3": true, "100.64.9.9,100.64.1.2": true}},
+		mustHas: []string{"100.64.1.2,100.64.2.3"},
+	}
+	restore := stubIPSetExec(t, k.run)
+	defer restore()
+	a, b, c := net.ParseIP("100.64.1.2"), net.ParseIP("100.64.2.3"), net.ParseIP("100.64.3.4")
+	if err := ReplaceSetPairs(DataPeerSet, [][2]net.IP{{a, b}, {b, a}, {a, c}, {nil, a}}); err != nil {
+		t.Fatal(err)
+	}
+	var stdinTyped bool
+	for _, call := range k.calls {
+		if strings.HasPrefix(call, "add "+DataPeerSet+" ") {
+			t.Fatalf("pairs added to the live set one at a time: %v", k.calls)
+		}
+		if strings.Contains(call, "create "+DataPeerSet+" hash:net,net") {
+			stdinTyped = true
+		}
+	}
+	if !stdinTyped {
+		t.Fatalf("live pair set must be created as hash:net,net: %v", k.calls)
+	}
+	got := k.sets[DataPeerSet]
+	if len(got) != 3 || !got["100.64.1.2,100.64.2.3"] || !got["100.64.2.3,100.64.1.2"] || !got["100.64.1.2,100.64.3.4"] {
+		t.Fatalf("live pair set = %v", got)
+	}
+	if len(k.sets) != 1 {
+		t.Fatalf("temporary set left behind: %v", k.sets)
+	}
+}

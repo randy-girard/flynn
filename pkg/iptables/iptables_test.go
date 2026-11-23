@@ -351,56 +351,60 @@ func TestEnableJobIsolationDeletesLegacyOverlayDrop(t *testing.T) {
 	}
 }
 
-func TestDatastoreHostRulesDropSSHAndAPIOnly(t *testing.T) {
-	for _, port := range []string{"22", "1113"} {
-		in := strings.Join(DataToHostPortDropArgs(port), " ")
-		if !strings.Contains(in, "INPUT") || !strings.Contains(in, "flynn-net-data src") || !strings.Contains(in, "--dport "+port) || !strings.Contains(in, "DROP") || !strings.Contains(in, "--ctstate NEW") {
-			t.Fatalf("data INPUT drop %s = %q", port, in)
-		}
-		fwd := strings.Join(DataToNodePortDropArgs(port), " ")
-		if !strings.Contains(fwd, "FORWARD") || !strings.Contains(fwd, "flynn-net-data src") || !strings.Contains(fwd, NodeSet) || !strings.Contains(fwd, "--dport "+port) || !strings.Contains(fwd, "DROP") {
-			t.Fatalf("data node drop %s = %q", port, fwd)
+// TestDatastoreUpgradeReplacesPerPortDrops (EDGE-29): hosts updated from
+// the SSH/host-API-only datastore drops get the all-port host and node
+// drops, and the old per-port rules and the EDGE-04 logaggregator drop are
+// deleted only after their replacements are installed. What the new rules
+// allow and drop is TestDatastoreJobsOnlyReachPeersAndDiscoverd and
+// TestDatastoreJobsOnlyOpenDNSAndDiscoverdOnTheirHost.
+func TestDatastoreUpgradeReplacesPerPortDrops(t *testing.T) {
+	current := map[string]bool{}
+	for _, r := range append(JobIsolationForwardRules("100.64.0.0/16", "100.64.57.1"), HostIsolationInputRules()...) {
+		current[strings.Join(r, " ")] = true
+	}
+	legacy := append(legacyForwardRules(), DataToHostPortDropArgs("22"), DataToHostPortDropArgs("1113"))
+	for _, r := range legacy {
+		if current[strings.Join(r, " ")] {
+			t.Fatalf("legacy rule %v is still in the installed list", r)
 		}
 	}
-	dns := strings.Join(DataToHostDNSArgs("udp"), " ")
-	if !strings.Contains(dns, "INPUT") || !strings.Contains(dns, "flynn-net-data src") || !strings.Contains(dns, "--dport 53") || !strings.Contains(dns, "ACCEPT") {
-		t.Fatalf("data DNS allow = %q", dns)
-	}
-	disc := strings.Join(DataToHostDiscoverdArgs(), " ")
-	if !strings.Contains(disc, "INPUT") || !strings.Contains(disc, "flynn-net-data src") || !strings.Contains(disc, "--dport 1111") || !strings.Contains(disc, "ACCEPT") {
-		t.Fatalf("data discoverd allow = %q", disc)
+	for _, want := range [][]string{DataToNodePortDropArgs("22"), DataToNodePortDropArgs("1113"), DataToLogaggregatorDropArgs()} {
+		found := false
+		for _, r := range legacyForwardRules() {
+			if strings.Join(r, " ") == strings.Join(want, " ") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("legacyForwardRules must delete %v on upgrade", want)
+		}
 	}
 	src, err := os.ReadFile("iptables.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(src)
-	hostIso := body
-	if i := strings.Index(body, "func EnableHostIsolation"); i >= 0 {
-		hostIso = body[i:]
+	section := func(fn string) string {
+		i := strings.Index(body, "func "+fn+"(")
+		if i < 0 {
+			t.Fatalf("%s not found", fn)
+		}
+		rest := body[i:]
+		if j := strings.Index(rest[1:], "\nfunc "); j >= 0 {
+			rest = rest[:j+1]
+		}
+		return rest
 	}
-	for _, needle := range []string{
-		`DataToHostPortDropArgs("22")`,
-		`DataToHostPortDropArgs("1113")`,
-		`DataToHostDNSArgs("udp")`,
-		`DataToHostDNSArgs("tcp")`,
-		"DataToHostDiscoverdArgs()",
-	} {
-		if !strings.Contains(hostIso, needle) {
-			t.Fatalf("EnableHostIsolation missing %s", needle)
-		}
+	iso := section("EnableJobIsolation")
+	if a, b := strings.Index(iso, "JobIsolationForwardRules("), strings.Index(iso, "legacyForwardRules()"); a < 0 || b < a {
+		t.Fatal("EnableJobIsolation must delete legacyForwardRules after installing JobIsolationForwardRules")
 	}
-	rules := flatten(JobIsolationForwardRules("100.64.0.0/16", "100.64.57.1"))
-	for _, want := range [][]string{DataToNodePortDropArgs("22"), DataToNodePortDropArgs("1113")} {
-		found := false
-		for _, r := range rules {
-			if r == strings.Join(want, " ") {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("JobIsolationForwardRules missing %v", want)
-		}
+	if !strings.Contains(iso, "EnsurePairSets(JobIsolationPairSets()...)") {
+		t.Fatal("EnableJobIsolation must create the pair sets before rules reference them")
+	}
+	host := section("EnableHostIsolation")
+	if a, b := strings.Index(host, "HostIsolationInputRules()"), strings.Index(host, "DataToHostPortDropArgs(port)"); a < 0 || b < a {
+		t.Fatal("EnableHostIsolation must delete the per-port datastore drops after installing HostIsolationInputRules")
 	}
 }
 

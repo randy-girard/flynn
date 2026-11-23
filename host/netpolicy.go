@@ -36,6 +36,14 @@ type netPolicy struct {
 	// client's AddServiceAndRegisterInstance; tests replace them.
 	addSetIP         func(set string, ip net.IP) error
 	registerInstance func(service string, inst *discoverd.Instance) (discoverd.Heartbeater, error)
+
+	// dataPeersChanged asks syncDatastorePeersLoop to rebuild the
+	// datastore peer pair set (a local engine started or stopped, or a
+	// flynn-net-data instance changed).
+	dataPeersChanged chan struct{}
+	// replaceSystemIPs is iptables.ReplaceSetIPs for the platform Postgres
+	// set; tests replace it.
+	replaceSystemIPs func(set string, ips []net.IP) error
 }
 
 func newNetPolicy(log log15.Logger) *netPolicy {
@@ -45,6 +53,17 @@ func newNetPolicy(log log15.Logger) *netPolicy {
 		pending:  make(map[string]pendingIP),
 		inflight: make(map[string]struct{}),
 		addSetIP: iptables.AddSetIP,
+
+		dataPeersChanged: make(chan struct{}, 1),
+		replaceSystemIPs: iptables.ReplaceSetIPs,
+	}
+}
+
+// nudgeDatastorePeers asks for a peer set rebuild without blocking.
+func (p *netPolicy) nudgeDatastorePeers() {
+	select {
+	case p.dataPeersChanged <- struct{}{}:
+	default:
 	}
 }
 
@@ -73,7 +92,62 @@ func (p *netPolicy) Start(client *discoverd.Client) {
 	for _, svc := range iptables.IsolationSets() {
 		go p.watch(svc)
 	}
+	go p.syncDatastorePeersLoop(client)
 	watchServiceSets(client, p.log)
+}
+
+// syncDatastorePeersLoop keeps iptables.DataPeerSet current: on every
+// nudge and every 15 seconds as a backstop.
+func (p *netPolicy) syncDatastorePeersLoop(client *discoverd.Client) {
+	lookup := func() ([]*discoverd.Instance, error) {
+		return client.Service(netpolicy.ServiceData).Instances()
+	}
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		if err := p.syncDatastorePeers(lookup, iptables.ReplaceSetPairs); err != nil {
+			p.log.Error("sync datastore peer ipset", "err", err)
+		}
+		select {
+		case <-p.dataPeersChanged:
+		case <-ticker.C:
+		}
+	}
+}
+
+// syncDatastorePeers replaces the datastore peer pair set and the platform
+// Postgres set from the flynn-net-data registrations plus this host's own
+// engines. A failed
+// lookup leaves the live set alone; a missing service (no engines
+// registered yet) pairs the local engines only.
+func (p *netPolicy) syncDatastorePeers(lookup func() ([]*discoverd.Instance, error), replace func(string, [][2]net.IP) error) error {
+	insts, err := lookup()
+	if err != nil && !discoverd.IsNotFound(err) {
+		return err
+	}
+	var peers []netpolicy.DatastorePeer
+	p.mu.Lock()
+	for _, e := range p.pending {
+		if e.job == nil || e.ip == nil || netpolicy.ClassifyJob(e.job) != netpolicy.ClassDatastore {
+			continue
+		}
+		peers = append(peers, netpolicy.DatastorePeer{IP: e.ip, App: netpolicy.DatastoreJobApp(e.job), Known: true, System: netpolicy.DatastoreJobSystem(e.job)})
+	}
+	p.mu.Unlock()
+	for _, inst := range insts {
+		ip := overlayInstanceIP(inst)
+		if ip == nil {
+			continue
+		}
+		app, known := netpolicy.DatastoreAppFromMeta(inst.Meta)
+		peers = append(peers, netpolicy.DatastorePeer{IP: ip, App: app, Known: known, System: netpolicy.DatastoreSystemFromMeta(inst.Meta)})
+	}
+	// Pairs first: a new platform peer must be paired before it is in the
+	// drop set, or its own peers would lose it.
+	if err := replace(iptables.DataPeerSet, netpolicy.DatastorePeerPairs(peers)); err != nil {
+		return err
+	}
+	return p.replaceSystemIPs(iptables.DataSystemSet, netpolicy.SystemDatastoreIPs(peers))
 }
 
 // Track puts a job's overlay IP into its class's ipset and registers it in
@@ -97,6 +171,9 @@ func (p *netPolicy) Track(job *host.Job, ip net.IP) error {
 	p.mu.Lock()
 	p.pending[job.ID] = pendingIP{job: job, ip: ip}
 	p.mu.Unlock()
+	if class == netpolicy.ClassDatastore {
+		p.nudgeDatastorePeers()
+	}
 	p.register(job, ip)
 	return nil
 }
@@ -178,6 +255,9 @@ func (p *netPolicy) Untrack(job *host.Job, ip net.IP) {
 	if hb != nil {
 		_ = hb.Close()
 	}
+	if class == netpolicy.ClassDatastore {
+		p.nudgeDatastorePeers()
+	}
 }
 
 func (p *netPolicy) watch(service string) {
@@ -209,6 +289,9 @@ func (p *netPolicy) watch(service string) {
 		for ev := range events {
 			if ev == nil {
 				continue
+			}
+			if service == netpolicy.ServiceData {
+				p.nudgeDatastorePeers()
 			}
 			switch ev.Kind {
 			case discoverd.EventKindUp, discoverd.EventKindUpdate:

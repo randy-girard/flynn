@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -266,17 +267,24 @@ func toHostDropArgs(set string) []string {
 	return []string{"INPUT", "-m", "set", "--match-set", set, "src", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
 }
 
-// DataToHostPortDropArgs drops one NEW TCP port from data-plane overlay IPs
-// to a host-local address. port is "22" (SSH) or "1113" (host API). DNS and
-// discoverd are not covered by this rule.
+// DataToHostPortDropArgs is the pre-EDGE-29 drop of one NEW TCP port ("22"
+// or "1113") from datastore engines to a host-local address.
+// DataToHostDropArgs replaces it; EnableHostIsolation deletes it.
 func DataToHostPortDropArgs(port string) []string {
 	return []string{"INPUT", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-p", "tcp", "--dport", port, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
 }
 
-// DataToNodePortDropArgs drops that same port when the packet is forwarded
-// toward a cluster node underlay IP.
+// DataToNodePortDropArgs is the pre-EDGE-29 drop of that same port toward
+// a cluster node underlay IP. DataToNodeDropArgs replaces it.
 func DataToNodePortDropArgs(port string) []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-m", "set", "--match-set", NodeSet, "dst", "-p", "tcp", "--dport", port, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// DataToHostDropArgs drops NEW packets from datastore engines to any
+// host-local address: the router API (:5000) and listeners (:80/:443),
+// SSH, the host API, flannel. It sits after the DNS and discoverd accepts.
+func DataToHostDropArgs() []string {
+	return toHostDropArgs(netpolicy.ServiceData)
 }
 
 // DataToHostDNSArgs allows data-plane jobs to query host DNS.
@@ -286,9 +294,61 @@ func DataToHostDNSArgs(proto string) []string {
 
 // DataToHostDiscoverdArgs allows data-plane jobs to register and watch
 // discoverd. Engines dial a host address; a blanket INPUT drop would break
-// leader election.
+// leader election. DataToNodeDiscoverdArgs covers the other hosts'
+// discoverd peers.
 func DataToHostDiscoverdArgs() []string {
 	return []string{"INPUT", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-p", "tcp", "--dport", netpolicy.DiscoverdHTTPPort, "-j", "ACCEPT"}
+}
+
+// DataToNodeDiscoverdArgs lets datastore engines open discoverd on other
+// cluster nodes. DISCOVERD lists every peer's host IP and the client sends
+// writes to the raft leader, so this is forwarded toward the underlay.
+func DataToNodeDiscoverdArgs() []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-m", "set", "--match-set", NodeSet, "dst", "-p", "tcp", "--dport", netpolicy.DiscoverdHTTPPort, "-j", "ACCEPT"}
+}
+
+// DataToNodeDropArgs drops every other NEW packet from datastore engines to
+// a cluster node underlay IP (router API, router listeners, SSH, host API).
+func DataToNodeDropArgs() []string {
+	return toNodeDropArgs(netpolicy.ServiceData)
+}
+
+// DataOverlayDropArgs drops NEW overlay packets from datastore engines. It
+// must sit after the peer and datastore-port accepts. Like the user drop it
+// is NEW-only, so replies to status checks and clients pass.
+func DataOverlayDropArgs(overlay string) []string {
+	return overlayDropArgs(netpolicy.ServiceData, overlay)
+}
+
+// DataToPeerArgs lets a datastore engine open any port on an engine of the
+// same app (DataPeerSet holds those source,destination pairs): ClickHouse
+// interserver and Keeper and Kafka KRaft have no authentication, so they
+// are not open across apps.
+func DataToPeerArgs() []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", DataPeerSet, "src,dst", "-j", "ACCEPT"}
+}
+
+// DataToDatastoreArgs lets a datastore engine open one authenticated port
+// on any engine. Plugin followers are their own app and replicate from
+// their primary's.
+func DataToDatastoreArgs(dport string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-m", "set", "--match-set", netpolicy.ServiceData, "dst", "-p", "tcp", "--dport", dport, "-j", "ACCEPT"}
+}
+
+// DataToSystemDatastoreDropArgs stops engines of other apps from opening
+// the platform Postgres engines. Their own peers match DataToPeerArgs
+// first.
+func DataToSystemDatastoreDropArgs() []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-m", "set", "--match-set", DataSystemSet, "dst", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// DataToDatastoreRules is one ACCEPT per netpolicy.DatastorePeerTCPPorts.
+func DataToDatastoreRules() [][]string {
+	rules := make([][]string, 0, len(netpolicy.DatastorePeerTCPPorts))
+	for _, p := range netpolicy.DatastorePeerTCPPorts {
+		rules = append(rules, DataToDatastoreArgs(p))
+	}
+	return rules
 }
 
 // NodeIPs is the underlay address list for NodeSet: this host plus peers.
@@ -319,9 +379,14 @@ func BuildToUserDropArgs() []string {
 // jobs may open these and nothing else on the overlay. LogaggregatorSet holds
 // the logaggregator instances, which datastore engines may not open. Both
 // are filled by flynn-host from discoverd; they are not discoverd services.
+// DataPeerSet is a hash:net,net set of (source, destination) datastore
+// engine IPs of the same app. DataSystemSet holds the platform Postgres
+// engines (the controller, router and blobstore databases).
 const (
 	BuildServiceSet  = "flynn-net-build-svc"
 	LogaggregatorSet = "flynn-net-logagg"
+	DataPeerSet      = "flynn-net-data-peer"
+	DataSystemSet    = "flynn-net-data-sys"
 )
 
 // BuildOverlayDropArgs drops NEW overlay packets from build jobs. It must
@@ -336,38 +401,61 @@ func BuildToServicesArgs() []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceBuild, "src", "-m", "set", "--match-set", BuildServiceSet, "dst", "-j", "ACCEPT"}
 }
 
-// DataToLogaggregatorDropArgs stops datastore engines from opening the
-// logaggregator (forged syslog lines, the log API). User and build jobs are
-// already covered by their overlay drops, and flynn-host's own connections do
-// not traverse FORWARD, so only the host and platform jobs (gitreceive) ship
-// syslog.
+// DataToLogaggregatorDropArgs is the EDGE-04 drop from datastore engines
+// to the logaggregator. DataOverlayDropArgs covers it since EDGE-29;
+// EnableJobIsolation deletes it. LogaggregatorSet is still filled for it
+// on hosts that have not been updated.
 func DataToLogaggregatorDropArgs() []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-m", "set", "--match-set", LogaggregatorSet, "dst", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
 }
 
-// JobIsolationSets are every ipset JobIsolationForwardRules references.
+// JobIsolationSets are every hash:ip set JobIsolationForwardRules
+// references.
 func JobIsolationSets() []string {
-	return append(IsolationSets(), NodeSet, BuildServiceSet, LogaggregatorSet)
+	return append(IsolationSets(), NodeSet, BuildServiceSet, LogaggregatorSet, DataSystemSet)
+}
+
+// JobIsolationPairSets are the hash:net,net sets the rules match as
+// `src,dst`.
+func JobIsolationPairSets() []string {
+	return []string{DataPeerSet}
+}
+
+// legacyForwardRules are FORWARD rules earlier flynn-host versions
+// installed that the current list replaces.
+func legacyForwardRules() [][]string {
+	return [][]string{
+		DataToNodePortDropArgs("22"),
+		DataToNodePortDropArgs("1113"),
+		DataToLogaggregatorDropArgs(),
+	}
 }
 
 // JobIsolationForwardRules is the FORWARD rule list EnableJobIsolation
 // inserts, each at the head of the chain, so the kernel order is the
 // reverse: datastore ACCEPTs (per port), DNS ACCEPT, build→services ACCEPT,
-// then the drops, with the user and build overlay drops last.
+// the datastore engine rules (same-app peers, the platform Postgres drop,
+// authenticated datastore ports, discoverd on other nodes), then the drops, with the user, build
+// and datastore overlay drops last.
 func JobIsolationForwardRules(overlay, bridgeAddr string) [][]string {
 	iso := [][]string{
 		UserOverlayDropArgs(overlay),
 		BuildOverlayDropArgs(overlay),
+		DataOverlayDropArgs(overlay),
 		UserToNodeDropArgs(),
 		BuildToNodeDropArgs(),
-		DataToNodePortDropArgs("22"),
-		DataToNodePortDropArgs("1113"),
-		DataToLogaggregatorDropArgs(),
+		DataToNodeDropArgs(),
 		BuildToUserDropArgs(),
+		DataToNodeDiscoverdArgs(),
+	}
+	iso = append(iso, DataToDatastoreRules()...)
+	iso = append(iso,
+		DataToSystemDatastoreDropArgs(),
+		DataToPeerArgs(),
 		BuildToServicesArgs(),
 		UserToBridgeDNSArgs(bridgeAddr, "tcp"),
 		UserToBridgeDNSArgs(bridgeAddr, "udp"),
-	}
+	)
 	return append(iso, UserToDatastoreRules()...)
 }
 
@@ -384,6 +472,9 @@ func IsolationSets() []string {
 // egress ACCEPT.
 func EnableJobIsolation(overlay, bridgeAddr string, egressDeny []string) error {
 	if err := EnsureSets(JobIsolationSets()...); err != nil {
+		return err
+	}
+	if err := EnsurePairSets(JobIsolationPairSets()...); err != nil {
 		return err
 	}
 	legacyDrop := LegacyUserOverlayDropArgs(overlay)
@@ -403,6 +494,15 @@ func EnableJobIsolation(overlay, bridgeAddr string, egressDeny []string) error {
 			return err
 		}
 	}
+	if err := EnsureRuleOrder(rawRunner, "FORWARD", JobIsolationForwardRules(overlay, bridgeAddr)); err != nil {
+		return err
+	}
+	// Delete replaced rules only after their replacements are in place.
+	for _, args := range legacyForwardRules() {
+		if Exists(args...) {
+			_, _ = Raw(append([]string{"-D"}, args...)...)
+		}
+	}
 	if err := ApplyEgressDeny(func(args ...string) ([]byte, error) {
 		return Raw(args...)
 	}, egressDeny); err != nil {
@@ -411,9 +511,29 @@ func EnableJobIsolation(overlay, bridgeAddr string, egressDeny []string) error {
 	return EnableHostIsolation(bridgeAddr)
 }
 
-// EnableHostIsolation installs INPUT rules so user and build overlay IPs can
-// only open DNS. Discoverd HTTP is no longer reachable from those jobs;
-// flynn-host registers their backends.
+// HostIsolationInputRules is the INPUT rule list EnableHostIsolation
+// inserts, each at the head, so the kernel order is the reverse: discoverd
+// (datastore engines only), UDP/53, TCP/53, then one NEW drop per untrusted
+// set. User and build jobs open only DNS; datastore engines open DNS and
+// discoverd.
+func HostIsolationInputRules() [][]string {
+	return [][]string{
+		UserToHostDropArgs(),
+		BuildToHostDropArgs(),
+		DataToHostDropArgs(),
+		UserToHostDNSArgs("tcp"),
+		BuildToHostDNSArgs("tcp"),
+		DataToHostDNSArgs("tcp"),
+		UserToHostDNSArgs("udp"),
+		BuildToHostDNSArgs("udp"),
+		DataToHostDNSArgs("udp"),
+		DataToHostDiscoverdArgs(),
+	}
+}
+
+// EnableHostIsolation installs HostIsolationInputRules. Discoverd HTTP is
+// not reachable from user and build jobs; flynn-host registers their
+// backends.
 func EnableHostIsolation(bridgeAddr string) error {
 	for _, args := range [][]string{
 		UserToHostDiscoverdArgs(bridgeAddr),
@@ -423,26 +543,23 @@ func EnableHostIsolation(bridgeAddr string) error {
 			_, _ = Raw(append([]string{"-D"}, args...)...)
 		}
 	}
-	// Last-to-first: DROP, TCP/53, UDP/53 — per untrusted set.
-	for _, args := range [][]string{
-		UserToHostDropArgs(),
-		BuildToHostDropArgs(),
-		DataToHostPortDropArgs("22"),
-		DataToHostPortDropArgs("1113"),
-		UserToHostDNSArgs("tcp"),
-		BuildToHostDNSArgs("tcp"),
-		DataToHostDNSArgs("tcp"),
-		UserToHostDNSArgs("udp"),
-		BuildToHostDNSArgs("udp"),
-		DataToHostDNSArgs("udp"),
-		DataToHostDiscoverdArgs(),
-	} {
+	for _, args := range HostIsolationInputRules() {
 		if err := insertIfMissing("INPUT host isolation", args); err != nil {
 			return err
 		}
 	}
+	if err := EnsureRuleOrder(rawRunner, "INPUT", HostIsolationInputRules()); err != nil {
+		return err
+	}
+	for _, port := range []string{"22", "1113"} {
+		if args := DataToHostPortDropArgs(port); Exists(args...) {
+			_, _ = Raw(append([]string{"-D"}, args...)...)
+		}
+	}
 	return nil
 }
+
+func rawRunner(args ...string) ([]byte, error) { return Raw(args...) }
 
 func insertIfMissing(chain string, args []string) error {
 	if Exists(args...) {
@@ -502,7 +619,7 @@ func PlanForwardDrop(save, bridge, keep string) RulePlan {
 }
 
 // overlayDropSets are the job classes with an overlay-wide NEW drop.
-var overlayDropSets = []string{netpolicy.ServiceUser, netpolicy.ServiceBuild}
+var overlayDropSets = []string{netpolicy.ServiceUser, netpolicy.ServiceBuild, netpolicy.ServiceData}
 
 // PlanForwardDropFor is PlanForwardDrop for the overlay drop of one job
 // class set (flynn-net-user or flynn-net-build).
@@ -836,4 +953,90 @@ func ApplyEgressDeny(run IPTables, cidrs []string) error {
 		}
 	}
 	return nil
+}
+
+// ruleKey identifies a rule however it is spelled: our argument order or
+// `iptables -S` output, which adds `-m tcp`/`-m udp` before --dport, moves
+// `-p` first and prints host addresses as /32. chain is the first token of
+// args and is not part of the key.
+func ruleKey(args []string) string {
+	var toks []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-m" && i+1 < len(args) && (args[i+1] == "tcp" || args[i+1] == "udp") {
+			i++
+			continue
+		}
+		if (a == "-d" || a == "-s") && i+1 < len(args) {
+			toks = append(toks, a+" "+canonicalCIDR(hostCIDR(args[i+1])))
+			i++
+			continue
+		}
+		toks = append(toks, a)
+	}
+	sort.Strings(toks)
+	return strings.Join(toks, " ")
+}
+
+func hostCIDR(addr string) string {
+	if strings.Contains(addr, "/") {
+		return addr
+	}
+	return addr + "/32"
+}
+
+// EnsureRuleOrder puts every rule of rules (a list EnableJobIsolation or
+// EnableHostIsolation inserts at the head, so each rule must sit above the
+// ones listed before it) back in that order. insertIfMissing leaves rules
+// that already exist where they are, so a rule added by an update (the
+// EDGE-29 datastore host drop) landed above older accepts it must follow.
+// A misplaced rule is inserted again at the head and then its old copy is
+// deleted by number, so it is never absent. Rules missing from the chain
+// and rules not in the list are left alone.
+func EnsureRuleOrder(run IPTables, chain string, rules [][]string) error {
+	if run == nil {
+		return errors.New("iptables runner is nil")
+	}
+	keys := make([]string, len(rules))
+	for i, r := range rules {
+		keys[i] = ruleKey(r[1:])
+	}
+	for attempt := 0; attempt <= len(rules)*len(rules); attempt++ {
+		save, err := run("-S", chain)
+		if err != nil {
+			return fmt.Errorf("reading %s rules: %s", chain, err)
+		}
+		pos := map[string]int{}
+		for i, rule := range saveRules(string(save), chain) {
+			k := ruleKey(rule)
+			if _, ok := pos[k]; !ok {
+				pos[k] = i + 1
+			}
+		}
+		move := -1
+		top := 0 // smallest rule number (highest in the chain) among earlier-listed rules
+		for k, key := range keys {
+			p, ok := pos[key]
+			if !ok {
+				continue
+			}
+			if top > 0 && p > top {
+				move = k
+				break
+			}
+			if top == 0 || p < top {
+				top = p
+			}
+		}
+		if move < 0 {
+			return nil
+		}
+		if _, err := run(append([]string{"-I", chain, "1"}, rules[move][1:]...)...); err != nil {
+			return fmt.Errorf("reordering %s: %s", chain, err)
+		}
+		if _, err := run("-D", chain, strconv.Itoa(pos[keys[move]]+1)); err != nil {
+			return fmt.Errorf("reordering %s: %s", chain, err)
+		}
+	}
+	return fmt.Errorf("reordering %s: did not converge", chain)
 }

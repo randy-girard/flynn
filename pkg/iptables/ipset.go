@@ -151,3 +151,42 @@ func ReplaceSetIPs(set string, addrs []net.IP) error {
 	}
 	return nil
 }
+
+// EnsurePairSets creates hash:net,net sets (matched as `src,dst`) if
+// missing.
+func EnsurePairSets(names ...string) error {
+	for _, name := range names {
+		if err := ipset("create", name, "hash:net,net", "family", "inet", "-exist"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReplaceSetPairs makes the pair set contain exactly pairs (source,
+// destination), with the same fill-and-swap as ReplaceSetIPs so a pair kept
+// across the rebuild is never missing from the live set.
+func ReplaceSetPairs(set string, pairs [][2]net.IP) error {
+	unlock := lockSet(set)
+	defer unlock()
+	if err := EnsurePairSets(set); err != nil {
+		return err
+	}
+	tmp := tempSetName(set)
+	var b strings.Builder
+	fmt.Fprintf(&b, "create %s hash:net,net family inet\n", tmp)
+	fmt.Fprintf(&b, "flush %s\n", tmp)
+	for _, p := range pairs {
+		if p[0] == nil || p[1] == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "add %s %s,%s\n", tmp, p[0].String(), p[1].String())
+	}
+	fmt.Fprintf(&b, "swap %s %s\n", tmp, set)
+	fmt.Fprintf(&b, "destroy %s\n", tmp)
+	out, err := ipsetExec([]byte(b.String()), "-exist", "restore")
+	if err != nil {
+		return fmt.Errorf("ipset restore %s: %s (%s)", set, bytesPreview(out), err)
+	}
+	return nil
+}

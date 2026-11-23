@@ -544,8 +544,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	}
 	if job.Config.LinuxCapabilities == nil {
 		src := host.DefaultCapabilities
-		switch netpolicy.ClassifyJob(job) {
-		case netpolicy.ClassUser, netpolicy.ClassDatastore:
+		if netpolicy.ClassifyJob(job) == netpolicy.ClassUser || netpolicy.DatastoreAppJob(job) {
 			src = host.UserJobCapabilities
 		}
 		caps := append([]string(nil), src...)

@@ -99,16 +99,29 @@ func HostTrusted(job *host.Job) bool {
 	if job == nil {
 		return false
 	}
-	if ClassifyJob(job) == ClassDatastore {
+	// Engines and one-off jobs in a datastore app (only its web API is
+	// trusted). One-off jobs are system class on the network but run in the
+	// engine's image and release, so they do not get the host key either.
+	if DatastoreAppJob(job) {
 		return false
 	}
 	return isSystemJob(job)
 }
 
-// StripDatastoreEscape removes host-escape knobs from a data-plane job.
-// Volume bindings such as /data are left in place. Other classes are unchanged.
+// DatastoreAppJob reports an engine or a one-off job in a datastore app:
+// not the app's web API. Such jobs are not host-trusted, keep only the user
+// job capabilities and lose host-escape settings, whatever their network
+// class.
+func DatastoreAppJob(job *host.Job) bool {
+	return job != nil && !isBuildJob(job) && isSystemJob(job) && isDatastoreProcess(job)
+}
+
+// StripDatastoreEscape removes host-escape knobs from a data-plane job: an
+// engine, or a one-off job in a datastore app (system class on the network,
+// but it runs the engine's image and release). Volume bindings such as
+// /data are left in place. Other jobs are unchanged.
 func StripDatastoreEscape(job *host.Job) {
-	if job == nil || ClassifyJob(job) != ClassDatastore {
+	if !DatastoreAppJob(job) {
 		return
 	}
 	job.Config.HostNetwork = false
@@ -133,10 +146,26 @@ func ClassifyJob(job *host.Job) Class {
 	if !isSystemJob(job) {
 		return ClassUser
 	}
-	if isDatastoreProcess(job) {
+	if isDatastoreProcess(job) && !isOneOffJob(job) {
 		return ClassDatastore
 	}
 	return ClassSystem
+}
+
+// isOneOffJob reports a job the controller started outside a formation
+// (`flynn run`, the cluster backup's pg_dumpall, plugin maintenance and
+// backup tasks). Formation jobs, from the scheduler, bootstrap and the host
+// fixer, carry flynn-controller.formation=true; jobs with no controller app
+// id at all (old fixtures, hand-built jobs) are treated as formation jobs.
+func isOneOffJob(job *host.Job) bool {
+	switch job.Metadata["flynn-controller.type"] {
+	case "runner", "console":
+		return true
+	}
+	if job.Metadata["flynn-controller.formation"] == "true" {
+		return false
+	}
+	return job.Metadata["flynn-controller.app"] != ""
 }
 
 // UserMayResolveDiscoverd reports whether a name is a datastore leader a user

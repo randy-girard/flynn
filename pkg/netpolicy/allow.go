@@ -47,6 +47,12 @@ func OverlayInstanceMeta(job *host.Job) map[string]string {
 	if class == ClassUser {
 		meta[MetaDiscoverdAllow] = strings.Join(jobDiscoverdAllow(job), ",")
 	}
+	if class == ClassDatastore {
+		meta[MetaDatastoreApp] = datastoreApp(job)
+		if datastoreSystem(job) {
+			meta[MetaDatastoreSystem] = "true"
+		}
+	}
 	return meta
 }
 

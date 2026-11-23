@@ -464,11 +464,34 @@ Each Postgres role can CONNECT only to its own database
 router, or blobstore databases. Cross-app HTTP still works through routes you
 add (the router). System jobs still reach other overlay addresses.
 Data-plane engines (the database process, not the plugin `web` API) are not
-host-trusted: they do not receive `FLYNN_HOST_AUTH_KEY`, and new connections
-from their overlay IPs to host SSH (`:22`) and the host API (`:1113`) are
-dropped. They still use discoverd (`:1111`) and DNS (`:53`), and they still
-reach other datastore peers and system overlay IPs. `/data` stays mounted.
-User jobs can still open the documented data-plane ports.
+host-trusted: they do not receive `FLYNN_HOST_AUTH_KEY`. They run code a
+tenant can influence (SQL functions, ClickHouse `url()` and table engines,
+Redis modules), so new connections from their overlay IPs are limited to
+what replication and service discovery need:
+
+- discoverd (`:1111`) on every cluster node and DNS (`:53`) on their own host;
+- any port on another engine of the **same** datastore app (Postgres and
+  MariaDB replication and sirenia status, MongoDB replica sets, ClickHouse
+  interserver `:9009` and Keeper `:9181`/`:9234`, Kafka KRaft `:9093` and
+  inter-broker `:9094`, none of which ClickHouse or Kafka authenticate);
+- the authenticated data and admin ports of any engine (Postgres 5432/5433,
+  MariaDB 3306/3307, Redis 6379/6380/16379, MongoDB 27017/27018, ClickHouse
+  8123/8443/9000/9440/9090, Kafka 9092/9095): a plugin follower is its own
+  app and replicates from its primary's app. Each of these needs a password,
+  a client certificate or a key. The platform Postgres (the controller,
+  router and blobstore databases) is the exception: only its own peers may
+  open it.
+
+Everything else is dropped: the controller, blobstore, gitreceive,
+tarreceive, logaggregator, status, plugin APIs and every other system job,
+user jobs, overlay IPs in no set, and on the node underlay the router API
+(`:5000`), the router listeners (`:80`/`:443`), SSH, the host API and
+flannel. The internet stays open. One-off jobs in a datastore app (the
+cluster backup's `pg_dumpall`, plugin `maintenance` and backup tasks) are
+system class on the network because they call the controller and
+blobstore; like the engines, they are not host-trusted and keep only the
+user-job capabilities. `/data` stays mounted. User jobs can still open the
+documented data-plane ports.
 
 Discoverd DNS answers a user job only for `leader.<service>.discoverd` names
 of datastores attached to its app. The list comes from the controller's
@@ -508,9 +531,17 @@ current release env and attachments in one database query.
 
 These rules match ipsets that hold the overlay IPs of each job class
 (`flynn-net-user`, `flynn-net-build`, `flynn-net-data`, `flynn-net-sys`), the
-cluster node IPs (`flynn-net-nodes`), and two per-service sets that flynn-host
+cluster node IPs (`flynn-net-nodes`), two per-service sets that flynn-host
 fills from discoverd: `flynn-net-build-svc` (the controller, blobstore and
-tarreceive instances) and `flynn-net-logagg` (the logaggregator instances). flynn-host adds a job's IP when it
+tarreceive instances) and `flynn-net-logagg` (the logaggregator instances),
+and two datastore sets: `flynn-net-data-peer`, a `hash:net,net` set of
+(source, destination) pairs of datastore engines of the same app, and
+`flynn-net-data-sys`, the platform Postgres engines. flynn-host publishes
+each engine's app id (and whether it is the platform Postgres) in its
+`flynn-net-data` registration and rebuilds both sets on every change of that service and every 15 seconds; a failed lookup
+keeps the previous contents. A registration from a flynn-host that predates
+the app id (during a rolling `flynn-host update`) is paired with every
+engine until its host re-registers it. flynn-host adds a job's IP when it
 starts the job and learns other hosts' jobs from discoverd. A finished job's IP
 is not given to another job until its veth is off the bridge and two minutes
 have passed, so traffic still addressed to the old job is not matched to a
@@ -553,7 +584,7 @@ host control plane or the node underlay (which holds the router API). The
 internet stays open for buildpack downloads. A set rebuilds on every
 instance change of its services and every 15 seconds; a failed discoverd
 lookup keeps the previous contents. `flynn-host overlay:set` moves the build
-drop to the new overlay with the user drop.
+and datastore drops to the new overlay with the user drop.
 
 The logaggregator API (`/log/:app`, `/snapshot`, `/cursors`) serves every
 app's buffered logs, and the router API (`/events`, `/metrics`, `/debug`)
@@ -565,9 +596,8 @@ key from their env; flynn-host sends the key of a controller or logaggregator
 job on the host, or one it looks up from the cluster. The logaggregator syslog
 port has no authentication, so it is reachable only from hosts and platform
 jobs (gitreceive ships push progress there): user and build jobs are covered
-by their overlay drops, and datastore engines are dropped by
-`flynn-net-logagg`. A malformed frame on that port (a zero, negative or
-oversized MSG-LEN) closes only the sending connection, and a truncated
+by their overlay drops, and so are datastore engines. A malformed frame on
+that port (a zero, negative or oversized MSG-LEN) closes only the sending connection, and a truncated
 RFC5424 header is a parse error, not a crash. Blobstore HTTP
 requires the cluster `AUTH_KEY` / `CONTROLLER_KEY` (Basic or Bearer) for
 object GET/PUT/DELETE. `/.well-known/status` and `HEAD /` stay

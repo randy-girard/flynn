@@ -1,7 +1,9 @@
 package iptables
 
 import (
+	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 // packet is one NEW connection as FORWARD sees it.
 type packet struct {
 	src, dst []string // ipsets the source and destination IPs are in
+	pairs    []string // pair sets (src,dst) the source/destination pair is in
 	dstIP    string
 	proto    string
 	dport    string
@@ -46,8 +49,8 @@ func matchRule(t *testing.T, rule []string, p packet) (string, bool) {
 		}
 		return false
 	}
-	if rule[0] != "FORWARD" {
-		t.Fatalf("not a FORWARD rule: %v", rule)
+	if rule[0] != "FORWARD" && rule[0] != "INPUT" {
+		t.Fatalf("not a FORWARD or INPUT rule: %v", rule)
 	}
 	target := ""
 	for i := 1; i < len(rule); i++ {
@@ -64,6 +67,10 @@ func matchRule(t *testing.T, rule []string, p packet) (string, bool) {
 				}
 			case "dst":
 				if !in(p.dst, name) {
+					return "", false
+				}
+			case "src,dst":
+				if !in(p.pairs, name) {
 					return "", false
 				}
 			default:
@@ -109,7 +116,7 @@ func matchRule(t *testing.T, rule []string, p packet) (string, bool) {
 	return target, true
 }
 
-// installed is the FORWARD chain after EnableJobIsolation inserts each rule
+// installed is the chain after EnableJobIsolation inserts each rule
 // at the head, in list order.
 func installed(rules [][]string) [][]string {
 	chain := make([][]string, 0, len(rules))
@@ -200,14 +207,28 @@ func TestEnableJobIsolationInstallsListedRules(t *testing.T) {
 	for _, s := range JobIsolationSets() {
 		sets[s] = true
 	}
-	for _, rule := range JobIsolationForwardRules(testOverlay, testBridge) {
+	pairSets := map[string]bool{}
+	for _, s := range JobIsolationPairSets() {
+		pairSets[s] = true
+	}
+	for _, rule := range append(JobIsolationForwardRules(testOverlay, testBridge), HostIsolationInputRules()...) {
 		for i, a := range rule {
-			if a == "--match-set" && !sets[rule[i+1]] {
-				t.Fatalf("rule %v references set %s that EnableJobIsolation does not create", rule, rule[i+1])
+			if a != "--match-set" {
+				continue
+			}
+			name, dir := rule[i+1], rule[i+2]
+			if dir == "src,dst" {
+				if !pairSets[name] {
+					t.Fatalf("rule %v matches pair set %s that EnableJobIsolation does not create as a pair set", rule, name)
+				}
+				continue
+			}
+			if !sets[name] {
+				t.Fatalf("rule %v references set %s that EnableJobIsolation does not create", rule, name)
 			}
 		}
 	}
-	for _, s := range []string{BuildServiceSet, LogaggregatorSet} {
+	for _, s := range []string{BuildServiceSet, LogaggregatorSet, DataPeerSet, DataSystemSet} {
 		if len(s) > 31-len("-swap") {
 			t.Fatalf("ipset name %q too long for ReplaceSetIPs", s)
 		}
@@ -254,5 +275,318 @@ func TestApplyOverlayRulesWidensBuildDrop(t *testing.T) {
 	}
 	if strings.Contains(body, "-I FORWARD 4 -m set --match-set flynn-net-user") {
 		t.Fatalf("user drop already matches, must not be re-inserted:\n%s", body)
+	}
+}
+
+// TestDatastoreJobsOnlyReachPeersAndDiscoverd (EDGE-29): datastore engines
+// run tenant-reachable code (SQL functions, ClickHouse url(), Redis
+// modules). On the overlay they may open other engines of their own
+// datastore app on any port (KRaft, Keeper and ClickHouse interserver have
+// no authentication) and any engine on the authenticated data and admin
+// ports (cross-app followers replicate from their primary). Every system
+// job, user job and unknown overlay IP is dropped, and on the node
+// underlay only discoverd is open.
+func TestDatastoreJobsOnlyReachPeersAndDiscoverd(t *testing.T) {
+	chain := installed(JobIsolationForwardRules(testOverlay, testBridge))
+	data := []string{netpolicy.ServiceData}
+	sameApp := []string{DataPeerSet}
+	for _, tc := range []struct {
+		name string
+		p    packet
+		want string
+	}{
+		{"controller", packet{src: data, dst: []string{netpolicy.ServiceSys, BuildServiceSet}, dstIP: "100.64.12.5", dport: "80"}, "DROP"},
+		{"blobstore", packet{src: data, dst: []string{netpolicy.ServiceSys, BuildServiceSet}, dstIP: "100.64.13.9", dport: "80"}, "DROP"},
+		{"logaggregator syslog", packet{src: data, dst: []string{netpolicy.ServiceSys, LogaggregatorSet}, dstIP: "100.64.12.7", dport: "514"}, "DROP"},
+		{"gitreceive / status / plugin api", packet{src: data, dst: []string{netpolicy.ServiceSys}, dstIP: "100.64.12.8", dport: "8080"}, "DROP"},
+		{"user job", packet{src: data, dst: []string{netpolicy.ServiceUser}, dstIP: "100.64.14.3", dport: "8080"}, "DROP"},
+		{"overlay ip not yet in any set", packet{src: data, dstIP: "100.64.40.4", dport: "80"}, "DROP"},
+		{"same-app peer postgres", packet{src: data, dst: data, pairs: sameApp, dstIP: "100.64.14.2", dport: "5432"}, "ACCEPT"},
+		{"same-app peer sirenia admin", packet{src: data, dst: data, pairs: sameApp, dstIP: "100.64.14.2", dport: "5433"}, "ACCEPT"},
+		{"same-app clickhouse interserver", packet{src: data, dst: data, pairs: sameApp, dstIP: "100.64.14.2", dport: "9009"}, "ACCEPT"},
+		{"same-app clickhouse keeper raft", packet{src: data, dst: data, pairs: sameApp, dstIP: "100.64.14.2", dport: "9234"}, "ACCEPT"},
+		{"same-app kafka kraft", packet{src: data, dst: data, pairs: sameApp, dstIP: "100.64.14.2", dport: "9093"}, "ACCEPT"},
+		{"cross-app follower postgres", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "5432"}, "ACCEPT"},
+		{"other app → system postgres", packet{src: data, dst: []string{netpolicy.ServiceData, DataSystemSet}, dstIP: "100.64.14.9", dport: "5432"}, "DROP"},
+		{"other app → system postgres sirenia admin", packet{src: data, dst: []string{netpolicy.ServiceData, DataSystemSet}, dstIP: "100.64.14.9", dport: "5433"}, "DROP"},
+		{"system postgres peer → peer", packet{src: data, dst: []string{netpolicy.ServiceData, DataSystemSet}, pairs: sameApp, dstIP: "100.64.14.9", dport: "5433"}, "ACCEPT"},
+		{"cross-app follower redis tls", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "16379"}, "ACCEPT"},
+		{"cross-app follower mariadb backup", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "3307"}, "ACCEPT"},
+		{"other app clickhouse interserver", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "9009"}, "DROP"},
+		{"other app clickhouse keeper", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "9181"}, "DROP"},
+		{"other app kafka kraft", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "9093"}, "DROP"},
+		{"other app kafka inter-broker", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "9094"}, "DROP"},
+		{"other app metrics", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "9180"}, "DROP"},
+		{"node discoverd", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: netpolicy.DiscoverdHTTPPort}, "ACCEPT"},
+		{"node router api", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "5000"}, "DROP"},
+		{"node router http", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "80"}, "DROP"},
+		{"node router https", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "443"}, "DROP"},
+		{"node host api", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "1113"}, "DROP"},
+		{"node ssh", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "22"}, "DROP"},
+		{"node flannel", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "5002"}, "DROP"},
+		{"internet", packet{src: data, dstIP: "140.82.112.3", dport: "443"}, ""},
+	} {
+		if got := verdict(t, chain, tc.p); got != tc.want {
+			t.Errorf("datastore → %s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+	// Replies to connections other jobs opened (status checks, user
+	// clients, the plugin API) are not NEW and must pass.
+	for _, dst := range [][]string{{netpolicy.ServiceSys}, {netpolicy.ServiceUser}, {NodeSet}} {
+		reply := packet{src: data, dst: dst, dstIP: "100.64.12.8", dport: "40000", state: "ESTABLISHED"}
+		if got := verdict(t, chain, reply); got == "DROP" {
+			t.Errorf("datastore reply to %v dropped: the drops must be NEW-only", dst)
+		}
+	}
+	// Other classes keep their access to datastores.
+	for _, tc := range []struct {
+		name string
+		p    packet
+		want string
+	}{
+		{"user → data port", packet{src: []string{netpolicy.ServiceUser}, dst: data, dstIP: "100.64.14.2", dport: "5432"}, "ACCEPT"},
+		{"user → admin port", packet{src: []string{netpolicy.ServiceUser}, dst: data, dstIP: "100.64.14.2", dport: "5433"}, "DROP"},
+		{"system → admin port", packet{src: []string{netpolicy.ServiceSys}, dst: data, dstIP: "100.64.14.2", dport: "5433"}, ""},
+	} {
+		if got := verdict(t, chain, tc.p); got != tc.want {
+			t.Errorf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestDatastoreJobsOnlyOpenDNSAndDiscoverdOnTheirHost (EDGE-29): on the
+// host they run on, datastore engines may open DNS and discoverd. The
+// router API (:5000), the public router listeners, SSH, the host API and
+// every other host socket are dropped.
+func TestDatastoreJobsOnlyOpenDNSAndDiscoverdOnTheirHost(t *testing.T) {
+	chain := installed(HostIsolationInputRules())
+	data := []string{netpolicy.ServiceData}
+	for _, tc := range []struct {
+		proto, port, want string
+	}{
+		{"udp", "53", "ACCEPT"},
+		{"tcp", "53", "ACCEPT"},
+		{"tcp", netpolicy.DiscoverdHTTPPort, "ACCEPT"},
+		{"tcp", "5000", "DROP"},
+		{"tcp", "80", "DROP"},
+		{"tcp", "443", "DROP"},
+		{"tcp", "1113", "DROP"},
+		{"tcp", "22", "DROP"},
+		{"tcp", "5002", "DROP"},
+		{"udp", "8472", "DROP"},
+	} {
+		p := packet{src: data, dstIP: testBridge, proto: tc.proto, dport: tc.port}
+		if got := verdict(t, chain, p); got != tc.want {
+			t.Errorf("datastore → host %s/%s: got %q want %q", tc.proto, tc.port, got, tc.want)
+		}
+	}
+	reply := packet{src: data, dstIP: testBridge, dport: "45000", state: "ESTABLISHED"}
+	if got := verdict(t, chain, reply); got == "DROP" {
+		t.Error("datastore host drop must be NEW-only")
+	}
+	// User and build jobs are unchanged: DNS only.
+	for _, set := range []string{netpolicy.ServiceUser, netpolicy.ServiceBuild} {
+		if got := verdict(t, chain, packet{src: []string{set}, dstIP: testBridge, dport: netpolicy.DiscoverdHTTPPort}); got != "DROP" {
+			t.Errorf("%s → host discoverd: got %q want DROP", set, got)
+		}
+		if got := verdict(t, chain, packet{src: []string{set}, dstIP: testBridge, proto: "udp", dport: "53"}); got != "ACCEPT" {
+			t.Errorf("%s → host DNS: got %q want ACCEPT", set, got)
+		}
+	}
+}
+
+// fakeChain is one iptables chain for EnsureRuleOrder: -S prints the rules
+// it holds (the live ones in iptables' own spelling, inserted ones as
+// given), -I chain [n] inserts, -D chain n deletes by number.
+type fakeChain struct {
+	t     *testing.T
+	name  string
+	rules [][]string
+}
+
+func (c *fakeChain) run(args ...string) ([]byte, error) {
+	switch {
+	case len(args) == 2 && args[0] == "-S" && args[1] == c.name:
+		var b strings.Builder
+		fmt.Fprintf(&b, "-P %s DROP\n", c.name)
+		for _, r := range c.rules {
+			fmt.Fprintf(&b, "-A %s %s\n", c.name, strings.Join(r, " "))
+		}
+		return []byte(b.String()), nil
+	case len(args) > 2 && args[0] == "-I" && args[1] == c.name:
+		pos, rest := 1, args[2:]
+		if n, err := strconv.Atoi(rest[0]); err == nil {
+			pos, rest = n, rest[1:]
+		}
+		r := append([]string(nil), rest...)
+		c.rules = append(c.rules[:pos-1], append([][]string{r}, c.rules[pos-1:]...)...)
+		return nil, nil
+	case len(args) == 3 && args[0] == "-D" && args[1] == c.name:
+		n, err := strconv.Atoi(args[2])
+		if err != nil || n < 1 || n > len(c.rules) {
+			c.t.Fatalf("bad delete %v", args)
+		}
+		c.rules = append(c.rules[:n-1], c.rules[n:]...)
+		return nil, nil
+	}
+	c.t.Fatalf("unexpected iptables call %v", args)
+	return nil, nil
+}
+
+func (c *fakeChain) chain() [][]string {
+	out := make([][]string, len(c.rules))
+	for i, r := range c.rules {
+		out[i] = append([]string{c.name}, r...)
+	}
+	return out
+}
+
+// TestEnsureRuleOrderAfterUpgrade (EDGE-29, seen live): on a host updated
+// from the per-port datastore drops, the DNS and discoverd accepts already
+// existed, so the new all-port datastore drop was inserted above them and
+// engines lost their local discoverd. EnsureRuleOrder must put each listed
+// rule above the ones listed before it, using the chain as iptables prints
+// it, without leaving any rule absent.
+func TestEnsureRuleOrderAfterUpgrade(t *testing.T) {
+	// INPUT as `iptables -S` printed it on dev-node1 after the update.
+	live := []string{
+		"-m set --match-set flynn-net-data src -m conntrack --ctstate NEW -j DROP",
+		"-p tcp -m set --match-set flynn-net-data src -m tcp --dport 1111 -j ACCEPT",
+		"-p udp -m set --match-set flynn-net-data src -m udp --dport 53 -j ACCEPT",
+		"-p udp -m set --match-set flynn-net-build src -m udp --dport 53 -j ACCEPT",
+		"-p udp -m set --match-set flynn-net-user src -m udp --dport 53 -j ACCEPT",
+		"-p tcp -m set --match-set flynn-net-data src -m tcp --dport 53 -j ACCEPT",
+		"-p tcp -m set --match-set flynn-net-build src -m tcp --dport 53 -j ACCEPT",
+		"-p tcp -m set --match-set flynn-net-user src -m tcp --dport 53 -j ACCEPT",
+		"-m set --match-set flynn-net-build src -m conntrack --ctstate NEW -j DROP",
+		"-m set --match-set flynn-net-user src -m conntrack --ctstate NEW -j DROP",
+		"-j ufw-before-input",
+	}
+	c := &fakeChain{t: t, name: "INPUT"}
+	for _, l := range live {
+		c.rules = append(c.rules, strings.Fields(l))
+	}
+	data := []string{netpolicy.ServiceData}
+	if got := verdict(t, c.chain(), packet{src: data, dstIP: testBridge, dport: netpolicy.DiscoverdHTTPPort}); got != "DROP" {
+		t.Fatalf("fixture: discoverd = %q, want the broken DROP", got)
+	}
+	if err := EnsureRuleOrder(c.run, "INPUT", HostIsolationInputRules()); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.rules) != len(live) {
+		t.Fatalf("rule count %d, want %d: %v", len(c.rules), len(live), c.rules)
+	}
+	for _, tc := range []struct{ proto, port, want string }{
+		{"tcp", netpolicy.DiscoverdHTTPPort, "ACCEPT"},
+		{"udp", "53", "ACCEPT"},
+		{"tcp", "53", "ACCEPT"},
+		{"tcp", "5000", "DROP"},
+	} {
+		if got := verdict(t, c.chain(), packet{src: data, dstIP: testBridge, proto: tc.proto, dport: tc.port}); got != tc.want {
+			t.Errorf("after repair, datastore → host %s/%s = %q, want %q", tc.proto, tc.port, got, tc.want)
+		}
+	}
+	if last := strings.Join(c.rules[len(c.rules)-1], " "); last != "-j ufw-before-input" {
+		t.Fatalf("rules not in the list moved: last = %q", last)
+	}
+	// Already in order: no calls besides -S.
+	ordered := &fakeChain{t: t, name: "INPUT", rules: c.rules}
+	calls := 0
+	run := func(args ...string) ([]byte, error) {
+		if args[0] != "-S" {
+			calls++
+		}
+		return ordered.run(args...)
+	}
+	if err := EnsureRuleOrder(run, "INPUT", HostIsolationInputRules()); err != nil || calls != 0 {
+		t.Fatalf("ordered chain changed: err=%v calls=%d", err, calls)
+	}
+}
+
+// TestForwardUpgradeFromEDGE04Chain replays the update on the FORWARD chain
+// dev-node1 had before EDGE-29: insert what is missing at the head (as
+// insertIfMissing does), repair the order, delete the legacy rules. The
+// result must isolate every class as the fresh rule list does.
+func TestForwardUpgradeFromEDGE04Chain(t *testing.T) {
+	const overlay, bridge = "100.100.0.0/16", "100.100.81.1"
+	live := []string{
+		"-d 169.254.0.0/16 -m set --match-set flynn-net-build src -m comment --comment flynn-egress-deny -j DROP",
+		"-d 169.254.0.0/16 -m set --match-set flynn-net-user src -m comment --comment flynn-egress-deny -j DROP",
+	}
+	for _, p := range []string{"27017", "9440", "9092", "9000", "8443", "8123", "6379", "5432", "3306"} {
+		live = append(live, "-p tcp -m set --match-set flynn-net-user src -m set --match-set flynn-net-data dst -m tcp --dport "+p+" -j ACCEPT")
+	}
+	live = append(live,
+		"-d 100.100.81.1/32 -p udp -m set --match-set flynn-net-user src -m udp --dport 53 -j ACCEPT",
+		"-d 100.100.81.1/32 -p tcp -m set --match-set flynn-net-user src -m tcp --dport 53 -j ACCEPT",
+		"-m set --match-set flynn-net-build src -m set --match-set flynn-net-build-svc dst -j ACCEPT",
+		"-m set --match-set flynn-net-build src -m set --match-set flynn-net-user dst -j DROP",
+		"-m set --match-set flynn-net-data src -m set --match-set flynn-net-logagg dst -m conntrack --ctstate NEW -j DROP",
+		"-p tcp -m set --match-set flynn-net-data src -m set --match-set flynn-net-nodes dst -m tcp --dport 1113 -m conntrack --ctstate NEW -j DROP",
+		"-p tcp -m set --match-set flynn-net-data src -m set --match-set flynn-net-nodes dst -m tcp --dport 22 -m conntrack --ctstate NEW -j DROP",
+		"-m set --match-set flynn-net-build src -m set --match-set flynn-net-nodes dst -m conntrack --ctstate NEW -j DROP",
+		"-m set --match-set flynn-net-user src -m set --match-set flynn-net-nodes dst -m conntrack --ctstate NEW -j DROP",
+		"-d 100.100.0.0/16 -m set --match-set flynn-net-build src -m conntrack --ctstate NEW -j DROP",
+		"-d 100.100.0.0/16 -m set --match-set flynn-net-user src -m conntrack --ctstate NEW -j DROP",
+	)
+	c := &fakeChain{t: t, name: "FORWARD"}
+	for _, l := range live {
+		c.rules = append(c.rules, strings.Fields(l))
+	}
+	have := func(args []string) bool {
+		for _, r := range c.rules {
+			if ruleKey(r) == ruleKey(args[1:]) {
+				return true
+			}
+		}
+		return false
+	}
+	rules := JobIsolationForwardRules(overlay, bridge)
+	for _, r := range rules {
+		if !have(r) {
+			c.run(append([]string{"-I", "FORWARD"}, r[1:]...)...)
+		}
+	}
+	if err := EnsureRuleOrder(c.run, "FORWARD", rules); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range legacyForwardRules() {
+		for i, have := range c.rules {
+			if ruleKey(have) == ruleKey(r[1:]) {
+				c.rules = append(c.rules[:i], c.rules[i+1:]...)
+				break
+			}
+		}
+	}
+	chain := c.chain()
+	data, user, build := []string{netpolicy.ServiceData}, []string{netpolicy.ServiceUser}, []string{netpolicy.ServiceBuild}
+	for _, tc := range []struct {
+		name string
+		p    packet
+		want string
+	}{
+		{"data → controller", packet{src: data, dst: []string{netpolicy.ServiceSys, BuildServiceSet}, dstIP: "100.100.12.5", dport: "80"}, "DROP"},
+		{"data → same-app kraft", packet{src: data, dst: data, pairs: []string{DataPeerSet}, dstIP: "100.100.14.2", dport: "9093"}, "ACCEPT"},
+		{"data → other app kraft", packet{src: data, dst: data, dstIP: "100.100.14.2", dport: "9093"}, "DROP"},
+		{"data → follower 5432", packet{src: data, dst: data, dstIP: "100.100.14.2", dport: "5432"}, "ACCEPT"},
+		{"data → system postgres", packet{src: data, dst: []string{netpolicy.ServiceData, DataSystemSet}, dstIP: "100.100.14.9", dport: "5432"}, "DROP"},
+		{"data → node discoverd", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "1111"}, "ACCEPT"},
+		{"data → node router api", packet{src: data, dst: []string{NodeSet}, dstIP: "192.168.57.21", dport: "5000"}, "DROP"},
+		{"user → datastore 5432", packet{src: user, dst: data, dstIP: "100.100.14.2", dport: "5432"}, "ACCEPT"},
+		{"user → datastore admin", packet{src: user, dst: data, dstIP: "100.100.14.2", dport: "5433"}, "DROP"},
+		{"user → dns", packet{src: user, dstIP: bridge, proto: "udp", dport: "53"}, "ACCEPT"},
+		{"user → metadata", packet{src: user, dstIP: "169.254.169.254", dport: "80"}, "DROP"},
+		{"build → blobstore", packet{src: build, dst: []string{netpolicy.ServiceSys, BuildServiceSet}, dstIP: "100.100.13.9", dport: "80"}, "ACCEPT"},
+		{"build → user", packet{src: build, dst: user, dstIP: "100.100.14.3", dport: "8080"}, "DROP"},
+		{"system → admin port", packet{src: []string{netpolicy.ServiceSys}, dst: data, dstIP: "100.100.14.2", dport: "5433"}, ""},
+	} {
+		if got := verdict(t, chain, tc.p); got != tc.want {
+			t.Errorf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+	for _, r := range legacyForwardRules() {
+		if have(r) {
+			t.Fatalf("legacy rule left: %v", r)
+		}
 	}
 }
