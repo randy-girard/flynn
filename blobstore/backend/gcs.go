@@ -97,24 +97,15 @@ func (b *gcsBackend) Name() string {
 	return b.name
 }
 
-func (b *gcsBackend) Put(tx *postgres.DBTx, info FileInfo, r io.Reader, append bool) error {
-	if append {
-		// TODO(titanous): This is a hack, we should use resumable uploads.
-		existing, err := b.Open(tx, info, false)
-		if err != nil {
-			return err
-		}
-		r = io.MultiReader(existing, r)
-	}
-
-	info.ExternalID = random.UUID()
-	if err := tx.Exec("UPDATE files SET external_id = $2 WHERE file_id = $1", info.ID, info.ExternalID); err != nil {
-		return err
-	}
-
-	w := b.bucket.Object(info.ExternalID).NewWriter(context.Background())
+func (b *gcsBackend) Put(_ *postgres.DB, info FileInfo, r io.Reader) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := b.bucket.Object(info.ExternalID).NewWriter(ctx)
 	w.ContentType = info.Type
 	if _, err := io.Copy(w, r); err != nil {
+		// cancelling before Close abandons the upload instead of
+		// finishing an object with part of the data
+		cancel()
 		w.Close()
 		return err
 	}

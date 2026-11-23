@@ -45,7 +45,7 @@ app's names (`/slugs/apps/<app>/`, `/tarreceive/apps/<app>/`,
 `/<app>-cache.tgz`, `/<app>-docker-cache.tgz`, `/repos/<app>.tar`); a PUT that
 would pass it gets `507 Insufficient Storage`. A request with a
 `Content-Length` over the limit is refused before a byte is stored; a chunked
-one is cut off when it passes the limit and its transaction rolls back, so an
+one is cut off when it passes the limit and its upload is discarded, so an
 overwritten object keeps its old content. `0` or `off` turns a limit off. See
 [Upload limits](../docs/content/production.html.md#upload-limits).
 
@@ -54,6 +54,26 @@ atomically: if the upload fails or the client disconnects, the old content is
 still served. On the S3, GCS, Azure, and MinIO backends the old object is
 deleted only after the new upload is committed; if that delete fails it is left
 for `flynn-blobstore cleanup`.
+
+A PUT holds no database transaction, pool connection or row lock while its
+body arrives. The body is written to a new object (a Postgres large object
+written in 1 MiB chunks, or a new key in the bucket) that is recorded in the
+`uploads` table; once the body is complete, one short transaction marks the
+old row deleted and inserts the new one. A slow or stalled client therefore
+does not block other writers of the same name or use up the pool. An append
+(`Blobstore-Offset`) writes a new object with the old data followed by the new
+data, and fails if the object was replaced meanwhile. A failed upload deletes
+the object it wrote. An upload that makes no progress for an hour (its
+blobstore instance stopped, or its idle timeout is off) is swept by the
+server, which deletes its object.
+
+A PUT body that sends nothing for `UPLOAD_IDLE_TIMEOUT` (default `60s`) is cut
+off with `408 Request Timeout` and the connection is closed; nothing is stored
+and an overwritten object keeps its old content. A body that keeps sending,
+however slowly, is not cut off. The value is a duration (`90s`, `5m`) or a
+number of seconds; `0` or `off` turns the timeout off. The server also gives
+clients 30 seconds to send request headers and closes idle keep-alive
+connections after 2 minutes.
 
 A DELETE marks the objects deleted, then removes them from their backend. If a
 backend delete fails, or a backend named by a row is no longer configured, the

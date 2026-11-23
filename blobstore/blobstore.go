@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	docopt "github.com/flynn/go-docopt"
@@ -18,7 +19,6 @@ import (
 	"github.com/randy-girard/flynn/blobstore/data"
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
-	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/status"
@@ -90,10 +90,25 @@ func handler(r *data.FileRepo, lim putLimits) http.Handler {
 						return
 					}
 				}
+				var idle *idleBody
+				if lim.idleTimeout > 0 {
+					idle = newIdleBody(w, req.Body, lim.idleTimeout)
+					req.Body = idle
+				}
 				var handled bool
 				handled, err = lim.limitPut(w, req, path, offset, func(body io.Reader) error {
 					return r.Put(path, body, offset, req.Header.Get("Content-Type"))
 				})
+				if idle != nil {
+					idle.done()
+					if idle.timedOut {
+						// nothing was stored; an overwritten object is intact
+						log.Printf("PUT %s: %s (%s), the upload was discarded", path, errBodyIdle, lim.idleTimeout)
+						w.Header().Set("Connection", "close")
+						http.Error(w, fmt.Sprintf("%s (%s)", errBodyIdle, lim.idleTimeout), http.StatusRequestTimeout)
+						return
+					}
+				}
 				if handled {
 					return
 				}
@@ -195,7 +210,11 @@ func runServer(_ *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("PUT limits: MAX_OBJECT_SIZE=%d APP_QUOTA=%d (0 is unlimited)", lim.maxObject, lim.appQuota)
+	if lim.idleTimeout, err = uploadIdleTimeoutFromEnv(); err != nil {
+		return err
+	}
+	log.Printf("PUT limits: MAX_OBJECT_SIZE=%d APP_QUOTA=%d (0 is unlimited) UPLOAD_IDLE_TIMEOUT=%s (0s is off)", lim.maxObject, lim.appQuota, lim.idleTimeout)
+	go sweepUploads(repo)
 	mux.Handle("/", protect(handler(repo, lim), keys, clusterAuthorizer(keys), repoExists(repo)))
 	mux.Handle(status.Path, status.Handler(func() status.Status {
 		if err := db.Exec("SELECT 1"); err != nil {
@@ -204,8 +223,22 @@ func runServer(_ *docopt.Args) error {
 		return status.Healthy
 	}))
 
-	h := httphelper.ContextInjector("blobstore", httphelper.NewRequestLogger(mux))
-	return http.ListenAndServe(addr, h)
+	srv := &http.Server{Addr: addr, Handler: wrapHandler(mux)}
+	applyServerTimeouts(srv)
+	return srv.ListenAndServe()
+}
+
+// sweepUploads deletes the objects of abandoned uploads now and then. Every
+// instance sweeps; an upload is removed by one of them.
+func sweepUploads(repo *data.FileRepo) {
+	for {
+		if n, err := repo.SweepUploads(abandonedUploadAge); err != nil {
+			log.Printf("Error sweeping abandoned uploads (%d removed): %s", n, err)
+		} else if n > 0 {
+			log.Printf("Removed %d abandoned uploads", n)
+		}
+		time.Sleep(sweepInterval)
+	}
 }
 
 var dbMigrations = postgres.NewMigrations()
@@ -263,6 +296,22 @@ $$ LANGUAGE plpgsql`,
 			END;
 		$$ LANGUAGE plpgsql`,
 		`CREATE TRIGGER delete_file BEFORE UPDATE OF deleted_at ON files FOR EACH ROW EXECUTE PROCEDURE delete_file()`,
+	)
+	// EDGE-33: an upload writes its object before any files row names it.
+	// The object is recorded here until the upload commits or fails, so
+	// one whose client or blobstore instance went away is deleted by the
+	// sweep instead of being left in Postgres or the bucket.
+	dbMigrations.Add(3,
+		`CREATE TABLE uploads (
+  upload_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name text NOT NULL,
+  backend text NOT NULL,
+  file_oid oid,
+  external_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+)`,
+		`CREATE INDEX ON uploads (updated_at)`,
 	)
 
 	register("server", runServer, `

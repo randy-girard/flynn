@@ -776,6 +776,7 @@ images.
 | `MAX_CONCURRENT_LAYERS` | `tarreceive` | `2` | Layers that unpack and run `mksquashfs` at the same time. Others wait for a slot. |
 | `MAX_OBJECT_SIZE` | `blobstore` | `32g` | One stored object: a slug, a squashfs layer, a build cache, a repo archive. An append counts the bytes already stored. |
 | `APP_QUOTA` | `blobstore` | `100g` | The live bytes stored for one app: its `/slugs/apps/<app>/` and `/tarreceive/apps/<app>/` objects, its build caches and its repo archive. Shared Docker layers under `/tarreceive/layers/` are not counted. |
+| `UPLOAD_IDLE_TIMEOUT` | `blobstore` | `60s` | How long a PUT body may send nothing. A stalled upload is then cut off with `408 Request Timeout`, nothing is stored, and an overwritten object keeps its old content. A duration (`90s`, `5m`) or seconds; `0` or `off` turns it off. |
 
 Sizes are bytes or a number with a binary unit (`512m`, `32g`, `1t`). `0`
 or `off` turns a limit off. Set them on the system app; the new release
@@ -784,7 +785,7 @@ restarts it and `flynn-host update` keeps the value:
 ```text
 flynn -a gitreceive env:set MAX_PUSH_SIZE=4g
 flynn -a tarreceive env:set MAX_LAYER_SIZE=16g MAX_CONCURRENT_LAYERS=1
-flynn -a blobstore env:set MAX_OBJECT_SIZE=16g APP_QUOTA=50g
+flynn -a blobstore env:set MAX_OBJECT_SIZE=16g APP_QUOTA=50g UPLOAD_IDLE_TIMEOUT=2m
 ```
 
 Each component logs its limits when it starts. An upload over a limit is
@@ -800,7 +801,16 @@ and otherwise when the limit is passed:
   place.
 
 The app quota counts only finished uploads, so uploads running at the same
-time can pass it by up to one object each. Blob GC (`gc.max_inactive_slug_releases`,
+time can pass it by up to one object each.
+
+A blobstore upload holds no database transaction or row lock while its body
+arrives: the data goes to a new object first, and a short transaction swaps it
+in at the end. A slow or stalled uploader therefore neither blocks the next
+push's upload of the same cache or slug nor uses up the blobstore's database
+connections. The blobstore server also limits request headers to 30 seconds
+and closes idle keep-alive connections after 2 minutes, and it deletes the
+object of an upload that made no progress for an hour (for example when its
+instance stopped mid-upload). Blob GC (`gc.max_inactive_slug_releases`,
 default 10 releases kept) frees an app's old slugs.
 
 ## DNS and Load Balancing

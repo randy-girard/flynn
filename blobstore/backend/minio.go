@@ -98,25 +98,7 @@ func (b *minioBackend) Open(tx *postgres.DBTx, info FileInfo, txControl bool) (F
 	return newRedirectFileStream(url.String()), nil
 }
 
-func (b *minioBackend) Put(tx *postgres.DBTx, info FileInfo, r io.Reader, append bool) error {
-	if append {
-		// This is a hack, the next easiest thing to do if we need to handle
-		// upload resumption is to finalize the multipart upload when the client
-		// disconnects and when the rest of the data arrives, start a new
-		// multi-part upload copying the existing object as the first part
-		// (which is supported by S3 as a specific API call). This requires
-		// replacing the simple uploader, so it was not done in the first pass.
-		existing, err := b.Open(tx, info, false)
-		if err != nil {
-			return err
-		}
-		r = io.MultiReader(existing, r)
-	}
-
-	info.ExternalID = random.UUID()
-	if err := tx.Exec("UPDATE files SET external_id = $2 WHERE file_id = $1", info.ID, info.ExternalID); err != nil {
-		return err
-	}
+func (b *minioBackend) Put(_ *postgres.DB, info FileInfo, r io.Reader) error {
 	_, err := b.client.PutObject(
 		b.bucket,
 		info.ExternalID,

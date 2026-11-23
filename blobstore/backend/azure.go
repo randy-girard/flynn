@@ -66,21 +66,7 @@ func (b *azureBackend) Name() string {
 	return b.name
 }
 
-func (b *azureBackend) Put(tx *postgres.DBTx, info FileInfo, r io.Reader, appendBlob bool) error {
-	if appendBlob {
-		// TODO(titanous): This is a hack, we should modify the block list.
-		existing, err := b.Open(tx, info, false)
-		if err != nil {
-			return err
-		}
-		r = io.MultiReader(existing, r)
-	}
-
-	info.ExternalID = random.UUID()
-	if err := tx.Exec("UPDATE files SET external_id = $2 WHERE file_id = $1", info.ID, info.ExternalID); err != nil {
-		return err
-	}
-
+func (b *azureBackend) Put(_ *postgres.DB, info FileInfo, r io.Reader) error {
 	// Create blob that will be filled with blocks
 	if err := b.client.CreateBlockBlob(b.container, info.ExternalID); err != nil {
 		return err
@@ -128,7 +114,11 @@ func (b *azureBackend) Copy(tx *postgres.DBTx, dst, src FileInfo) error {
 	if err != nil {
 		return err
 	}
-	return b.Put(tx, dst, existing, false)
+	dst.ExternalID = random.UUID()
+	if err := tx.Exec("UPDATE files SET external_id = $2 WHERE file_id = $1", dst.ID, dst.ExternalID); err != nil {
+		return err
+	}
+	return b.Put(nil, dst, existing)
 }
 
 func (b *azureBackend) Delete(tx *postgres.DBTx, info FileInfo) error {

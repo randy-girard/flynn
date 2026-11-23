@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/randy-girard/flynn/blobstore/data"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
@@ -33,6 +34,8 @@ type putLimits struct {
 	// usage reports the live bytes under app's names, leaving out exclude
 	// (the object being written).
 	usage func(app, exclude string) (int64, error)
+	// idleTimeout cuts off a PUT body that sends nothing for this long.
+	idleTimeout time.Duration
 }
 
 func putLimitsFromEnv(repo *data.FileRepo) (putLimits, error) {
@@ -101,7 +104,7 @@ func (l putLimits) limitPut(w http.ResponseWriter, req *http.Request, name strin
 		return false, put(req.Body)
 	}
 	if req.ContentLength > b.left || (b.left <= 0 && req.ContentLength != 0) {
-		// refused before a transaction opens or a byte is stored
+		// refused before an upload starts or a byte is stored
 		log.Printf("refusing PUT %s: %s", name, b.msg)
 		http.Error(w, b.msg, b.code)
 		return true, nil
@@ -109,7 +112,7 @@ func (l putLimits) limitPut(w http.ResponseWriter, req *http.Request, name strin
 	body := uploadlimit.NewBudgetReader(req.Body, b.left)
 	err = put(body)
 	if body.Exceeded {
-		// the transaction rolled back; an overwritten object is intact
+		// the upload was discarded; an overwritten object is intact
 		log.Printf("refusing PUT %s: %s", name, b.msg)
 		http.Error(w, b.msg, b.code)
 		return true, nil

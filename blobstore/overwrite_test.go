@@ -15,15 +15,17 @@ import (
 )
 
 // fakeExternalBackend stands in for S3, GCS, Azure and MinIO: each Put stores
-// the data under a fresh external id recorded on the row, the way those
-// backends do, so the old object and the new one live side by side until the
-// old one is deleted.
+// the data under the fresh external id the repo chose, so the old object and
+// the new one live side by side until the old one is deleted.
 type fakeExternalBackend struct {
 	mtx     sync.Mutex
 	objects map[string][]byte
 	failPut bool
-	failDel bool
-	deleted []string
+	// failAfterStore stores the object, then reports an error, like an
+	// upload whose last request or commit failed after the data arrived
+	failAfterStore bool
+	failDel        bool
+	deleted        []string
 }
 
 func newFakeExternalBackend() *fakeExternalBackend {
@@ -32,10 +34,9 @@ func newFakeExternalBackend() *fakeExternalBackend {
 
 func (b *fakeExternalBackend) Name() string { return "fake-external" }
 
-func (b *fakeExternalBackend) Put(tx *postgres.DBTx, info backend.FileInfo, r io.Reader, append bool) error {
-	info.ExternalID = random.UUID()
-	if err := tx.Exec("UPDATE files SET external_id = $2 WHERE file_id = $1", info.ID, info.ExternalID); err != nil {
-		return err
+func (b *fakeExternalBackend) Put(_ *postgres.DB, info backend.FileInfo, r io.Reader) error {
+	if info.ExternalID == "" {
+		return errors.New("put without an external id")
 	}
 	buf, err := ioutil.ReadAll(r)
 	if err != nil {
@@ -48,6 +49,9 @@ func (b *fakeExternalBackend) Put(tx *postgres.DBTx, info backend.FileInfo, r io
 		return errors.New("fake upload interrupted")
 	}
 	b.objects[info.ExternalID] = buf
+	if b.failAfterStore {
+		return errors.New("fake upload failed after storing")
+	}
 	return nil
 }
 
@@ -118,14 +122,26 @@ func TestPutOverwriteKeepsOldObjectWhenUploadFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	b.mtx.Lock()
+	var oldIDs []string
+	for id := range b.objects {
+		oldIDs = append(oldIDs, id)
+	}
+	b.mtx.Unlock()
+
 	b.failPut = true
 	if err := r.Put(name, bytes.NewReader([]byte("new")), 0, "application/x-tar"); err == nil {
 		t.Fatal("expected the interrupted overwrite to fail")
 	}
 	b.failPut = false
 
-	if len(b.deleted) != 0 {
-		t.Fatalf("old object was deleted from the backend before the overwrite committed: %v", b.deleted)
+	// only the failed upload's own object may be deleted (EDGE-32)
+	for _, id := range oldIDs {
+		for _, d := range b.deleted {
+			if d == id {
+				t.Fatalf("old object %s was deleted from the backend although the overwrite failed", id)
+			}
+		}
 	}
 	if got := readBlob(t, r, name); got != "old" {
 		t.Fatalf("after failed overwrite expected old content, got %q", got)

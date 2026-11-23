@@ -30,7 +30,7 @@ func (b *fakeBackend) Name() string { return b.name }
 func (b *fakeBackend) Open(tx *postgres.DBTx, info backend.FileInfo, txControl bool) (backend.FileStream, error) {
 	return fakeStream{bytes.NewReader([]byte("data"))}, nil
 }
-func (b *fakeBackend) Put(tx *postgres.DBTx, info backend.FileInfo, r io.Reader, append bool) error {
+func (b *fakeBackend) Put(db *postgres.DB, info backend.FileInfo, r io.Reader) error {
 	b.puts++
 	_, err := io.Copy(io.Discard, r)
 	return err
@@ -53,7 +53,9 @@ func (r *fakeMigrateRepo) DefaultBackend() backend.Backend { return r.dest }
 func (r *fakeMigrateRepo) ListFilesExcludingDefaultBackend(prefix string) ([]data.BackendFile, error) {
 	return r.files, r.listErr
 }
-func (r *fakeMigrateRepo) SetBackend(tx *postgres.DBTx, id, name string) error { return nil }
+func (r *fakeMigrateRepo) SetBackend(tx *postgres.DBTx, id string, dst backend.Backend, info backend.FileInfo) error {
+	return nil
+}
 
 func migrateArgs() *docopt.Args {
 	return &docopt.Args{
