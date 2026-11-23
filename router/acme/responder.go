@@ -67,4 +67,3 @@ func (r *Responder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte(keyAuth))
 }
-
