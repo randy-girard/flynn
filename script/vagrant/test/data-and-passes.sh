@@ -33,26 +33,31 @@ need_file "${app}/Procfile" "upgrade-smoke must have a Procfile"
 need_file "${app}/data/seed.txt" "upgrade-smoke must embed at least one data file"
 grep -q 'go:embed data' "${app}/main.go" || { echo "upgrade-smoke must embed data/ blobs" >&2; exit 1; }
 grep -q '/status' "${app}/main.go" || { echo "upgrade-smoke must serve GET /status" >&2; exit 1; }
-clickhouse_cli_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse-cli/main_test.go"
-need_file "${clickhouse_cli_test}" "clickhouse plugin CLI stdin hang must have unit tests"
-grep -q 'TestApplyClickhouseStdinPolicy' "${clickhouse_cli_test}" \
-  || { echo "clickhouse plugin CLI must test applyClickhouseStdinPolicy (INSERT VALUES TTY hang)" >&2; exit 1; }
-grep -q 'tty INSERT VALUES' "${clickhouse_cli_test}" \
-  || { echo "clickhouse plugin CLI must cover TTY INSERT VALUES stdin close" >&2; exit 1; }
-grep -q 'pipe INSERT VALUES' "${clickhouse_cli_test}" \
-  || { echo "clickhouse plugin CLI must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
-clickhouse_admin="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse/main.go"
-need_file "${clickhouse_admin}" "clickhouse-client TLS flags live in flynn-clickhouse admin"
-grep -q -- '--accept-invalid-certificate' "${clickhouse_admin}" \
-  || { echo "clickhouse-client --secure must accept the Flynn-minted CA (not in the image trust store)" >&2; exit 1; }
-clickhouse_tls_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse/main_test.go"
-need_file "${clickhouse_tls_test}" "clickhouse-client TLS flags must have unit tests"
-grep -q 'TestClickhouseClientTLSArgs' "${clickhouse_tls_test}" \
-  || { echo "clickhouse plugin must test clickhouseClientTLSArgs (TLS verify failed on 9440)" >&2; exit 1; }
-clickhouse_api="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse-api/main.go"
-need_file "${clickhouse_api}" "clickhouse-api provisions tenant clusters"
-grep -q 'clickhouseAdminRetryable' "${clickhouse_api}" \
-  || { echo "clickhouse-api must retry admin HTTP while leader DNS/HTTP catches up (not only KEEPER_EXCEPTION)" >&2; exit 1; }
+# CI checks out only flynn (the plugin repos are private); skip with a note.
+if [[ -d "${ROOT}/../flynn-plugin-clickhouse" ]]; then
+  clickhouse_cli_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse-cli/main_test.go"
+  need_file "${clickhouse_cli_test}" "clickhouse plugin CLI stdin hang must have unit tests"
+  grep -q 'TestApplyClickhouseStdinPolicy' "${clickhouse_cli_test}" \
+    || { echo "clickhouse plugin CLI must test applyClickhouseStdinPolicy (INSERT VALUES TTY hang)" >&2; exit 1; }
+  grep -q 'tty INSERT VALUES' "${clickhouse_cli_test}" \
+    || { echo "clickhouse plugin CLI must cover TTY INSERT VALUES stdin close" >&2; exit 1; }
+  grep -q 'pipe INSERT VALUES' "${clickhouse_cli_test}" \
+    || { echo "clickhouse plugin CLI must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
+  clickhouse_admin="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse/main.go"
+  need_file "${clickhouse_admin}" "clickhouse-client TLS flags live in flynn-clickhouse admin"
+  grep -q -- '--accept-invalid-certificate' "${clickhouse_admin}" \
+    || { echo "clickhouse-client --secure must accept the Flynn-minted CA (not in the image trust store)" >&2; exit 1; }
+  clickhouse_tls_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse/main_test.go"
+  need_file "${clickhouse_tls_test}" "clickhouse-client TLS flags must have unit tests"
+  grep -q 'TestClickhouseClientTLSArgs' "${clickhouse_tls_test}" \
+    || { echo "clickhouse plugin must test clickhouseClientTLSArgs (TLS verify failed on 9440)" >&2; exit 1; }
+  clickhouse_api="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse-api/main.go"
+  need_file "${clickhouse_api}" "clickhouse-api provisions tenant clusters"
+  grep -q 'clickhouseAdminRetryable' "${clickhouse_api}" \
+    || { echo "clickhouse-api must retry admin HTTP while leader DNS/HTTP catches up (not only KEEPER_EXCEPTION)" >&2; exit 1; }
+else
+  echo "skip clickhouse plugin checks: ../flynn-plugin-clickhouse not checked out"
+fi
 
 need 'test/apps/upgrade-smoke-buildpack' \
   "smoke must git-push a custom .buildpacks app, not only the stock Go slug"
@@ -267,11 +272,11 @@ need 'sirenia_primary_read_write mariadb' \
   "mysql wait must still accept legacy mariadb discoverd service"
 need 'tenant postgres SELECT 1' \
   "tenant postgres-plugin must ping via pg:psql, not platform sirenia postgres"
-if awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}" | grep -q 'args+=(mariadb)'; then
+if grep -q 'args+=(mariadb)' <<<"$(awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}")"; then
   echo "mysql/mongodb plugins stay singleton until a replica is added; HA wait is postgres only" >&2
   exit 1
 fi
-if ! awk '/^wait_selected_sirenia_ha\(/,/^}/' "${smoke}" | grep -q 'postgres'; then
+if ! grep -q 'postgres' <<<"$(awk '/^wait_selected_sirenia_ha\(/,/^}/' "${smoke}")"; then
   echo "HA smoke must wait for platform postgres sirenia even when tenant plugins are skipped" >&2
   exit 1
 fi
@@ -324,7 +329,7 @@ need 'smoke_cli_retry' \
   "assert_databases must retry unknown_error on pg:psql after HA controller roll"
 need 'record_seed_counts' \
   "smoke must verify seeded row counts after deploy"
-if ! awk '/^record_seed_counts\(\)/,/^}/' "${smoke}" | grep -q smoke_cli_retry; then
+if ! grep -q smoke_cli_retry <<<"$(awk '/^record_seed_counts\(\)/,/^}/' "${smoke}")"; then
   echo "record_seed_counts must retry unknown_error like assert_databases" >&2
   exit 1
 fi
@@ -416,11 +421,11 @@ need_file "${ROOT}/script/run-unit-tests" \
   "script/run-unit-tests must exist for the builder Linux gate"
 need_file "${ROOT}/script/lib/ui.sh" \
   "smoke uses script/lib/ui.sh for STEP banners"
-if grep -v '^#' "${ROOT}/script/lib/ui.sh" | grep -q 'echo -e'; then
+if grep -q 'echo -e' <<<"$(grep -v '^#' "${ROOT}/script/lib/ui.sh")"; then
   echo "ui.sh must not use echo -e (not portable; macOS bash 3.2 prints \\\\e literally)" >&2
   exit 1
 fi
-if grep -v '^#' "${ROOT}/script/lib/ui.sh" | grep -qE '\\e\['; then
+if grep -qE '\\e\[' <<<"$(grep -v '^#' "${ROOT}/script/lib/ui.sh")"; then
   echo "ui.sh must not use \\\\e ANSI (use tput or printf \\\\033 on all platforms)" >&2
   exit 1
 fi
@@ -510,7 +515,7 @@ grep -q 'print_results_table' "${smoke}" \
   || { echo "smoke must still print the final results tables" >&2; exit 1; }
 grep -q '_UI_COLLAPSE_BODY=0' "${smoke}" \
   || { echo "final report must run with body collapse off so tables are visible" >&2; exit 1; }
-if awk '/^say\(\)/,/^}/ { print }' "${ROOT}/script/lib/ui.sh" | grep -v '^[[:space:]]*#' | grep -q '$(ui_wrap'; then
+if grep -q '$(ui_wrap' <<<"$(awk '/^say\(\)/,/^}/ { print }' "${ROOT}/script/lib/ui.sh" | grep -v '^[[:space:]]*#')"; then
   echo "say() must not capture wrap in command substitution: that makes stdout a pipe so all session colors vanish" >&2
   exit 1
 fi

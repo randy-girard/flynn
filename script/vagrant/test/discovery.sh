@@ -74,12 +74,17 @@ need "${docs}" 'SMOKE_TOPOLOGIES=1,3,5,add,remove,discovery' \
   "development docs must list the discovery topology next to add/remove"
 need "${docs}" 'flynn-plugin-discovery' \
   "development docs must list the discovery sibling as flynn-plugin-discovery"
-need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '127.0.0.1:1111' \
-  "discovery ready hook must resolve discovery.discoverd via discoverd HTTP, not host DNS"
-need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" 'DISCOVERD_AUTH_KEY' \
-  "discovery ready hook must send DISCOVERD_AUTH_KEY when resolving *.discoverd (SEC-003)"
-need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '--resolve' \
-  "discovery ready hook must curl --resolve the overlay addr like plugin wait probes"
+# CI checks out only flynn (the plugin repos are private); skip with a note.
+if [[ -d "${ROOT}/../flynn-plugin-discovery" ]]; then
+  need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '127.0.0.1:1111' \
+    "discovery ready hook must resolve discovery.discoverd via discoverd HTTP, not host DNS"
+  need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" 'DISCOVERD_AUTH_KEY' \
+    "discovery ready hook must send DISCOVERD_AUTH_KEY when resolving *.discoverd (SEC-003)"
+  need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '--resolve' \
+    "discovery ready hook must curl --resolve the overlay addr like plugin wait probes"
+else
+  echo "skip discovery plugin ready-hook checks: ../flynn-plugin-discovery not checked out"
+fi
 need "${ROOT}/docs/content/plugins.md" '../flynn-plugin-discovery' \
   "plugins docs must install discovery from ../flynn-plugin-discovery"
 if grep -qE '\.\./flynn-discovery([[:space:]|]|$)' "${ROOT}/docs/content/plugins.md" "${docs}"; then
@@ -98,7 +103,7 @@ if grep -q 'discovery grows a singleton' "${smoke}"; then
   exit 1
 fi
 
-if grep -v '^#' "${smoke}" | grep -qE -- '--discovery .*peer-ips'; then
+if grep -qE -- '--discovery .*peer-ips' <<<"$(grep -v '^#' "${smoke}")"; then
   echo "discovery joiners must not mix --discovery with --peer-ips on extra nodes" >&2
   exit 1
 fi

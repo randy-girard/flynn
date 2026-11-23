@@ -23,7 +23,7 @@ if [[ ! -f "${proc}" || ! -f "${main}" ]]; then
     echo "redis still lives in Flynn; persistence checks belong in ../flynn-plugin-redis" >&2
     exit 1
   fi
-  echo "ok redis upgrade persistence (plugin checkout not present; Flynn tree has no appliance/redis)"
+  echo "ok redis upgrade persistence (skipped plugin checks: ../flynn-plugin-redis not checked out; Flynn tree has no appliance/redis)"
   exit 0
 fi
 if ! grep -q 'appendonly yes' "${proc}"; then

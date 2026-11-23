@@ -26,6 +26,26 @@ need_file() {
   fi
 }
 
+# have_plugin succeeds when ../flynn-plugin-<name> is checked out next to this
+# repo. CI checks out only flynn (the plugin repos are private), so the plugin
+# checks are skipped there with a note instead of failing.
+have_plugin() {
+  local name=$1
+  if [[ -d "${ROOT}/../flynn-plugin-${name}" ]]; then
+    return 0
+  fi
+  echo "skip ${name} plugin image checks: ../flynn-plugin-${name} not checked out"
+  return 1
+}
+
+# go_func prints the body of Go function name from the non-test .go files
+# under dir (empty when no file defines it).
+go_func() {
+  local name=$1 dir=$2
+  find "${dir}" -name '*.go' ! -name '*_test.go' ! -path '*/vendor/*' -print0 \
+    | xargs -0 awk -v n="${name}" '$0 ~ ("^func " n "\\(") {p=1} p {print} p && /^}/ {p=0}'
+}
+
 # Print the JSON object for image id from the builder manifest template.
 image_block() {
   local id=$1
@@ -106,15 +126,17 @@ if grep -q 'libseccomp-dev' "${ROOT}/host/img/packages.sh"; then
   exit 1
 fi
 
-need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" '/usr/bin/mongod' \
-  "mongodb plugin must install the mongod binary, not the full mongodb-org metapackage"
-need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-database-tools' \
-  "mongodb plugin must keep mongodump/mongorestore"
-need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" '/usr/bin/mongosh' \
-  "mongodb plugin must keep mongosh"
-if grep -qE 'apt-get install -y mongodb-org[^-]' "${ROOT}/../flynn-plugin-mongodb/img/packages.sh"; then
-  echo "mongodb plugin must not install the mongodb-org metapackage" >&2
-  exit 1
+if have_plugin mongodb; then
+  need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" '/usr/bin/mongod' \
+    "mongodb plugin must install the mongod binary, not the full mongodb-org metapackage"
+  need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-database-tools' \
+    "mongodb plugin must keep mongodump/mongorestore"
+  need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" '/usr/bin/mongosh' \
+    "mongodb plugin must keep mongosh"
+  if grep -qE 'apt-get install -y mongodb-org[^-]' "${ROOT}/../flynn-plugin-mongodb/img/packages.sh"; then
+    echo "mongodb plugin must not install the mongodb-org metapackage" >&2
+    exit 1
+  fi
 fi
 
 need "${ROOT}/appliance/postgresql/img/packages.sh" 'postgresql-16-postgis-3' \
@@ -136,8 +158,10 @@ if grep -q 'software-properties-common' "${ROOT}/appliance/postgresql/img/packag
   exit 1
 fi
 
-need "${ROOT}/../flynn-plugin-kafka/img/packages.sh" 'site-docs' \
-  "kafka plugin must delete site-docs from the upstream tarball"
+if have_plugin kafka; then
+  need "${ROOT}/../flynn-plugin-kafka/img/packages.sh" 'site-docs' \
+    "kafka plugin must delete site-docs from the upstream tarball"
+fi
 
 for pkg in \
   "${ROOT}/appliance/postgresql/img/packages.sh" \
@@ -262,13 +286,15 @@ elif [[ -f "${ROOT}/appliance/clickhouse/img/packages.sh" ]]; then
   exit 1
 fi
 
-need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" '/usr/bin/clickhouse' \
-  "clickhouse plugin must install the clickhouse binary from the vendored tarball"
-need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'bounding set' \
-  "clickhouse plugin must not rely on file capabilities under the container bounding set"
-if grep -qE 'apt-get install.*clickhouse' "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh"; then
-  echo "clickhouse plugin must not install ClickHouse from apt" >&2
-  exit 1
+if have_plugin clickhouse; then
+  need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" '/usr/bin/clickhouse' \
+    "clickhouse plugin must install the clickhouse binary from the vendored tarball"
+  need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'bounding set' \
+    "clickhouse plugin must not rely on file capabilities under the container bounding set"
+  if grep -qE 'apt-get install.*clickhouse' "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh"; then
+    echo "clickhouse plugin must not install ClickHouse from apt" >&2
+    exit 1
+  fi
 fi
 
 need "${ROOT}/builder/img/go.sh" 'go/test' \
@@ -294,15 +320,34 @@ need "${smoke}" 'pg_available_extensions' \
   "smoke must verify postgres still ships postgis/pgrouting/timescaledb"
 need "${smoke}" 'mongodb dump' \
   "smoke must run flynn mongodb dump against the slimmed mongodump tools"
-mongodb_dump_go="${ROOT}/../flynn-plugin-mongodb/backup.go"
-need_file "${mongodb_dump_go}" "mongodb dump TLS flags live in MongoDumpCommand"
-grep -q -- '--ssl' "${mongodb_dump_go}" \
-  || { echo "mongodb dump must use mongodump --ssl (database-tools reject --tls)" >&2; exit 1; }
-grep -q -- '--tlsInsecure' "${mongodb_dump_go}" \
-  || { echo "mongodb dump must use --tlsInsecure (database-tools reject --tlsAllowInvalidCertificates)" >&2; exit 1; }
-if grep -q '"--tls"' "${mongodb_dump_go}"; then
-  echo "mongodb dump must not pass mongosh --tls to mongodump" >&2
-  exit 1
+# MongoDumpCommand -> mongoToolCommand -> DatabaseToolsTLSArgs (tls.go since
+# RES-14) builds the mongodump/mongorestore TLS flags. Check the function
+# that builds them, wherever it lives (EDGE-44).
+if have_plugin mongodb; then
+  mongodb_dir="${ROOT}/../flynn-plugin-mongodb"
+  dump_fn="$(go_func MongoDumpCommand "${mongodb_dir}")"
+  tool_fn="$(go_func mongoToolCommand "${mongodb_dir}")"
+  tls_fn="$(go_func DatabaseToolsTLSArgs "${mongodb_dir}")"
+  if ! grep -q 'mongoToolCommand("mongodump"' <<<"${dump_fn}"; then
+    echo "MongoDumpCommand must build mongodump through mongoToolCommand" >&2
+    exit 1
+  fi
+  if ! grep -q 'DatabaseToolsTLSArgs(' <<<"${tool_fn}"; then
+    echo "mongoToolCommand must take its TLS flags from DatabaseToolsTLSArgs" >&2
+    exit 1
+  fi
+  if ! grep -qF '"--ssl"' <<<"${tls_fn}"; then
+    echo "mongodb dump must use mongodump --ssl (database-tools reject --tls)" >&2
+    exit 1
+  fi
+  if ! grep -qF '"--sslCAFile"' <<<"${tls_fn}"; then
+    echo "mongodb dump must verify the server against the instance CA (--sslCAFile)" >&2
+    exit 1
+  fi
+  if grep -qE '"--tls|Insecure|AllowInvalid' <<<"${tool_fn}${tls_fn}"; then
+    echo "mongodb dump must not pass mongosh --tls flags or skip certificate checks" >&2
+    exit 1
+  fi
 fi
 need "${smoke}" 'blobstore.discoverd/.well-known/status' \
   "smoke must hit blobstore status after moving it to busybox"
