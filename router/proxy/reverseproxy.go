@@ -104,6 +104,16 @@ func NewReverseProxy(c ReverseProxyConfig) *ReverseProxy {
 	}
 }
 
+// Close releases the proxy's idle backend connections. The router calls it
+// when a route update or removal replaces the proxy. Requests still running
+// finish normally; their connections are reaped by the idle timeout.
+func (p *ReverseProxy) Close() {
+	if p == nil || p.transport == nil || p.transport.Transport == nil {
+		return
+	}
+	p.transport.CloseIdleConnections()
+}
+
 // ServeHTTP implements http.Handler.
 func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	transport := p.transport

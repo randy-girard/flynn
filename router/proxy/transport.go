@@ -61,8 +61,15 @@ func newHTTPTransport(disableKeepAlives bool) *http.Transport {
 		ResponseHeaderTimeout: 10 * time.Minute,
 		TLSHandshakeTimeout:   10 * time.Second, // unused, but safer to leave default in place
 		DisableKeepAlives:     disableKeepAlives,
+		// A route update replaces the proxy and closes the old transport's
+		// idle connections. A request still running then returns its
+		// connection to the old pool, so the pool must reap it by itself.
+		IdleConnTimeout: idleConnTimeout,
 	}
 }
+
+// idleConnTimeout is how long a pooled backend connection may stay idle.
+const idleConnTimeout = 90 * time.Second
 
 type transport struct {
 	*http.Transport
