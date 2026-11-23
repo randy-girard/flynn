@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,10 @@ import (
 )
 
 type DialFunc func(network, addr string) (net.Conn, error)
+
+// maxErrorBody bounds how much of a non-200 JSON body is read to build the
+// error.
+const maxErrorBody = 64 << 10
 
 type writeCloser interface {
 	CloseWrite() error
@@ -165,9 +170,14 @@ func (c *Client) rawReqContext(ctx context.Context, method, rawurl string, heade
 			return res, nil
 		}
 		defer res.Body.Close()
+		var body []byte
 		if strings.Contains(res.Header.Get("Content-Type"), "application/json") {
+			body, _ = io.ReadAll(io.LimitReader(res.Body, maxErrorBody))
 			var jsonErr httphelper.JSONError
-			if err := json.NewDecoder(res.Body).Decode(&jsonErr); err == nil {
+			// A JSON body that is not a JSONError (a proxy's {"error":...},
+			// {}) decodes into an empty one whose Error() is ": ". Fall
+			// through to the status error so the caller sees what answered.
+			if err := json.Unmarshal(body, &jsonErr); err == nil && (jsonErr.Code != "" || jsonErr.Message != "") {
 				if res.StatusCode == http.StatusForbidden && jsonErr.Code == httphelper.ForbiddenErrorCode {
 					if jsonErr.Message != "" {
 						jsonErr.Message += " "
@@ -180,10 +190,14 @@ func (c *Client) rawReqContext(ctx context.Context, method, rawurl string, heade
 		if res.StatusCode == 404 {
 			return res, c.ErrNotFound
 		}
+		msg := fmt.Sprintf("httpclient: raw req: unexpected status %d", res.StatusCode)
+		if b := strings.TrimSpace(string(body)); b != "" && b != "{}" {
+			msg += ": " + b
+		}
 		return res, &url.Error{
 			Op:  req.Method,
 			URL: req.URL.String(),
-			Err: fmt.Errorf("httpclient: raw req: unexpected status %d", res.StatusCode),
+			Err: errors.New(msg),
 		}
 	}
 	if out != nil {
@@ -241,7 +255,7 @@ func (c *Client) Hijack(method, path string, header http.Header, in interface{})
 		defer res.Body.Close()
 		if strings.Contains(res.Header.Get("Content-Type"), "application/json") {
 			var jsonErr httphelper.JSONError
-			if err := json.NewDecoder(res.Body).Decode(&jsonErr); err == nil {
+			if err := json.NewDecoder(io.LimitReader(res.Body, maxErrorBody)).Decode(&jsonErr); err == nil && (jsonErr.Code != "" || jsonErr.Message != "") {
 				return nil, jsonErr
 			}
 		}
