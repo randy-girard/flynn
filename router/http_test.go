@@ -1003,6 +1003,45 @@ func (s *S) TestStickyHTTPRoute(c *C) {
 	}
 }
 
+// EDGE-25: the sticky cookie is HttpOnly and SameSite=Lax on both listeners,
+// and Secure only on the TLS one. A client on plain HTTP cannot get a Secure
+// cookie (which its browser would then never send back) by claiming
+// X-Forwarded-Proto: https.
+func (s *S) TestStickyCookieSecureOnlyOverTLS(c *C) {
+	srv := httptest.NewServer(httpTestHandler("1"))
+	defer srv.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+	s.addStickyHTTPRoute(c, l)
+	discoverdRegisterHTTP(c, l, srv.Listener.Addr().String())
+
+	sticky := func(cookies []*http.Cookie) *http.Cookie {
+		for _, cookie := range cookies {
+			if cookie.Name == proxy.StickyCookieName {
+				return cookie
+			}
+		}
+		c.Fatalf("no %s cookie in %v", proxy.StickyCookieName, cookies)
+		return nil
+	}
+
+	cookie := sticky(assertGet(c, "https://"+l.TLSAddrs[0], "example.com", "1"))
+	c.Assert(cookie.Secure, Equals, true)
+	c.Assert(cookie.HttpOnly, Equals, true)
+	c.Assert(cookie.SameSite, Equals, http.SameSiteLaxMode)
+
+	req := newReq("http://"+l.Addrs[0], "example.com")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	res, err := httpClient.Do(req)
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	cookie = sticky(res.Cookies())
+	c.Assert(cookie.Secure, Equals, false)
+	c.Assert(cookie.HttpOnly, Equals, true)
+	c.Assert(cookie.SameSite, Equals, http.SameSiteLaxMode)
+}
+
 func wsHandshakeTestHandler(id string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if strings.ToLower(req.Header.Get("Connection")) == "upgrade" {

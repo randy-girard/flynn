@@ -375,11 +375,22 @@ func getStickyCookieBackend(req *http.Request, cookieKey [32]byte) string {
 	return string(decrypt(data, cookieKey))
 }
 
+// setStickyCookieBackend pins the client to backend. The cookie is HttpOnly
+// (page script has no use for it) and SameSite=Lax (a top-level navigation
+// from another site keeps its session, cross-site subrequests do not carry
+// it). It is Secure only when the request reached the router over TLS: the
+// router's fwdProtoHandler overwrites X-Forwarded-Proto with the listener's
+// own scheme, so a client on plain HTTP cannot claim https, and a plain-HTTP
+// route keeps a cookie its browser will send back. Name, Path and the
+// encrypted value are unchanged, so cookies set by older routers still pin.
 func setStickyCookieBackend(res *http.Response, backend string, cookieKey [32]byte) {
 	cookie := http.Cookie{
-		Name:  StickyCookieName,
-		Value: base64.StdEncoding.EncodeToString(encrypt([]byte(backend), cookieKey)),
-		Path:  "/",
+		Name:     StickyCookieName,
+		Value:    base64.StdEncoding.EncodeToString(encrypt([]byte(backend), cookieKey)),
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   res.Request != nil && res.Request.Header.Get("X-Forwarded-Proto") == "https",
 	}
 	res.Header.Add("Set-Cookie", cookie.String())
 }
