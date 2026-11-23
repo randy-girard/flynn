@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/storage"
@@ -130,7 +132,17 @@ func (b *azureBackend) Copy(tx *postgres.DBTx, dst, src FileInfo) error {
 }
 
 func (b *azureBackend) Delete(tx *postgres.DBTx, info FileInfo) error {
-	return b.client.DeleteBlob(b.container, info.ExternalID, nil)
+	return azureDeleteErr(b.client.DeleteBlob(b.container, info.ExternalID, nil))
+}
+
+// azureDeleteErr treats a blob that is already gone as deleted, as S3 does,
+// so a delete can be retried.
+func azureDeleteErr(err error) error {
+	var serr storage.AzureStorageServiceError
+	if errors.As(err, &serr) && serr.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
 func (b *azureBackend) Open(tx *postgres.DBTx, info FileInfo, txControl bool) (FileStream, error) {

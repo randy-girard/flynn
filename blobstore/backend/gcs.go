@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -131,7 +132,16 @@ func (b *gcsBackend) Copy(tx *postgres.DBTx, dst, src FileInfo) error {
 }
 
 func (b *gcsBackend) Delete(tx *postgres.DBTx, info FileInfo) error {
-	return b.bucket.Object(info.ExternalID).Delete(context.Background())
+	return gcsDeleteErr(b.bucket.Object(info.ExternalID).Delete(context.Background()))
+}
+
+// gcsDeleteErr treats an object that is already gone as deleted, as S3 does,
+// so a delete can be retried.
+func gcsDeleteErr(err error) error {
+	if errors.Is(err, storage.ErrObjectNotExist) {
+		return nil
+	}
+	return err
 }
 
 func (b *gcsBackend) Open(tx *postgres.DBTx, info FileInfo, txControl bool) (FileStream, error) {
