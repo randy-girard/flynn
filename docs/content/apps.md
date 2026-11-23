@@ -167,7 +167,8 @@ is created. Flynn deploys releases using a zero-downtime strategy, the new
 release is started and the old release is only stopped if the new one comes up
 correctly. If the new release does not come back up or something else goes
 wrong, the deploy is automatically rolled back and the old release stays
-running.
+running. The rollback removes the new release's formation. If it could not,
+the next successful deploy of the app scales that release to zero.
 
 ### Release phase
 

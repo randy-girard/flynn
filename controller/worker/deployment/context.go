@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"encoding/json"
+	"sort"
 	"time"
 
 	"github.com/flynn/que-go"
@@ -148,6 +149,8 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 	}
 	log.Info("deployment complete")
 
+	c.zeroFailedDeploymentFormations(log, deployment)
+
 	log.Info("scheduling app garbage collection")
 	if err := c.client.ScheduleAppGarbageCollection(deployment.AppID); err != nil {
 		// just log the error, no need to rollback the deploy
@@ -162,28 +165,135 @@ func (c *context) rollback(l log15.Logger, deployment *ct.Deployment, original *
 
 	log.Info("restoring the original formation", "release.id", original.ReleaseID)
 	timeout := 10 * time.Second
+	restoreWritten := false
 	opts := ct.ScaleOptions{
 		Processes: original.Processes,
-		Timeout:   &timeout,
-		Stop:      stop,
+		// An omni roll pins the old formation to the hosts it has not left
+		// yet (flynn-host-ids). Restore every process type's original tags
+		// so the old release comes back on every host.
+		Tags:    rollbackTags(original),
+		Timeout: &timeout,
+		Stop:    stop,
+		ScaleRequestCallback: func(*ct.ScaleRequest) {
+			restoreWritten = true
+		},
 		JobEventCallback: func(job *ct.Job) error {
 			log.Info("got job event", "job.id", job.ID, "job.type", job.Type, "job.state", job.State)
 			return nil
 		},
 	}
 	if err := c.client.ScaleAppRelease(original.AppID, original.ReleaseID, opts); err != nil {
-		log.Error("error restoring the original formation", "err", err)
-		return err
+		if !restoreWritten || err == ct.ErrScalingStopped {
+			// The old formation is unchanged, so zeroing the new one could
+			// leave the app with nothing running. The next successful
+			// deploy zeroes this release (zeroFailedDeploymentFormations).
+			log.Error("error restoring the original formation", "err", err)
+			return err
+		}
+		// The restore is written and the scheduler will converge on it.
+		// Returning here (EDGE-63) left the new release's formation running
+		// for good: the que retry sees finished_at and does nothing.
+		log.Warn("original formation restored but not confirmed in time, removing the new formation anyway", "err", err)
 	}
 
 	log.Info("deleting the new formation")
-	if err := c.client.DeleteFormation(deployment.AppID, deployment.NewReleaseID); err != nil {
+	if err := rollbackDeleteAttempts.Run(func() error {
+		err := c.client.DeleteFormation(deployment.AppID, deployment.NewReleaseID)
+		if err == controller.ErrNotFound {
+			return nil
+		}
+		return err
+	}); err != nil {
 		log.Error("error deleting the new formation:", "err", err)
 		return err
 	}
 
 	log.Info("rollback complete")
 	return nil
+}
+
+// rollbackDeleteAttempts retries removing the new formation: the controller
+// API can be slow to answer while its own release is being rolled back.
+var rollbackDeleteAttempts = attempt.Strategy{
+	Total: 30 * time.Second,
+	Delay: 500 * time.Millisecond,
+}
+
+// rollbackTags is the original formation's tags with an entry for every
+// process type, so a scale request replaces any tag the deploy set.
+func rollbackTags(original *ct.Formation) map[string]map[string]string {
+	tags := make(map[string]map[string]string, len(original.Processes)+len(original.Tags))
+	for typ := range original.Processes {
+		tags[typ] = map[string]string{}
+	}
+	for typ, t := range original.Tags {
+		inner := make(map[string]string, len(t))
+		for k, v := range t {
+			inner[k] = v
+		}
+		tags[typ] = inner
+	}
+	return tags
+}
+
+// zeroFailedDeploymentFormations scales to zero the formations of releases
+// that a failed deployment of this app targeted and that still run
+// processes (EDGE-63: a rollback that stopped early left the controller's
+// failed release with scheduler=1 on every host through later deploys).
+// Releases that a deployment completed, and the releases of this deployment,
+// are left alone, as are non-current formations scaled by hand
+// (`flynn scale -r`). Errors are logged; the deploy itself has succeeded.
+func (c *context) zeroFailedDeploymentFormations(l log15.Logger, deployment *ct.Deployment) {
+	log := l.New("fn", "zeroFailedDeploymentFormations")
+	deployments, err := c.client.DeploymentList(deployment.AppID)
+	if err != nil {
+		log.Error("error listing deployments", "err", err)
+		return
+	}
+	completed := make(map[string]bool)
+	for _, d := range deployments {
+		if d != nil && d.Status == "complete" {
+			completed[d.NewReleaseID] = true
+		}
+	}
+	seen := make(map[string]bool)
+	var targets []string
+	for _, d := range deployments {
+		if d == nil || d.ID == deployment.ID || d.Status != "failed" {
+			continue
+		}
+		rid := d.NewReleaseID
+		if rid == "" || rid == deployment.NewReleaseID || rid == deployment.OldReleaseID || completed[rid] || seen[rid] {
+			continue
+		}
+		seen[rid] = true
+		targets = append(targets, rid)
+	}
+	sort.Strings(targets)
+	for _, rid := range targets {
+		form, err := c.client.GetFormation(deployment.AppID, rid)
+		if err == controller.ErrNotFound {
+			continue
+		} else if err != nil {
+			log.Error("error getting formation", "release.id", rid, "err", err)
+			continue
+		}
+		zero := make(map[string]int, len(form.Processes))
+		running := false
+		for typ, n := range form.Processes {
+			if n > 0 {
+				running = true
+			}
+			zero[typ] = 0
+		}
+		if !running {
+			continue
+		}
+		log.Warn("scaling down a formation left by a failed deployment", "release.id", rid, "processes", form.Processes)
+		if err := c.client.ScaleAppRelease(deployment.AppID, rid, ct.ScaleOptions{Processes: zero, NoWait: true}); err != nil {
+			log.Error("error scaling down a failed deployment's formation", "release.id", rid, "err", err)
+		}
+	}
 }
 
 func (c *context) setDeploymentDone(id string) error {

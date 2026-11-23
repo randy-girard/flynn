@@ -215,6 +215,19 @@ separate persistence loop. A write that is still failing after one minute is
 dropped from that queue. A failed write of a stopped job keeps the job in
 memory so a later sync can retry it.
 
+A deploy that fails is rolled back by the controller worker. The rollback
+restores the old release's process counts and tags, which also removes the
+per-host pins an omni roll puts on the old formation. It then deletes the new
+release's formation. It deletes it even when the restore was written but did
+not finish within the rollback's 10-second wait. If the restore could not be
+written at all, the new formation stays, so the app is not left with nothing
+running. In that case, the next successful deploy of the app scales it to
+zero. On each successful deploy the worker scales to zero any formation that
+still runs processes for a release a failed deployment of that app targeted.
+Releases that a deployment completed, and formations scaled by hand with
+`flynn scale -r`, are left alone. For the controller app, this means a failed
+deploy does not leave a second omni `scheduler` on every host.
+
 Every service, including the controller, is an app in the controller and is
 scaled and updated using the same APIs that are used to manage every other app.
 This allows Flynn to be entirely self-bootstrapping and removes a huge amount of
