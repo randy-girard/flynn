@@ -53,20 +53,28 @@ func matchRule(t *testing.T, rule []string, p packet) (string, bool) {
 		t.Fatalf("not a FORWARD or INPUT rule: %v", rule)
 	}
 	target := ""
+	negate := false
 	for i := 1; i < len(rule); i++ {
 		switch rule[i] {
+		case "!":
+			if i+1 >= len(rule) || rule[i+1] != "--match-set" {
+				t.Fatalf("matcher only negates --match-set: %v", rule)
+			}
+			negate = true
 		case "-m":
 			i++ // set / conntrack / comment: the option that follows does the match
 		case "--match-set":
 			name, dir := rule[i+1], rule[i+2]
 			i += 2
+			neg := negate
+			negate = false
 			switch dir {
 			case "src":
 				if !in(p.src, name) {
 					return "", false
 				}
 			case "dst":
-				if !in(p.dst, name) {
+				if in(p.dst, name) == neg {
 					return "", false
 				}
 			case "src,dst":
@@ -588,5 +596,130 @@ func TestForwardUpgradeFromEDGE04Chain(t *testing.T) {
 		if have(r) {
 			t.Fatalf("legacy rule left: %v", r)
 		}
+	}
+}
+
+// TestEgressDenyCoversDatastoreEngines (EDGE-67): datastore engines run
+// code a tenant can steer to an address (ClickHouse URL/S3/MySQL table
+// engines, extensions), so the egress deny list (link-local, which holds
+// the cloud metadata service, plus FLYNN_JOB_EGRESS_DENY) covers them as
+// it covers user and build jobs. Cluster node IPs stay with the EDGE-29
+// rules even when an operator range contains them: engines must keep
+// discoverd on every node, and every other node port is dropped there.
+func TestEgressDenyCoversDatastoreEngines(t *testing.T) {
+	cidrs, err := EgressDenyCIDRs("10.20.0.0/16,192.168.57.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeForward{}
+	for _, r := range installed(JobIsolationForwardRules(testOverlay, testBridge)) {
+		f.rules = append(f.rules, strings.Join(r[1:], " "))
+	}
+	f.rules = append(f.rules, "-i flynnbr0 ! -o flynnbr0 -j ACCEPT")
+	if err := ApplyEgressDeny(f.run, cidrs); err != nil {
+		t.Fatal(err)
+	}
+	chain := func() [][]string {
+		var out [][]string
+		for _, r := range f.rules {
+			if r == "-i flynnbr0 ! -o flynnbr0 -j ACCEPT" {
+				continue // the fall-through "" below stands for it
+			}
+			out = append(out, append([]string{"FORWARD"}, strings.Fields(r)...))
+		}
+		return out
+	}
+	data := []string{netpolicy.ServiceData}
+	node := []string{NodeSet}
+	check := func(when string) {
+		t.Helper()
+		for _, tc := range []struct {
+			name string
+			p    packet
+			want string
+		}{
+			{"data → metadata service", packet{src: data, dstIP: "169.254.169.254", dport: "80"}, "DROP"},
+			{"data → link-local udp", packet{src: data, dstIP: "169.254.10.1", proto: "udp", dport: "53"}, "DROP"},
+			{"data → operator CIDR", packet{src: data, dstIP: "10.20.1.5", dport: "443"}, "DROP"},
+			{"data → operator /24 off the node set", packet{src: data, dstIP: "192.168.57.99", dport: "9000"}, "DROP"},
+			{"data → node discoverd inside an operator CIDR", packet{src: data, dst: node, dstIP: "192.168.57.21", dport: netpolicy.DiscoverdHTTPPort}, "ACCEPT"},
+			{"data → node router api inside an operator CIDR", packet{src: data, dst: node, dstIP: "192.168.57.21", dport: "5000"}, "DROP"},
+			{"data → same-app peer", packet{src: data, dst: data, pairs: []string{DataPeerSet}, dstIP: "100.64.14.2", dport: "5433"}, "ACCEPT"},
+			{"data → cross-app follower", packet{src: data, dst: data, dstIP: "100.64.14.2", dport: "6379"}, "ACCEPT"},
+			{"data → internet", packet{src: data, dstIP: "140.82.112.3", dport: "443"}, ""},
+			{"user → metadata service", packet{src: []string{netpolicy.ServiceUser}, dstIP: "169.254.169.254", dport: "80"}, "DROP"},
+			{"build → operator CIDR", packet{src: []string{netpolicy.ServiceBuild}, dstIP: "10.20.1.5", dport: "443"}, "DROP"},
+			{"system → metadata service", packet{src: []string{netpolicy.ServiceSys}, dstIP: "169.254.169.254", dport: "80"}, ""},
+			{"system → operator CIDR (backups to an operator S3 endpoint)", packet{src: []string{netpolicy.ServiceSys}, dstIP: "10.20.1.5", dport: "443"}, ""},
+		} {
+			if got := verdict(t, chain(), tc.p); got != tc.want {
+				t.Errorf("%s: %s: got %q want %q\n%s", when, tc.name, got, tc.want, strings.Join(f.rules, "\n"))
+			}
+		}
+	}
+	check("fresh")
+
+	// Idempotent.
+	n := len(f.rules)
+	if err := ApplyEgressDeny(f.run, cidrs); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.rules) != n {
+		t.Fatalf("second apply changed the chain:\n%s", strings.Join(f.rules, "\n"))
+	}
+
+	// The operator drops a range: its data rule goes with the others.
+	if err := ApplyEgressDeny(f.run, []string{"169.254.0.0/16", "192.168.57.0/24"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.index("10.20.0.0/16") >= 0 {
+		t.Fatalf("stale deny rule kept:\n%s", strings.Join(f.rules, "\n"))
+	}
+	if got := verdict(t, chain(), packet{src: data, dstIP: "10.20.1.5", dport: "443"}); got != "" {
+		t.Fatalf("data → removed operator CIDR: got %q want fall-through", got)
+	}
+	if got := verdict(t, chain(), packet{src: data, dstIP: "169.254.169.254", dport: "80"}); got != "DROP" {
+		t.Fatalf("data → metadata service after removal: got %q want DROP", got)
+	}
+}
+
+// TestEgressDenyUpgradeAddsDatastoreRules (EDGE-67): a host updated from a
+// deny list that covered only user and build jobs keeps those rules and
+// gains the datastore ones; nothing is deleted.
+func TestEgressDenyUpgradeAddsDatastoreRules(t *testing.T) {
+	f := &fakeForward{rules: []string{
+		"-d 169.254.0.0/16 -m set --match-set flynn-net-build src -m comment --comment flynn-egress-deny -j DROP",
+		"-d 169.254.0.0/16 -m set --match-set flynn-net-user src -m comment --comment flynn-egress-deny -j DROP",
+		"-i flynnbr0 ! -o flynnbr0 -j ACCEPT",
+	}}
+	old := append([]string(nil), f.rules[:2]...)
+	if err := ApplyEgressDeny(f.run, DefaultEgressDeny); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range old {
+		if f.index(r) < 0 {
+			t.Fatalf("existing deny rule removed: %s\n%s", r, strings.Join(f.rules, "\n"))
+		}
+	}
+	at := f.index(netpolicy.ServiceData+" src", "-d 169.254.0.0/16", "DROP")
+	if at < 0 || at > f.index("-i flynnbr0", "ACCEPT") {
+		t.Fatalf("datastore link-local DROP missing or after the bridge egress ACCEPT:\n%s", strings.Join(f.rules, "\n"))
+	}
+	if len(f.rules) != 4 {
+		t.Fatalf("want 3 deny rules and the egress ACCEPT:\n%s", strings.Join(f.rules, "\n"))
+	}
+	if f.index(netpolicy.ServiceData+" src", "! --match-set "+NodeSet+" dst") != at {
+		t.Fatalf("datastore deny rule must leave node IPs to the isolation rules:\n%s", strings.Join(f.rules, "\n"))
+	}
+
+	// A datastore deny rule without the node exemption (hand-added, or
+	// from a build that lacked it) is replaced, not kept beside the new one.
+	f.rules = append([]string{"-d 169.254.0.0/16 -m set --match-set flynn-net-data src -m comment --comment flynn-egress-deny -j DROP"}, old...)
+	f.rules = append(f.rules, "-i flynnbr0 ! -o flynnbr0 -j ACCEPT")
+	if err := ApplyEgressDeny(f.run, DefaultEgressDeny); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.rules) != 4 || f.index(netpolicy.ServiceData+" src", "! --match-set "+NodeSet+" dst") < 0 {
+		t.Fatalf("unexempted datastore rule not replaced:\n%s", strings.Join(f.rules, "\n"))
 	}
 }

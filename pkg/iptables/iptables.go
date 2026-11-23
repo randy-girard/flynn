@@ -468,7 +468,7 @@ func IsolationSets() []string {
 // host-local INPUT drops so tenants cannot open SSH, public discoverd, or
 // node APIs. Call after EnableOutboundNAT. Requires ipset. Same-host L2
 // isolation also needs br_netfilter (caller). egressDeny (from
-// EgressDenyCIDRs) is dropped for user and build jobs ahead of the bridge
+// EgressDenyCIDRs) is dropped for user, build and datastore jobs ahead of the bridge
 // egress ACCEPT.
 func EnableJobIsolation(overlay, bridgeAddr string, egressDeny []string) error {
 	if err := EnsureSets(JobIsolationSets()...); err != nil {
@@ -852,19 +852,31 @@ func Raw(args ...string) ([]byte, error) {
 // and remove ones the operator dropped from the list.
 const EgressDenyComment = "flynn-egress-deny"
 
-// DefaultEgressDeny is always denied to user and build jobs: link-local,
-// which holds the cloud instance metadata service (169.254.169.254 on AWS,
-// GCP, Azure, and most others) with node credentials and user-data.
+// DefaultEgressDeny is always denied to user, build and datastore jobs:
+// link-local, which holds the cloud instance metadata service
+// (169.254.169.254 on AWS, GCP, Azure, and most others) with node
+// credentials and user-data.
 var DefaultEgressDeny = []string{"169.254.0.0/16"}
 
 // EgressDenySets are the job classes whose egress the deny list covers.
+// Datastore engines are included because tenants can make them dial an
+// address (ClickHouse URL/S3/MySQL table engines, extensions); they need
+// nothing outside the cluster. Backups and dumps run as system-class jobs
+// and in the blobstore, which the list does not cover.
 func EgressDenySets() []string {
-	return []string{netpolicy.ServiceUser, netpolicy.ServiceBuild}
+	return []string{netpolicy.ServiceUser, netpolicy.ServiceBuild, netpolicy.ServiceData}
 }
 
-// EgressDenyArgs drops packets from set's job IPs to cidr.
+// EgressDenyArgs drops packets from set's job IPs to cidr. For datastore
+// engines, cluster node IPs are left to the isolation rules (discoverd
+// open, every other node port dropped), so an operator range that holds
+// the nodes does not cut engines off from discoverd on other nodes.
 func EgressDenyArgs(set, cidr string) []string {
-	return []string{"FORWARD", "-d", cidr, "-m", "set", "--match-set", set, "src", "-m", "comment", "--comment", EgressDenyComment, "-j", "DROP"}
+	args := []string{"FORWARD", "-d", cidr, "-m", "set", "--match-set", set, "src"}
+	if set == netpolicy.ServiceData {
+		args = append(args, "-m", "set", "!", "--match-set", NodeSet, "dst")
+	}
+	return append(args, "-m", "comment", "--comment", EgressDenyComment, "-j", "DROP")
 }
 
 // EgressDenyCIDRs is DefaultEgressDeny plus the operator's comma-separated
@@ -898,16 +910,27 @@ func egressDenyKey(rule []string) (string, bool) {
 	if flagValueExact(rule, "--comment") != EgressDenyComment || flagValueExact(rule, "-j") != "DROP" {
 		return "", false
 	}
-	set := flagValueExact(rule, "--match-set")
+	set := ""
+	for i := 0; i+2 < len(rule); i++ {
+		if rule[i] == "--match-set" && rule[i+2] == "src" {
+			set = rule[i+1]
+			break
+		}
+	}
 	dest := flagValueExact(rule, "-d")
 	if set == "" || dest == "" {
 		return "", false
 	}
+	// A rule that no longer has the shape EgressDenyArgs gives its set
+	// (the datastore node exemption) is stale and replaced.
+	if ruleKey(rule) != ruleKey(EgressDenyArgs(set, dest)[1:]) {
+		return set + " " + canonicalCIDR(dest) + " stale", true
+	}
 	return set + " " + canonicalCIDR(dest), true
 }
 
-// ApplyEgressDeny makes FORWARD hold exactly one DROP per (user/build set,
-// cidr), at the head of the chain so it is ahead of the bridge egress
+// ApplyEgressDeny makes FORWARD hold exactly one DROP per (user/build/data
+// set, cidr), at the head of the chain so it is ahead of the bridge egress
 // ACCEPT. Rules with EgressDenyComment for CIDRs no longer listed are
 // deleted after the new ones are in place.
 func ApplyEgressDeny(run IPTables, cidrs []string) error {

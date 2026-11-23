@@ -553,10 +553,16 @@ set without emptying it: `ipset restore` fills a temporary set and swaps it
 with the live set in one kernel operation, so a packet sees either the old or
 the new contents and isolation never switches off during a resync.
 
-User and build jobs cannot open connections to `169.254.0.0/16`, the
-link-local range that holds the cloud instance metadata service and the
+User, build and datastore jobs cannot open connections to `169.254.0.0/16`,
+the link-local range that holds the cloud instance metadata service and the
 node's instance credentials. Operators can deny more ranges with
-`FLYNN_JOB_EGRESS_DENY`; see
+`FLYNN_JOB_EGRESS_DENY`. Datastore engines are covered because a tenant can
+make an engine dial an address (ClickHouse `URL`, `S3` and `MySQL` table
+engines, database extensions); engines need nothing outside the cluster, and
+backups and dumps run as system-class jobs and in the blobstore, which the
+list does not cover. For engines the deny rule skips cluster node IPs, which
+the datastore rules above already limit to discoverd, so an operator range that
+holds the nodes does not cut engines off from discoverd. See
 [Production — Job egress deny list](production.html.md#job-egress-deny-list).
 
 Submodules of a `git push` are fetched by the gitreceive pre-receive hook,

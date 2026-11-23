@@ -862,13 +862,19 @@ syncs. `firewall:sync` does not read the route list. The host daemon does, every
 
 ### Job egress deny list
 
-User and build jobs cannot open connections to `169.254.0.0/16` (link-local).
-That range holds the cloud instance metadata service (`169.254.169.254` on
-AWS, GCP, Azure, and most other providers), which hands out the node's
-instance credentials and user-data. System and datastore jobs are not
-affected.
+User, build and datastore jobs cannot open connections to `169.254.0.0/16`
+(link-local). That range holds the cloud instance metadata service
+(`169.254.169.254` on AWS, GCP, Azure, and most other providers), which hands
+out the node's instance credentials and user-data. Datastore engines are
+covered because tenants can make them dial an address (ClickHouse `URL`,
+`S3` and `MySQL` table engines, database extensions). System jobs are not
+affected, so cluster backups, plugin backup and dump tasks (system-class
+one-off jobs) and the blobstore keep reaching an S3-compatible endpoint
+anywhere, including inside a listed range. Engines themselves need nothing
+outside the cluster.
 
-To deny more ranges to user and build jobs, set `FLYNN_JOB_EGRESS_DENY` in the
+To deny more ranges to user, build and datastore jobs, set
+`FLYNN_JOB_EGRESS_DENY` in the
 `env` of `/etc/flynn/host.json` on every host to a comma-separated list of IPv4
 CIDRs (a bare IP means `/32`), then restart `flynn-host`:
 
@@ -879,7 +885,12 @@ CIDRs (a bare IP means `/32`), then restart `flynn-host`:
 For example, add `168.63.129.16` (the Azure platform endpoint) or a private
 range with services tenants must not reach. `169.254.0.0/16` is always
 denied, even when the list is set. An invalid entry stops `flynn-host` from
-starting job networking, so a typo cannot leave a range open. On restart,
+starting job networking, so a typo cannot leave a range open. Do not list
+the overlay network: it would cut user jobs off from datastores and engines
+off from their peers. A range that holds the cluster nodes is fine: for
+datastore engines, node IPs stay under the job isolation rules (discoverd
+open, every other port dropped). There is no per-class allow list; to let
+jobs reach a range, leave it off `FLYNN_JOB_EGRESS_DENY`. On restart,
 `flynn-host` removes rules for ranges you took off the list. The rules are
 `FORWARD` DROPs tagged `flynn-egress-deny` (`sudo iptables -S FORWARD | grep
 flynn-egress-deny`).
