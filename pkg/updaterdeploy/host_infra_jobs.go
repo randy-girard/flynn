@@ -143,14 +143,19 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 	}
 	switching := r.switching()
 	release := r.targetReleaseID()
-	old := findRunningHostInfraJob(jobs, name)
+	want := artifactLayerIDs(image)
+	// Prefer the job already on the target: a host can also list a job of a
+	// superseded release, and picking that one first left the duplicate.
+	old := findRunningHostInfraJobWithLayers(jobs, name, want, release)
+	if old == nil || force {
+		old = findRunningHostInfraJob(jobs, name)
+	}
 	if old == nil && !switching {
 		if log != nil {
 			log.Info("no running host-infra job to replace", "host", h.ID(), "app", name)
 		}
 		return nil
 	}
-	want := artifactLayerIDs(image)
 	if old != nil && !force && hostInfraJobMatches(old, want, release) {
 		if switching {
 			if err := r.releaseHost(h.ID(), log); err != nil {
@@ -159,6 +164,9 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 			if err := r.adoptHost(h.ID(), log); err != nil {
 				return err
 			}
+		}
+		if err := r.stopZeroedReleaseJobs(h, name, log); err != nil {
+			return err
 		}
 		if log != nil {
 			log.Info("host-infra job already on pulled image", "host", h.ID(), "app", name)
@@ -512,6 +520,9 @@ type hostInfraRollout struct {
 	oldTags    map[string]map[string]string
 	avoid      []string
 	newHosts   []string
+	// zeroed holds releases this run scaled to zero because they were
+	// superseded; their jobs are stopped where a current job already runs.
+	zeroed map[string]bool
 }
 
 func (r *hostInfraRollout) switching() bool {
@@ -548,6 +559,12 @@ func prepareHostInfraRollout(client HostInfraController, name string, image *ct.
 		return nil, fmt.Errorf("get %s release artifact: %w", name, err)
 	}
 	if artifact.ID == image.ID || artifactsShareLayers(artifact, image) {
+		// The app is already on the pulled image, but an earlier update may
+		// have failed after the swap and left a superseded formation active.
+		// Returning without looking left it there for good (EDGE-38).
+		if err := r.zeroStaleFormations(current.ID, log); err != nil {
+			return nil, err
+		}
 		return r, nil
 	}
 	oldFormation, err := client.GetFormation(app.ID, current.ID)
@@ -611,23 +628,22 @@ func (r *hostInfraRollout) adoptHost(hostID string, log log15.Logger) error {
 	return r.putFormation(r.newRelease.ID, r.processes, tags, log)
 }
 
-// finish runs the new release on every host, points the app at it, and
-// scales the old release to zero.
+// finish runs the new release on every host, scales the old release to zero,
+// and then points the app at the new release. The old formation is zeroed
+// first: if that write fails, the app is still on the old release and the
+// next update takes this path again instead of seeing the pulled image and
+// returning with the old formation still active (EDGE-38).
 func (r *hostInfraRollout) finish(log log15.Logger) error {
 	if err := r.putFormation(r.newRelease.ID, r.processes, nil, log); err != nil {
+		return err
+	}
+	if err := r.putFormation(r.oldRelease.ID, zeroProcesses(r.processes), r.oldFormationTags(), log); err != nil {
 		return err
 	}
 	if err := r.client.SetAppRelease(r.appID, r.newRelease.ID); err != nil {
 		return fmt.Errorf("set host-infra app release: %w", err)
 	}
-	zero := make(map[string]int, len(r.processes))
-	for typ := range r.processes {
-		zero[typ] = 0
-	}
-	if err := r.putFormation(r.oldRelease.ID, zero, r.oldFormationTags(), log); err != nil {
-		return err
-	}
-	if err := r.zeroOtherFormations(zero, log); err != nil {
+	if err := r.zeroStaleFormations(r.newRelease.ID, log); err != nil {
 		return err
 	}
 	if log != nil {
@@ -636,28 +652,82 @@ func (r *hostInfraRollout) finish(log log15.Logger) error {
 	return nil
 }
 
-// zeroOtherFormations scales every release except the new one to zero.
-// finish already scales the app's previous release. An older release left at
-// scale 1 by an interrupted update stays active, and a full-strength probe
-// then waits for a second discoverd that never registers.
-func (r *hostInfraRollout) zeroOtherFormations(zero map[string]int, log log15.Logger) error {
+// zeroStaleFormations scales every release except keep to zero. An older
+// release left at scale 1 by an interrupted update stays active, and a
+// full-strength probe then waits for a second discoverd that never
+// registers. Nothing is zeroed while keep's own formation is empty: that
+// would leave the app with no jobs at all.
+func (r *hostInfraRollout) zeroStaleFormations(keep string, log log15.Logger) error {
+	cur, err := r.client.GetFormation(r.appID, keep)
+	if err == controller.ErrNotFound || err == nil && (cur == nil || processCount(cur.Processes) == 0) {
+		if log != nil {
+			log.Warn("current host-infra formation is empty, leaving other formations alone", "app", r.appID, "release", keep)
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("get host-infra formation for release %s: %w", keep, err)
+	}
 	releases, err := r.client.AppReleaseList(r.appID)
 	if err != nil {
 		return fmt.Errorf("list host-infra releases: %w", err)
 	}
 	for _, rel := range releases {
-		if rel == nil || rel.ID == "" || rel.ID == r.newRelease.ID {
+		if rel == nil || rel.ID == "" || rel.ID == keep {
 			continue
 		}
 		f, err := r.client.GetFormation(r.appID, rel.ID)
 		if err != nil || f == nil || processCount(f.Processes) == 0 {
 			continue
 		}
-		if err := r.putFormation(rel.ID, zero, f.Tags, log); err != nil {
+		if log != nil {
+			log.Info("scaling superseded host-infra formation to zero", "app", r.appID, "release", rel.ID, "processes", f.Processes, "current", keep)
+		}
+		if err := r.putFormation(rel.ID, zeroProcesses(f.Processes), f.Tags, log); err != nil {
+			return err
+		}
+		if r.zeroed == nil {
+			r.zeroed = make(map[string]bool)
+		}
+		r.zeroed[rel.ID] = true
+	}
+	return nil
+}
+
+// stopZeroedReleaseJobs stops jobs of releases zeroStaleFormations scaled
+// down that still run on h beside the current job. The scheduler would stop
+// them too; doing it here means the host is at one job when the update moves
+// on.
+func (r *hostInfraRollout) stopZeroedReleaseJobs(h hostInfraHost, name string, log log15.Logger) error {
+	if r == nil || len(r.zeroed) == 0 {
+		return nil
+	}
+	jobs, err := h.ListJobs()
+	if err != nil {
+		return fmt.Errorf("list jobs on %s: %w", h.ID(), err)
+	}
+	for _, j := range jobs {
+		if j.Job == nil || j.Status != host.StatusRunning && j.Status != host.StatusStarting {
+			continue
+		}
+		if j.Job.Metadata["flynn-controller.app_name"] != name || !r.zeroed[j.Job.Metadata[hostInfraReleaseKey]] {
+			continue
+		}
+		if log != nil {
+			log.Info("stopping host-infra job of superseded release", "host", h.ID(), "app", name, "job", j.Job.ID, "release", j.Job.Metadata[hostInfraReleaseKey])
+		}
+		if err := stopHostInfraJob(h, j.Job.ID, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func zeroProcesses(p map[string]int) map[string]int {
+	zero := make(map[string]int, len(p))
+	for typ := range p {
+		zero[typ] = 0
+	}
+	return zero
 }
 
 func (r *hostInfraRollout) oldFormationTags() map[string]map[string]string {
