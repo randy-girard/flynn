@@ -81,7 +81,9 @@ GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
 `util/commit-validator/validate-gofmt` and fail if changed Go is not formatted.
 GitHub Actions and `script/run-unit-tests` also run
 `util/commit-validator/validate-govet`, which fails on any `go vet` finding in
-`./discoverd/...`.
+discoverd and the edge packages (router, blobstore, gitreceive, logaggregator,
+tarreceive, cli, slugbuilder), and `make test-scripts` (see
+[Smoke script regressions](#smoke-script-regressions)).
 
 ## Building
 
@@ -277,9 +279,9 @@ once per clone.
 $ util/commit-validator/validate-govet
 ```
 
-CI and `make test-unit` / `script/run-unit-tests` run `go vet ./discoverd/...`
-and fail on any finding. Pass package patterns to vet other packages
-(`util/commit-validator/validate-govet ./router/...`). Copy a
+CI and `make test-unit` / `script/run-unit-tests` run `go vet` over
+`./discoverd/...`, `./router/...`, `./blobstore/...`, `./gitreceive/...`, `./logaggregator/...`, `./tarreceive/...`, `./cli/...` and `./slugbuilder/...` and fail on any finding. Pass package patterns to vet other packages
+(`util/commit-validator/validate-govet ./controller/...`). Copy a
 `discoverd.Instance` with `Copy()` or `Clone()`, not `*inst`: it holds a
 `sync.Once`, and vet's copylocks check rejects the plain copy.
 
@@ -335,13 +337,29 @@ These are fast host checks. They do **not** boot VMs. They assert that
 
 ```
 $ bash script/vagrant/test/cli-functions.sh
-# or all of them:
-$ for s in script/vagrant/test/*.sh; do bash "$s" || exit 1; done
+# all of them (lists every failing script):
+$ make test-vagrant
+# plus script/test-apt-retry.sh and script/test-release-notes.sh:
+$ make test-scripts
 ```
 
-Related one-off script tests: `script/test-apt-retry.sh`,
-`script/test-release-notes.sh`. The Vagrant smoke driver runs every
+GitHub Actions, `script/run-unit-tests` and the unit-test container run
+`make test-scripts`. The Vagrant smoke driver runs every
 `script/vagrant/test/*.sh` before it starts VirtualBox.
+
+Some checks read the plugin checkouts next to this repo
+(`../flynn-plugin-mongodb`, `../flynn-plugin-clickhouse`, …). When a sibling
+is not checked out, as in CI (the plugin repos are private) and in the macOS
+Docker unit-test run (only this repo is mounted), those checks print
+`skip … not checked out` and the rest still run. Run `make test-scripts`
+natively in the workspace to cover them.
+
+These scripts use `set -o pipefail`, so do not pipe a file reader (`awk`,
+`sed`, `grep`, `cat`, `tar`) into `grep -q`: `grep -q` exits on the first
+match, the writer gets SIGPIPE (exit 141) and the pipeline fails. The CI
+runner's `mawk` hits this most runs. Use a here-string instead,
+`grep -q pattern <<<"$(awk '…' file)"`; `script/test/unit-workflow.bats`
+rejects the piped form.
 
 ### Integration tests
 
@@ -498,7 +516,7 @@ The smoke header in `script/vagrant/suite.sh` lists the rest.
 * **[Unit tests](https://github.com/randy-girard/flynn/actions/workflows/unit-tests.yml)**
   — `push` and `pull_request` to `develop` and `main`, on `ubuntu-24.04`.
   Builds host binaries, `validate-gofmt`, `validate-govet`, `bats script/test`,
-  `make test-unit-root-native`. The workflow token is `contents: read` and the
+  `make test-scripts`, `make test-unit-root-native`. The workflow token is `contents: read` and the
   unit job checks out with `persist-credentials: false`, so test code cannot
   push to the repo. Only the `coverage-badge` job, which runs after a green
   push to `develop` or `main`, gets `contents: write` to commit the badge.

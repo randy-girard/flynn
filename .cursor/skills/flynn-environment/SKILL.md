@@ -22,7 +22,7 @@ Command details and the project-board ids are in [reference.md](reference.md).
 | --- | --- | --- |
 | Go unit tests on a Mac | `script -q /tmp/flynn-unit-script.log script/run-unit-tests` | `flynn/` |
 | Plugin unit tests | `./script/run-unit-tests` | that plugin |
-| Vagrant script contracts, no VMs | `make test-vagrant` | `flynn/` |
+| Vagrant script contracts, no VMs | `make test-scripts` (CI runs it; `make test-vagrant` for the driver ones only) | `flynn/` |
 | Boot or update the laptop cluster | `script/vagrant.sh` | `flynn/` |
 | Acceptance smoke | `script/vagrant-smoke.sh --item quick` | `flynn/` |
 | Fault injection on the laptop cluster | `script/vagrant.sh --yes chaos` | `flynn/` |

@@ -165,9 +165,21 @@ vagrant-smoke-stop: ## Halt smoke VMs
 vagrant-smoke-destroy: ## Delete smoke VMs (./build stays)
 	$(VAGRANT_SMOKE) destroy $(VM) $(ARGS)
 
-# Host-gate contract tests only (no VirtualBox).
+# Host-gate contract tests only (no VirtualBox). Runs every script and lists
+# the ones that failed, so one broken contract does not hide the rest.
 test-vagrant: ## Run script/vagrant/test/*.sh (no VMs)
-	@for s in script/vagrant/test/*.sh; do bash "$$s" || exit 1; done
+	@failed=""; for s in script/vagrant/test/*.sh; do \
+		bash "$$s" || failed="$$failed $$s"; \
+	done; \
+	if [ -n "$$failed" ]; then echo "FAILED:$$failed" >&2; exit 1; fi
+
+# Shell contract tests CI runs: the Vagrant driver contracts plus the
+# standalone script/test-*.sh checks (apt retry, release notes).
+test-scripts: test-vagrant ## Run script/vagrant/test/*.sh and script/test-*.sh (no VMs)
+	@failed=""; for s in script/test-*.sh; do \
+		bash "$$s" || failed="$$failed $$s"; \
+	done; \
+	if [ -n "$$failed" ]; then echo "FAILED:$$failed" >&2; exit 1; fi
 
 help: ## Show this help
 	@awk 'BEGIN { \
@@ -190,4 +202,4 @@ help: ## Show this help
 .PHONY: help build release clean test test-unit test-unit-root test-unit-native test-unit-root-native test-integration install-git-hooks \
 	vagrant vagrant-setup vagrant-up vagrant-status vagrant-ssh vagrant-build vagrant-cli vagrant-bootstrap vagrant-update vagrant-plugin \
 	vagrant-probe vagrant-monitor vagrant-chaos vagrant-reload vagrant-stop vagrant-destroy vagrant-smoke vagrant-smoke-list vagrant-smoke-status vagrant-smoke-ssh \
-	vagrant-smoke-up vagrant-smoke-reload vagrant-smoke-stop vagrant-smoke-destroy test-vagrant
+	vagrant-smoke-up vagrant-smoke-reload vagrant-smoke-stop vagrant-smoke-destroy test-vagrant test-scripts

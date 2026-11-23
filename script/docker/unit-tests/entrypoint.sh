@@ -36,6 +36,8 @@ util/commit-validator/validate-govet
 if [[ "${FLYNN_TEST_SKIP_CHECKS:-}" != "1" ]]; then
   echo "==> bats script tests"
   bats script/test
+  echo "==> shell contract tests (script/vagrant/test, script/test-*.sh)"
+  make test-scripts
 fi
 
 echo "==> Building Flynn binaries (force rebuild for Linux container)"

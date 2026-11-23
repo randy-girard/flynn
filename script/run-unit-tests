@@ -13,7 +13,7 @@
 # Environment:
 #   FLYNN_TEST_DOCKER=1       Force Docker even on Linux
 #   FLYNN_TEST_DOCKER=0       Force native (fails on non-Linux without deps)
-#   FLYNN_TEST_SKIP_CHECKS=1  Skip bats (gofmt and go vet still run; same as GitHub Actions)
+#   FLYNN_TEST_SKIP_CHECKS=1  Skip bats and make test-scripts (gofmt and go vet still run)
 #   FLYNN_SKIP_VOLUME_TESTS=1 Skip host/volume ZFS tests
 #   FLYNN_GO_TEST_FLAGS       Extra/override flags for go test
 #   FLYNN_SKIP_COVERAGE=1     Skip writing coverage/ HTML and profiles
@@ -67,6 +67,8 @@ run_native() {
     if command -v bats >/dev/null 2>&1; then
       bats script/test
     fi
+    echo "==> shell contract tests (script/vagrant/test, script/test-*.sh)"
+    make test-scripts
   fi
 
   if [[ "${FLYNN_SKIP_VOLUME_TESTS:-}" == "1" ]]; then

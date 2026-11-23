@@ -43,9 +43,10 @@ Laptop CLI talks to cluster `local` (`https://controller.1.localflynn.com`). Sta
 script/vagrant-smoke.sh --item quick
 make vagrant-smoke ITEM=quick
 make test-vagrant
+make test-scripts
 ```
 
-`make test-vagrant` runs `script/vagrant/test/*.sh` and does not boot VMs. Smoke step logs land under `$TMPDIR/flynn-upgrade-smoke.*/last-step.log`. `make vagrant-smoke-destroy` deletes smoke VMs and leaves `./build`.
+`make test-vagrant` runs `script/vagrant/test/*.sh` and does not boot VMs. `make test-scripts` adds `script/test-*.sh`; GitHub Actions and `script/run-unit-tests` run it, and checks on missing `../flynn-plugin-*` siblings print `skip … not checked out`. Smoke step logs land under `$TMPDIR/flynn-upgrade-smoke.*/last-step.log`. `make vagrant-smoke-destroy` deletes smoke VMs and leaves `./build`.
 
 ## Unit tests
 

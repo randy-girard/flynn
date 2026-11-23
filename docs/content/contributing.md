@@ -19,7 +19,8 @@ All patches are reviewed, including patches from maintainers. At least one revie
 ## Code style
 
 * Go must match `gofmt -s`
-* `go vet ./discoverd/...` must report nothing (`util/commit-validator/validate-govet`; CI runs it)
+* `go vet` over discoverd and the edge packages (router, blobstore, gitreceive, logaggregator, tarreceive, cli, slugbuilder) must report nothing (`util/commit-validator/validate-govet`; CI runs it)
+* `make test-scripts` (the `script/vagrant/test/*.sh` driver contracts and `script/test-*.sh`) must pass; CI runs it
 * Shell scripts should follow the [Google Shell Style Guide](https://google.github.io/styleguide/shell.xml)
 * Commit subjects **always** use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>` (for example `feat(cli): …`, `fix(host): …`, `test(router): …`, `docs: …`)
 

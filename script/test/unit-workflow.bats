@@ -110,10 +110,18 @@ workflow_job() {
   fi
 }
 
-@test "unit workflow, run-unit-tests and the unit container run go vet on discoverd" {
+# Packages validate-govet checks when called with no arguments (EDGE-18).
+GOVET_PACKAGES="./discoverd/... ./router/... ./blobstore/... ./gitreceive/... ./logaggregator/... ./tarreceive/... ./cli/... ./slugbuilder/..."
+
+@test "unit workflow, run-unit-tests and the unit container run go vet on discoverd and the edge packages" {
   validator="${ROOT}/util/commit-validator/validate-govet"
   [[ -x "${validator}" ]]
-  grep -q './discoverd/...' "${validator}"
+  for pkg in ${GOVET_PACKAGES}; do
+    if ! grep -qF -- "${pkg}" "${validator}"; then
+      echo "validate-govet must vet ${pkg} by default" >&2
+      return 1
+    fi
+  done
   job="$(workflow_job "${ROOT}/.github/workflows/unit-tests.yml" unit)"
   if ! echo "${job}" | grep -Eq '^[[:space:]]+run:[[:space:]]*util/commit-validator/validate-govet[[:space:]]*$'; then
     echo "unit job must run util/commit-validator/validate-govet" >&2
@@ -122,6 +130,59 @@ workflow_job() {
   for f in "${ROOT}/script/run-unit-tests" "${ROOT}/script/docker/unit-tests/entrypoint.sh"; do
     if ! grep -q '^[[:space:]]*util/commit-validator/validate-govet' "${f}"; then
       echo "${f} must run util/commit-validator/validate-govet" >&2
+      return 1
+    fi
+  done
+}
+
+@test "make test-scripts runs the vagrant driver contracts and every script/test-*.sh" {
+  recipe="$(awk '/^test-scripts:/{r=1;next} r && /^[^\t]/{r=0} r' "${ROOT}/Makefile")"
+  if ! echo "${recipe}" | grep -Eq 'test-vagrant|script/vagrant/test/\*\.sh'; then
+    if ! grep -Eq '^test-scripts:.*test-vagrant' "${ROOT}/Makefile"; then
+      echo "make test-scripts must run make test-vagrant (script/vagrant/test/*.sh)" >&2
+      return 1
+    fi
+  fi
+  if ! echo "${recipe}" | grep -Fq 'script/test-*.sh'; then
+    echo "make test-scripts must run every script/test-*.sh" >&2
+    return 1
+  fi
+  [[ -n "$(ls "${ROOT}"/script/test-*.sh)" ]]
+}
+
+@test "unit workflow, run-unit-tests and the unit container run make test-scripts" {
+  job="$(workflow_job "${ROOT}/.github/workflows/unit-tests.yml" unit)"
+  if ! echo "${job}" | grep -Eq '^[[:space:]]+run:[[:space:]]*make test-scripts[[:space:]]*$'; then
+    echo "unit job must run make test-scripts" >&2
+    return 1
+  fi
+  for f in "${ROOT}/script/run-unit-tests" "${ROOT}/script/docker/unit-tests/entrypoint.sh"; do
+    if ! grep -Eq '^[[:space:]]*make test-scripts[[:space:]]*$' "${f}"; then
+      echo "${f} must run make test-scripts" >&2
+      return 1
+    fi
+  done
+}
+
+@test "script contract tests do not pipe a file reader into grep -q under pipefail" {
+  # grep -q exits on the first match; under pipefail the writer's SIGPIPE
+  # (exit 141) then fails the pipeline. mawk on the CI runner hits this
+  # often; macOS awk rarely does. Read into a variable or a here-string.
+  bad="$(grep -nE '(awk|sed|grep|cat|tar)[^|]*[|][[:space:]]*grep[^|]*[[:space:]]-[A-Za-z]*q' \
+    "${ROOT}"/script/vagrant/test/*.sh "${ROOT}"/script/test-*.sh || true)"
+  if [[ -n "${bad}" ]]; then
+    echo "pipe into grep -q (SIGPIPE under pipefail):" >&2
+    echo "${bad}" >&2
+    return 1
+  fi
+}
+
+@test "vagrant driver contracts skip sibling plugin checks when the checkout is absent" {
+  # CI checks out only this repo (the plugin repos are private), so a check
+  # that reads ../flynn-plugin-* must say it skipped instead of failing.
+  for s in "${ROOT}"/script/vagrant/test/*.sh; do
+    if grep -q 'ROOT}/\.\./flynn-plugin-' "${s}" && ! grep -q 'not checked out' "${s}"; then
+      echo "$(basename "${s}") reads a sibling plugin checkout without skipping when it is absent" >&2
       return 1
     fi
   done

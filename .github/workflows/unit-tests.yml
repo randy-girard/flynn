@@ -80,6 +80,11 @@ jobs:
       - name: Run bats script tests
         run: bats script/test
 
+      # script/vagrant/test/*.sh and script/test-*.sh need no VMs. Checks on
+      # the private plugin siblings (../flynn-plugin-*) skip with a note here.
+      - name: Run shell contract tests
+        run: make test-scripts
+
       - name: Run unit tests
         run: |
           set -eo pipefail
