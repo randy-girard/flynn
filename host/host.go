@@ -216,6 +216,7 @@ func runDaemon(args *docopt.Args) {
 	if err != nil {
 		shutdown.Fatalf("error setting up logger: %s", err)
 	}
+	handleGoroutineDumps(logDir, logger.New("fn", "goroutineDump"))
 
 	initLogLevel, err := log15.LvlFromString(args.String["--init-log-level"])
 	if err != nil {

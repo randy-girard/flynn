@@ -1197,6 +1197,13 @@ counted in that host's `GET /host/status` field `log_drops`.
 systemd manages the `flynn-host` daemon. Logs are in `/var/log/flynn/flynn-host.log`
 (also `journalctl -u flynn-host`).
 
+If the daemon looks stuck (for example a job stays `starting`), run
+`sudo pkill -USR2 -x flynn-host` before restarting it. The daemon keeps running
+and writes every goroutine's stack to
+`/var/log/flynn/flynn-host-goroutines-<time>.txt` (owner-only), and
+`flynn-host.log` names the file. Sending `SIGUSR2` to a job's `containerinit` writes the same dump into that
+job's log as init lines.
+
 The `flynn-host collect-debug-info` command will collect information about the
 system it is run on along with recent logs from all apps and the `flynn-host`
 daemon. By default it writes them to an owner-only (0600) tarball on that
