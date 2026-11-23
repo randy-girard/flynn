@@ -1,7 +1,8 @@
 name: Build and Release
 
-# Manual release only. Unit tests run via the separate Unit tests workflow;
-# this workflow splits the Flynn build across jobs/steps for fresh timeout budgets
+# Manual release only. The first job calls the Unit tests workflow on the
+# dispatched commit, so a red commit cannot be released. The rest splits the
+# Flynn build across jobs/steps for fresh timeout budgets
 # (base → host binaries → toolchain images → production app images).
 # Cluster-test images (test, test-apps, controller-examples) are omitted; they
 # are not in bootstrap or the release images template. Build them with
@@ -44,17 +45,36 @@ on:
         type: string
         default: 'ubuntu-24.04'
 
+# Build jobs fetch and run third-party buildpacks and images as root, so the
+# workflow token is read-only and their checkouts drop it. Only publish gets
+# contents: write (release + assets) and actions: write (plugin fan-out).
 permissions:
-  contents: write
-  actions: write
+  contents: read
+
+# One release at a time: two runs would resolve the same next vYYYYMMDD.N and
+# race to publish it. A running release is never cancelled; GitHub keeps at
+# most one queued run, so a third dispatch replaces the queued one.
+concurrency:
+  group: flynn-release
+  cancel-in-progress: false
 
 env:
   GO_VERSION: '1.24'
   GOFLAGS: '-mod=vendor -buildvcs=false'
 
 jobs:
+  unit-tests:
+    name: Unit tests
+    uses: ./.github/workflows/unit-tests.yml
+    # GitHub rejects the call unless the caller allows every permission a
+    # called job declares; coverage-badge declares contents: write but runs
+    # only on push, so it is skipped here. The unit job stays contents: read.
+    permissions:
+      contents: write
+
   build-base:
     name: Build base image
+    needs: unit-tests
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 180
     outputs:
@@ -64,13 +84,16 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve version
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -eo pipefail
           git fetch --tags --force
-          VERSION="${{ inputs.version }}"
+          VERSION="${INPUT_VERSION}"
           if [[ -z "${VERSION}" ]]; then
             # shellcheck source=script/lib/release.sh
             source ./script/lib/release.sh
@@ -159,6 +182,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve version
         id: version
@@ -353,6 +377,9 @@ jobs:
     needs: [build-base, build-cluster]
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
+    permissions:
+      contents: write
+      actions: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -361,10 +388,12 @@ jobs:
 
       - name: Determine release mode
         id: mode
+        env:
+          INPUT_DRAFT: ${{ inputs.draft }}
         run: |
           DRAFT=false
           PRERELEASE=false
-          if [[ "${{ inputs.draft }}" == "true" ]]; then
+          if [[ "${INPUT_DRAFT}" == "true" ]]; then
             DRAFT=true
             PRERELEASE=true
           fi

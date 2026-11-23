@@ -126,3 +126,141 @@ workflow_job() {
     fi
   done
 }
+
+# workflow_jobs prints the job ids under "jobs:".
+workflow_jobs() {
+  awk '/^jobs:/{j=1;next} j && /^[^[:space:]#]/{j=0} j && /^  [^[:space:]#]/{n=$1; sub(/:$/,"",n); print n}' "$1"
+}
+
+# workflow_run_blocks prints every run: script (inline or block scalar).
+workflow_run_blocks() {
+  awk '
+    function indent(s) { match(s, /^ */); return RLENGTH }
+    inrun && $0 !~ /^[[:space:]]*$/ && indent($0) <= runind { inrun = 0 }
+    inrun { print; next }
+    /^[[:space:]]*(- )?run:/ {
+      line = $0
+      runind = indent(line)
+      if (line ~ /^[[:space:]]*- /) runind += 2
+      sub(/^[[:space:]]*(- )?run:[[:space:]]*/, "", line)
+      if (line ~ /^[|>]/) { inrun = 1 } else { print line }
+    }
+  ' "$1"
+}
+
+@test "release workflow grants only contents: read at the top level" {
+  wf="${ROOT}/.github/workflows/release.yml"
+  perms="$(workflow_top_permissions "${wf}")"
+  if [[ "${perms}" != "contents: read" ]]; then
+    echo "top-level permissions must be exactly 'contents: read', got:" >&2
+    echo "${perms}" >&2
+    return 1
+  fi
+}
+
+@test "release workflow gives write permissions only to publish" {
+  wf="${ROOT}/.github/workflows/release.yml"
+  workflow_job "${wf}" publish | grep -Eq '^      contents:[[:space:]]*write'
+  workflow_job "${wf}" publish | grep -Eq '^      actions:[[:space:]]*write'
+  for j in $(workflow_jobs "${wf}"); do
+    [[ "${j}" == "publish" ]] && continue
+    # unit-tests calls unit-tests.yml, whose coverage-badge job declares
+    # contents: write. GitHub rejects the call unless the caller allows it;
+    # that job only runs on push, so under workflow_dispatch it is skipped.
+    if [[ "${j}" == "unit-tests" ]]; then
+      perms="$(workflow_job "${wf}" "${j}" | grep -E '^      [a-z-]+:[[:space:]]*(read|write|none)')"
+      if [[ "$(echo "${perms}" | tr -d ' ')" != "contents:write" ]]; then
+        echo "unit-tests job must grant exactly contents: write, got: ${perms}" >&2
+        return 1
+      fi
+      continue
+    fi
+    if workflow_job "${wf}" "${j}" | grep -Eq ':[[:space:]]*write'; then
+      echo "job ${j} must not get a write permission" >&2
+      return 1
+    fi
+  done
+  badge_if="$(workflow_job "${ROOT}/.github/workflows/unit-tests.yml" coverage-badge | grep -E '^    if:')"
+  if [[ "${badge_if}" != *"github.event_name == 'push'"* ]]; then
+    echo "coverage-badge must run only on push so a release call never reaches it" >&2
+    return 1
+  fi
+}
+
+@test "release build jobs check out without persisting the token" {
+  wf="${ROOT}/.github/workflows/release.yml"
+  for j in build-base build-cluster; do
+    job="$(workflow_job "${wf}" "${j}")"
+    checkouts="$(echo "${job}" | grep -c 'uses: actions/checkout@' || true)"
+    nopersist="$(echo "${job}" | grep -Ec '^[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*$' || true)"
+    if [[ "${checkouts}" -lt 1 || "${checkouts}" != "${nopersist}" ]]; then
+      echo "job ${j}: every checkout must set persist-credentials: false (${checkouts} checkouts, ${nopersist} without credentials)" >&2
+      return 1
+    fi
+    if echo "${job}" | grep -Eq 'secrets\.GITHUB_TOKEN|github\.token'; then
+      echo "job ${j} must not reference the workflow token" >&2
+      return 1
+    fi
+  done
+}
+
+@test "release workflow runs one release at a time" {
+  wf="${ROOT}/.github/workflows/release.yml"
+  block="$(awk '/^concurrency:/{c=1;next} c && /^[^[:space:]#]/{c=0} c' "${wf}")"
+  echo "${block}" | grep -Eq '^  group:[[:space:]]*[^[:space:]]'
+  if ! echo "${block}" | grep -Eq '^  cancel-in-progress:[[:space:]]*false'; then
+    echo "release concurrency must not cancel a running release" >&2
+    return 1
+  fi
+}
+
+@test "release workflow runs the unit tests before any build" {
+  wf="${ROOT}/.github/workflows/release.yml"
+  grep -Eq '^  workflow_call:' "${ROOT}/.github/workflows/unit-tests.yml"
+  first="$(workflow_jobs "${wf}" | head -n 1)"
+  [[ "${first}" == "unit-tests" ]]
+  workflow_job "${wf}" unit-tests | grep -Eq '^    uses:[[:space:]]*\./\.github/workflows/unit-tests\.yml[[:space:]]*$'
+  if ! workflow_job "${wf}" build-base | grep -Eq '^    needs:[[:space:]]*(unit-tests|\[.*unit-tests.*\])[[:space:]]*$'; then
+    echo "build-base must need unit-tests" >&2
+    return 1
+  fi
+}
+
+@test "release workflows pass inputs and event fields to run scripts through env" {
+  for wf in "${ROOT}/.github/workflows/release.yml" "${ROOT}/.github/workflows/plugin-releases.yml"; do
+    runs="$(workflow_run_blocks "${wf}")"
+    [[ -n "${runs}" ]]
+    if echo "${runs}" | grep -E '\$\{\{[[:space:]]*(inputs\.|github\.event\.)'; then
+      echo "${wf}: run scripts must read inputs and event fields from env, not \${{ }}" >&2
+      return 1
+    fi
+  done
+}
+
+@test "release workflows refuse a version that is not vYYYYMMDD.N" {
+  for wf in "${ROOT}/.github/workflows/release.yml" "${ROOT}/.github/workflows/plugin-releases.yml"; do
+    if ! workflow_run_blocks "${wf}" | grep -Fq '=~ ^v[0-9]{8}\.[0-9]+$ ]]'; then
+      echo "${wf} must check the version format before using it" >&2
+      return 1
+    fi
+  done
+}
+
+@test "workflow_run_blocks finds inline and block run scripts" {
+  f="$(mktemp)"
+  cat >"${f}" <<'YAML'
+jobs:
+  a:
+    steps:
+      - name: one
+        run: echo ${{ inputs.x }}
+      - run: |
+          echo ${{ github.event.y }}
+        env:
+          Z: ${{ inputs.z }}
+YAML
+  run workflow_run_blocks "${f}"
+  rm -f "${f}"
+  assert_success
+  assert_output $'echo ${{ inputs.x }}\n          echo ${{ github.event.y }}'
+}

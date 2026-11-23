@@ -503,8 +503,17 @@ The smoke header in `script/vagrant/suite.sh` lists the rest.
   push to the repo. Only the `coverage-badge` job, which runs after a green
   push to `develop` or `main`, gets `contents: write` to commit the badge.
 * **[Build and Release](https://github.com/randy-girard/flynn/actions/workflows/release.yml)**
-  — manual `workflow_dispatch` only. Builds base + production cluster images in
-  phases and publishes GitHub Release assets. Version tags look like
+  — manual `workflow_dispatch` only. Its first job calls the Unit tests
+  workflow on the dispatched commit; nothing builds unless that passes. Only
+  one release runs at a time (concurrency group `flynn-release`, never
+  cancelled; GitHub keeps one queued run, so a further dispatch replaces the
+  queued one). The workflow token is `contents: read` and the build jobs check
+  out with `persist-credentials: false`, so buildpack and image code run as
+  root cannot push or start workflows. Only the `publish` job gets
+  `contents: write` and `actions: write`. Inputs and event fields reach shell
+  steps through `env:`, never pasted into the script, and a **version** that
+  is not `vYYYYMMDD.N` fails before the first build step. Builds base + production
+  cluster images in phases and publishes GitHub Release assets. Version tags look like
   `vYYYYMMDD.N` (UTC date, then `.0`, `.1`, … for that day). Leave **version**
   empty to pick the next unused tag; fill it in only to override. Omits `test`,
   `test-apps`, and `controller-examples`. Release files are uploaded one at a
@@ -529,7 +538,8 @@ The smoke header in `script/vagrant/suite.sh` lists the rest.
 * **[Dispatch plugin releases](https://github.com/randy-girard/flynn/actions/workflows/plugin-releases.yml)**
   — runs from Build and Release when **dispatch_plugins** is on, when a
   Flynn GitHub Release is **published** from the GitHub UI, or via its own
-  `workflow_dispatch`. It queues each plugin repo’s `Build and Release`
+  `workflow_dispatch`. It refuses a tag or **version** that is not
+  `vYYYYMMDD.N`. It queues each plugin repo’s `Build and Release`
   workflow with plugin version `{Flynn tag}.0` and `flynn_version` set to the
   Flynn tag so ubuntu-noble matches Flynn. Plugin-only rebuilds use
   `vYYYYMMDD.N.P` (last number increments) without a new Flynn release.

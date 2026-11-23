@@ -36,17 +36,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Tag names and inputs reach the script through env, never pasted into it.
       - name: Resolve version
         id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -eo pipefail
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            echo "version=${{ github.event.release.tag_name }}" >> "${GITHUB_OUTPUT}"
-            echo "prerelease=${{ github.event.release.prerelease }}" >> "${GITHUB_OUTPUT}"
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            version="${RELEASE_TAG}"
+            prerelease="${RELEASE_PRERELEASE}"
           else
-            echo "version=${{ inputs.version }}" >> "${GITHUB_OUTPUT}"
-            echo "prerelease=${{ inputs.prerelease }}" >> "${GITHUB_OUTPUT}"
+            version="${INPUT_VERSION}"
+            prerelease="${INPUT_PRERELEASE}"
           fi
+          if [[ ! "${version}" =~ ^v[0-9]{8}\.[0-9]+$ ]]; then
+            echo "ERROR: version must look like vYYYYMMDD.N (got '${version}')" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
 
       - name: Dispatch plugin releases
         env:
