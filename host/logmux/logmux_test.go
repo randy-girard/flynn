@@ -2,6 +2,7 @@ package logmux
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -477,5 +478,52 @@ func TestSinkWriteErrorReconnectsAfterDelay(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("addSink did not return after shutdown")
+	}
+}
+
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (nopWriteCloser) Close() error                { return nil }
+
+// appLog took appLogsMtx then l.mtx, and the last Release took l.mtx then
+// appLogsMtx. A lifecycle line (Mux.Write) for an app whose last log stream
+// was closing at the same moment deadlocked both, so every later Follow on
+// the host hung and the next host-infra job never left "starting".
+func TestLastReleaseRacingAppLogDoesNotDeadlock(t *testing.T) {
+	m := New("host1", t.TempDir(), log15.New())
+	m.diskWriter = func(string) io.WriteCloser { return nopWriteCloser{} }
+	t.Cleanup(m.waitIdle)
+	cfg := &Config{AppID: "app-1", HostID: "host1", JobID: "job-1"}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				for i := 0; i < 2000; i++ {
+					if i%2 == 0 {
+						m.Write(logagg.MsgIDSystem, cfg, "line")
+						continue
+					}
+					r, w := io.Pipe()
+					s := m.Follow(r, "", logagg.MsgIDStdout, &Config{
+						AppID:  "app-1",
+						HostID: "host1",
+						JobID:  fmt.Sprintf("job-%d-%d", g, i),
+					})
+					w.Close()
+					s.Close()
+				}
+			}(g)
+		}
+		wg.Wait()
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("appLog and the last Release deadlocked on appLogsMtx / appLog.mtx")
 	}
 }

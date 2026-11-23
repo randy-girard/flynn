@@ -470,6 +470,22 @@ func (s *LogStream) Close() string {
 	return s.buf
 }
 
+// CloseTimeout closes the stream like Close but waits at most d for its
+// follow goroutine to return. ok is false when it did not; the goroutine is
+// then left running and its partial line is lost.
+func (s *LogStream) CloseTimeout(d time.Duration) (buf string, ok bool) {
+	s.closed.Store(true)
+	s.log.Close()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-s.done:
+		return s.buf, true
+	case <-t.C:
+		return "", false
+	}
+}
+
 func (s *LogStream) follow(r io.Reader, buffer, appID string, h *rfc5424.Header, jobName string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer close(s.done)
@@ -864,7 +880,14 @@ func (l *appLog) Write(msg message) {
 
 // Release releases the app log, when the last job releases an app log, it is
 // closed.
+//
+// Lock order is appLogsMtx, then l.mtx, the same as Mux.appLog. Taking l.mtx
+// first deadlocked a lifecycle line (Mux.Write) racing the last log stream of
+// the same app: from then on every Follow on the host hung, and so did the
+// job cleanup waiting on LogStream.Close.
 func (l *appLog) Release() {
+	l.m.appLogsMtx.Lock()
+	defer l.m.appLogsMtx.Unlock()
 	l.mtx.Lock()
 	defer l.mtx.Unlock()
 	l.refs--
@@ -873,8 +896,8 @@ func (l *appLog) Release() {
 		// still be blocked on lumberjack/vboxsf. Closing the queue lets it
 		// exit and Close the file when the in-flight write returns.
 		close(l.diskCh)
-		l.m.appLogsMtx.Lock()
-		delete(l.m.appLogs, l.appID)
-		l.m.appLogsMtx.Unlock()
+		if l.m.appLogs[l.appID] == l {
+			delete(l.m.appLogs, l.appID)
+		}
 	}
 }
