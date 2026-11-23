@@ -254,7 +254,7 @@ if ! grep -Fq 'formations?active=true' "${mod}/guest/probe-cluster.sh" \
   exit 1
 fi
 update_fn="$(sed -n '/^update_dev_cluster() {/,/^}/p' "${script}")"
-if ! grep -E '^  update\)' -A2 "${script}" | grep -Fq 'update_dev_cluster'; then
+if ! grep -Fq 'update_dev_cluster' <<<"$(grep -E '^  update\)' -A2 "${script}")"; then
   echo "vagrant.sh update must run update_dev_cluster" >&2
   exit 1
 fi
@@ -322,14 +322,14 @@ if ! grep -Fq 'controller wait timed out' "${script}"; then
   echo "rolling reload must keep waiting for Flynn after start-node controller timeout" >&2
   exit 1
 fi
-if ! awk '/^start_one_cluster_node\(\)/,/^}/' "${script}" | grep -Fq 'if [[ "${st}" -ne 0 ]]; then'; then
+if ! grep -Fq 'if [[ "${st}" -ne 0 ]]; then' <<<"$(awk '/^start_one_cluster_node\(\)/,/^}/' "${script}")"; then
   echo "start_one_cluster_node must return non-zero from if so the caller can tell exit 2 from a controller timeout" >&2
   exit 1
 fi
 # bash 5.3 still exits the whole script on `return 2` when the function has
 # re-enabled set -e, even from an if body and even when the caller used set +e.
 # dev-db-node is not a raft member; that exit 2 must come back to rolling reload.
-if awk '/^start_one_cluster_node\(\)/,/^}/' "${script}" | grep -Eq '^[[:space:]]*set -e([[:space:]]|$)'; then
+if grep -Eq '^[[:space:]]*set -e([[:space:]]|$)' <<<"$(awk '/^start_one_cluster_node\(\)/,/^}/' "${script}")"; then
   echo "start_one_cluster_node must not set -e before returning; a non-zero return then aborts rolling reload" >&2
   exit 1
 fi
@@ -475,7 +475,7 @@ if ! grep -Fq '"controller-scheduler" in unhealthy' "${mod}/guest/probe-cluster.
   echo "probe must not settle when controller-scheduler is unhealthy" >&2
   exit 1
 fi
-if grep -E 'reload\|restart\)' -A5 "${script}" | grep -Fq 'start_existing_cluster'; then
+if grep -Fq 'start_existing_cluster' <<<"$(grep -E 'reload\|restart\)' -A5 "${script}")"; then
   echo "reload must not start every node only after all VMs reboot" >&2
   exit 1
 fi
@@ -695,11 +695,11 @@ if ! grep -Fq 'halt_builder' "${script}"; then
   echo "vagrant.sh must halt the builder after compile so it does not sit on ~30GB RAM" >&2
   exit 1
 fi
-if grep -E 'build\)' -A3 "${script}" | grep -Fq 'build_images' && ! grep -E 'build\)' -A4 "${script}" | grep -Fq 'halt_builder'; then
+if grep -Fq 'build_images' <<<"$(grep -E 'build\)' -A3 "${script}")" && ! grep -Fq 'halt_builder' <<<"$(grep -E 'build\)' -A4 "${script}")"; then
   echo "vagrant.sh build must halt the builder after images are built" >&2
   exit 1
 fi
-if ! sed -n '/^update_dev_cluster() {/,/^}/p' "${script}" | grep -B1 'update_running_cluster' | grep -Fq 'halt_builder'; then
+if ! grep -Fq 'halt_builder' <<<"$(sed -n '/^update_dev_cluster() {/,/^}/p' "${script}" | grep -B1 'update_running_cluster')"; then
   echo "vagrant.sh update must halt the builder after compile before cluster update" >&2
   exit 1
 fi

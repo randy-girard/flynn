@@ -59,7 +59,7 @@ need 'log -n 20' \
   "CLI step must read logaggregator output without --follow"
 need 'cli_run_job' \
   "CLI step must share a time-bounded flynn run helper"
-if ! awk '/^cli_run_job\(/,/^}/' "${smoke}" | grep -q '2>&1'; then
+if ! grep -q '2>&1' <<<"$(awk '/^cli_run_job\(/,/^}/' "${smoke}")"; then
   echo "cli_run_job must capture ssh stderr so unknown_error retries" >&2
   exit 1
 fi
@@ -225,7 +225,7 @@ need 'CLI functions \(pre-upgrade\)' \
   "smoke must run CLI probes before the first --force update"
 need 'one CLI sweep per topology' \
   "upgrade and restore must not repeat the live CLI sweep"
-if awk '/^step_cli_functions\(/,/^}/' "${smoke}" | grep -qE 'scale web='; then
+if grep -qE 'scale web=' <<<"$(awk '/^step_cli_functions\(/,/^}/' "${smoke}")"; then
   echo "CLI step must not scale web (creates extra jobs and races HTTP verify)" >&2
   exit 1
 fi

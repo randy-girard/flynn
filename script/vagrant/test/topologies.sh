@@ -75,7 +75,7 @@ if ! grep -Fq -- '--min-hosts "${MIN_HOSTS}"' "${smoke}"; then
   echo "bootstrap min-hosts must follow the topology (1 = singleton, N = HA)" >&2
   exit 1
 fi
-if grep -v '^#' "${smoke}" | grep -qE -- '--min-hosts 3'; then
+if grep -qE -- '--min-hosts 3' <<<"$(grep -v '^#' "${smoke}")"; then
   echo "bootstrap must not hard-code --min-hosts 3" >&2
   exit 1
 fi

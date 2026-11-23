@@ -73,7 +73,7 @@ need_in_host "${ROOT}/host/cli/volume.go" 'Squashfs layers are shared' \
   "volume gc must keep image layers from finished jobs so host-restart GC cannot unmount them"
 need_in_host "${ROOT}/host/libcontainer_backend.go" 'EnsureMounted' \
   "starting a job must remount a squashfs volume whose mount path disappeared"
-if grep -A20 'vol": {' "${smoke}" | grep -q 'delete_on_stop'; then
+if grep -q 'delete_on_stop' <<<"$(grep -A20 'vol": {' "${smoke}")"; then
   echo "volume smoke must persist /data across job stop (no delete_on_stop)" >&2
   exit 1
 fi

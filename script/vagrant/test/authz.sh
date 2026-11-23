@@ -62,7 +62,7 @@ need "${smoke}" 'cli-pg-blobstore' \
 need "${smoke}" 'flynn-host pg:psql' \
   "platform console probe must use flynn-host pg (not the tenant plugin CLI)"
 need "${ROOT}/script/vagrant/test/backup.sh" 'grep -q' \
-  "backup SIGPIPE contract must keep forbidding tar -tf | grep -q"
+  "backup SIGPIPE contract must keep forbidding tar -tf piped into grep -q"
 need "${ROOT}/script/vagrant/test/data-and-passes.sh" 'ui_table_cell' \
   "report alignment contract must keep ui_table_cell width checks"
 

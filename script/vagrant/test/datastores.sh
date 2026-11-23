@@ -91,11 +91,11 @@ need "${example}" 'id: datastores' \
 need "${readme}" '--item datastores' \
   "test/README.md must document how to run the datastore plugin smoke"
 
-if ! awk '/^resource_add_candidates\(/,/^}/' "${smoke}" | grep -q 'mysql'; then
+if ! grep -q 'mysql' <<<"$(awk '/^resource_add_candidates\(/,/^}/' "${smoke}")"; then
   echo "resource_add_candidates must list mysql before mariadb" >&2
   exit 1
 fi
-if ! awk '/^resource_add_candidates\(/,/^}/' "${smoke}" | grep -q 'mariadb'; then
+if ! grep -q 'mariadb' <<<"$(awk '/^resource_add_candidates\(/,/^}/' "${smoke}")"; then
   echo "resource_add_candidates must fall back to mariadb" >&2
   exit 1
 fi
@@ -108,12 +108,12 @@ if [[ -z "${mysql_line}" ]]; then
   exit 1
 fi
 
-if awk '/^apply_resume_at_skips\(/,/^}/' "${smoke}" | grep -q 'SMOKE_DATASTORE_PROVISION'; then
+if grep -q 'SMOKE_DATASTORE_PROVISION' <<<"$(awk '/^apply_resume_at_skips\(/,/^}/' "${smoke}")"; then
   echo "RESUME_AT skips must not force throwaway provision (upgrade/backup set SKIP_DEPLOY=1)" >&2
   exit 1
 fi
 
-if awk '/^exercise_datastore_followers\(/,/^}/' "${smoke}" | grep -q 'APP_NAME="${fol}"'; then
+if grep -q 'APP_NAME="${fol}"' <<<"$(awk '/^exercise_datastore_followers\(/,/^}/' "${smoke}")"; then
   echo "follower ping must not flynn -a the database app (cannot run a job there)" >&2
   exit 1
 fi
@@ -137,7 +137,7 @@ need "${smoke}" 'redis_follower_seeded' \
 # skip_deploy is set so git-push is skipped, but throwaway provision still
 # boots both 1-node and 3-node clusters. The single-topology SKIP_DEPLOY
 # guard must not apply when SMOKE_DATASTORE_PROVISION=1.
-if ! awk '/^parse_smoke_topologies\(/,/^}/' "${smoke}" | grep -q 'SMOKE_DATASTORE_PROVISION'; then
+if ! grep -q 'SMOKE_DATASTORE_PROVISION' <<<"$(awk '/^parse_smoke_topologies\(/,/^}/' "${smoke}")"; then
   echo "parse_smoke_topologies must allow SKIP_DEPLOY with topologies 1,3 when throwing away datastores" >&2
   exit 1
 fi

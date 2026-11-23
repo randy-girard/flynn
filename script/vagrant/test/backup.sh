@@ -75,7 +75,7 @@ if ! grep -q 'Start blobstore before restoring' "${ROOT}/host/cli/bootstrap.go";
   echo "bootstrap --from-backup must start blobstore before plugin dump restore" >&2
   exit 1
 fi
-if grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'Cluster backup' | grep -qF 'SKIP_DEPLOY=1'; then
+if grep -qF 'SKIP_DEPLOY=1' <<<"$(grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'Cluster backup')"; then
   echo "SKIP_DEPLOY must not skip cluster backup (RESUME_AT=upgrade/backup still need restore)" >&2
   exit 1
 fi
@@ -153,7 +153,7 @@ need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
 need 'wait_selected_sirenia_ha "after restore"' \
   "HA restore (including discovery 1→3) must wait for postgres sirenia after --from-backup"
-if awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}" | grep -q 'args+=(mariadb)'; then
+if grep -q 'args+=(mariadb)' <<<"$(awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}")"; then
   echo "mysql/mongodb plugins ScaleUp singleton; wait_selected_sirenia_ha must not wait for mariadb HA" >&2
   exit 1
 fi
@@ -173,8 +173,8 @@ if grep -q 'assert_databases post-restore' "${smoke}"; then
   exit 1
 fi
 
-if grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'tar -tf' | grep -qF '| grep -q'; then
-  echo "backup member check must not use tar -tf | grep -q (SIGPIPE exit 141 under pipefail)" >&2
+if grep -qE '[|][[:space:]]*grep -q' <<<"$(grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'tar -tf')"; then
+  echo "backup member check must not pipe tar -tf into grep -q (SIGPIPE exit 141 under pipefail)" >&2
   exit 1
 fi
 if ! grep -qF 'members="\$(tar -tf' "${smoke}"; then

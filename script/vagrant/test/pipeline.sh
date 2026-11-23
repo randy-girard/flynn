@@ -43,11 +43,11 @@ need "${smoke}" 'cli-help-pipeline' \
 need "${example}" 'id: pipeline' \
   "example matrix must include a pipeline promote configuration"
 
-if awk '/^step_install_plugins\(/,/^}/' "${smoke}" | grep -q 'probe_pipeline_promote'; then
+if grep -q 'probe_pipeline_promote' <<<"$(awk '/^step_install_plugins\(/,/^}/' "${smoke}")"; then
   echo "pipeline promote cannot run at plugin-install time; apps are not deployed yet" >&2
   exit 1
 fi
-if ! awk '/^step_cli_functions\(/,/^}/' "${smoke}" | grep -q 'probe_pipeline_promote'; then
+if ! grep -q 'probe_pipeline_promote' <<<"$(awk '/^step_cli_functions\(/,/^}/' "${smoke}")"; then
   echo "pipeline promote must run in the live CLI step after apps are uploaded" >&2
   exit 1
 fi

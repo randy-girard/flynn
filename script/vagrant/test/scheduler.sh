@@ -48,11 +48,11 @@ need "${smoke}" 'cli-help-scheduler' \
 need "${smoke}" 'help scheduler add' \
   "scheduler --every docs live under flynn help scheduler add, not parent help"
 
-if awk '/^step_install_plugins\(/,/^}/' "${smoke}" | grep -q 'probe_scheduler_interval_job'; then
+if grep -q 'probe_scheduler_interval_job' <<<"$(awk '/^step_install_plugins\(/,/^}/' "${smoke}")"; then
   echo "scheduler interval fire cannot run at plugin-install time; apps are not deployed yet" >&2
   exit 1
 fi
-if ! awk '/^step_cli_functions\(/,/^}/' "${smoke}" | grep -q 'probe_scheduler_interval_job'; then
+if ! grep -q 'probe_scheduler_interval_job' <<<"$(awk '/^step_cli_functions\(/,/^}/' "${smoke}")"; then
   echo "scheduler interval fire must run in the live CLI step after apps are uploaded" >&2
   exit 1
 fi

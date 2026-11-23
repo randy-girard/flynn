@@ -112,7 +112,7 @@ need_in "${ROOT}/host/cli/github_updater.go" 'AllowDatastoreUnhealthy: allowData
   "remote host settle must not loop 10m on postgres before images are pulled"
 need_in "${ROOT}/host/cli/github_updater.go" 'waiting for cluster to be ready after daemon restart' \
   "image rollout must wait for host-infra after ReplaceHostInfraJobs"
-if ! grep -F 'waiting for cluster to be ready after daemon restart' -A6 "${github_updater}" | grep -Fq 'waitForClusterHealthyExcept'; then
+if ! grep -Fq 'waitForClusterHealthyExcept' <<<"$(grep -F 'waiting for cluster to be ready after daemon restart' -A6 "${github_updater}")"; then
   echo "post-image health wait must skip pre-existing postgres unhealth so system-app deploys can run" >&2
   exit 1
 fi

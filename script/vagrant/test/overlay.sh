@@ -46,7 +46,7 @@ need "${vagrant}" './build-dev' \
   "dev must overlay ./build-dev onto guest build/ so smoke keeps ./build"
 need "${vagrant}" 'private_network' \
   "cluster nodes must use a host-only private_network (not NAT forwards) for service ports"
-if grep -vE '^\s*#' "${vagrant}" | grep -q 'forwarded_port'; then
+if grep -q 'forwarded_port' <<<"$(grep -vE '^\s*#' "${vagrant}")"; then
   echo "Vagrantfile must not NAT-forward cluster ports (that bypasses guest UFW)" >&2
   exit 1
 fi
@@ -124,7 +124,7 @@ need "${ROOT}/updater/updater.go" 'skipping controller deploy of host-infra app'
   "controller must not all-at-once discoverd/flannel (exclusive host ports); ReplaceHostInfraJobs rolls them"
 need "${ROOT}/host/cli/github_updater.go" 'skipping controller deploy of host-infra app' \
   "controller must not all-at-once discoverd/flannel (exclusive host ports); ReplaceHostInfraJobs rolls them"
-if grep -F 'func reexecUpdateBinary' -A 30 "${ROOT}/host/cli/github_updater.go" | grep -Fq 'current == newPath'; then
+if grep -Fq 'current == newPath' <<<"$(grep -F 'func reexecUpdateBinary' -A 30 "${ROOT}/host/cli/github_updater.go")"; then
   echo "same-version tarball overwrite must re-exec; path equality skips ReplaceHostInfraJobs" >&2
   exit 1
 fi
