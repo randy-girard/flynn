@@ -85,7 +85,11 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
              datastore-primary datastore-replica tenant-job host-restart
              node-reboot). After each fault, wait up to CHAOS_TIMEOUT seconds
              (default 900) for every monitor check to pass; stop at the first
-             round that does not recover. CHAOS_APP (e.g. kafka) limits the
+             round that does not recover. Fails too when every round was
+             skipped, more than CHAOS_MAX_SKIPPED were skipped, a recovery
+             took longer than CHAOS_TIMEOUT, or a round broke CHAOS_BUDGET
+             (<fault>:<check>=<max> failed samples; default
+             tenant-job:tenants=0 datastore-replica:tenants=0). CHAOS_APP (e.g. kafka) limits the
              datastore kinds to apps whose name contains it. CHAOS_SEED repeats a run,
              CHAOS_SETTLE (default 20) and CHAOS_NODE_DOWN (default 60) are
              seconds. The monitor runs in the background for the whole run

@@ -409,18 +409,90 @@ chaos_write_report() {
   } > "${dir}/report.txt"
 }
 
+# CHAOS_DEFAULT_BUDGET: killing one tenant job or a datastore replica must not
+# cost a single failed tenant ingress sample.
+CHAOS_DEFAULT_BUDGET="tenant-job:tenants=0 datastore-replica:tenants=0"
+
+# chaos_check_budget prints a FAILED line and returns 1 when CHAOS_BUDGET or
+# CHAOS_MAX_SKIPPED cannot be parsed, so a typo fails before the first fault.
+chaos_check_budget() {
+  local entry
+  for entry in ${CHAOS_BUDGET-${CHAOS_DEFAULT_BUDGET}}; do
+    if [[ ! "${entry}" =~ ^[a-z-]+:[a-z]+=[0-9]+$ ]]; then
+      echo "FAILED: bad CHAOS_BUDGET entry ${entry} (want <fault>:<check>=<max>)"
+      return 1
+    fi
+  done
+  if [[ -n "${CHAOS_MAX_SKIPPED:-}" && ! "${CHAOS_MAX_SKIPPED}" =~ ^[0-9]+$ ]]; then
+    echo "FAILED: bad CHAOS_MAX_SKIPPED ${CHAOS_MAX_SKIPPED} (want a number)"
+    return 1
+  fi
+}
+
+# chaos_verdict prints the verdict of the run in $1 (rounds.tsv, samples.tsv)
+# and returns 0 for PASSED, 1 for FAILED and 2 for a bad CHAOS_BUDGET. It
+# fails when no round injected a fault, when more than CHAOS_MAX_SKIPPED
+# (unset: no limit) rounds were skipped, when a round took longer than $2
+# (CHAOS_TIMEOUT) seconds to recover, or when a round breaks a budget.
+# CHAOS_BUDGET (default CHAOS_DEFAULT_BUDGET, empty for none) is a list of
+# <fault>:<check>=<max>: <check> is a health section (cluster, tenants,
+# plugins, resources, orphans, bridge, monitor, nodes) and <max> the failed
+# samples of it allowed while that round runs, "unhealthy" counts every
+# failed sample, and "recovery" is the most seconds the round may take.
+chaos_verdict() {
+  local dir="$1" timeout="$2" budget="${CHAOS_BUDGET-${CHAOS_DEFAULT_BUDGET}}"
+  chaos_check_budget || return 2
+  awk -F'\t' -v timeout="${timeout}" -v budget="${budget}" -v maxskip="${CHAOS_MAX_SKIPPED:-}" '
+    BEGIN {
+      nb = split(budget, b, " ")
+      for (k = 1; k <= nb; k++) { split(b[k], p, /[:=]/); lim[p[1], p[2]] = p[3] + 0; checks[p[1]] = checks[p[1]] " " p[2] }
+    }
+    FILENAME == ARGV[1] {
+      if ($3 !~ /^round [0-9]+ /) next
+      split($3, p, " ")
+      if ($4 != "healthy") bad[p[2], "unhealthy"]++
+      ns = split($5, s, ",")
+      for (k = 1; k <= ns; k++) if (s[k] != "-") bad[p[2], s[k]]++
+      next
+    }
+    {
+      nr++
+      if ($6 == "skipped") { skp++; next }
+      if ($6 != "recovered") next
+      rec++
+      secs = $7; sub(/s$/, "", secs); secs += 0
+      if (secs > timeout + 0) out = out "; round " $1 " " $2 " recovered in " secs "s, more than CHAOS_TIMEOUT=" timeout "s"
+      nc = split(checks[$2], c, " ")
+      for (k = 1; k <= nc; k++) {
+        max = lim[$2, c[k]]
+        if (c[k] == "recovery") { if (secs > max) out = out "; round " $1 " " $2 " recovered in " secs "s, budget " max "s"; continue }
+        got = bad[$1, c[k]] + 0
+        if (got > max) out = out "; round " $1 " " $2 " had " got " " (c[k] == "unhealthy" ? "UNHEALTHY" : "failed " c[k]) " samples, budget " max
+      }
+    }
+    END {
+      if (!rec) out = "; no fault was injected (" skp + 0 " skipped)" out
+      if (maxskip != "" && skp + 0 > maxskip + 0) out = out "; " skp " skipped rounds, more than CHAOS_MAX_SKIPPED=" maxskip
+      if (out != "") { print "FAILED: " substr(out, 3); exit 1 }
+      printf "PASSED: %d recovered, %d skipped\n", rec, skp
+    }' "${dir}/samples.tsv" "${dir}/rounds.tsv"
+}
+
 # chaos_cluster runs CHAOS_ROUNDS faults (default 10) cycling through a
 # shuffled CHAOS_FAULTS list. After each fault it waits CHAOS_SETTLE seconds,
 # then up to CHAOS_TIMEOUT seconds for every health section to pass. Stops at
 # the first round that does not recover. CHAOS_SEED repeats a run. A
 # background monitor samples health for the whole run, and a report is
-# written to CHAOS_REPORT_DIR (default ./flynn-logs/chaos/<UTC time>).
+# written to CHAOS_REPORT_DIR (default ./flynn-logs/chaos/<UTC time>). The
+# verdict is chaos_verdict's: all rounds skipped, a slow recovery or a broken
+# CHAOS_BUDGET fails the run too.
 chaos_cluster() {
   require_cluster_nodes
   local rounds="${CHAOS_ROUNDS:-10}" timeout="${CHAOS_TIMEOUT:-900}" settle="${CHAOS_SETTLE:-20}"
   local seed="${CHAOS_SEED:-$(date +%s)}" kinds=() i j tmp kind start st inject_at
   local started verdict
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  chaos_check_budget >&2 || return 1
   CHAOS_RUN_DIR="${CHAOS_REPORT_DIR:-${ROOT}/flynn-logs/chaos/$(date -u +%Y%m%dT%H%M%SZ)}"
   mkdir -p "${CHAOS_RUN_DIR}"
   : > "${CHAOS_RUN_DIR}/samples.tsv"
@@ -493,7 +565,7 @@ chaos_cluster() {
   if [[ -n "${verdict}" ]]; then
     st=1
   else
-    verdict="PASSED: $(awk -F'\t' '$6 == "recovered"' "${CHAOS_RUN_DIR}/rounds.tsv" | wc -l | tr -d ' ') recovered, $(awk -F'\t' '$6 == "skipped"' "${CHAOS_RUN_DIR}/rounds.tsv" | wc -l | tr -d ' ') skipped"
+    verdict="$(chaos_verdict "${CHAOS_RUN_DIR}" "${timeout}")" || st=1
   fi
   chaos_write_report "${CHAOS_RUN_DIR}" "${seed}" "${rounds}" "${kinds[*]}" "${started}" "${verdict}"
   echo
