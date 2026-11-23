@@ -74,6 +74,39 @@ func TestStreamFormationEventsReconnectsAndExitsWhenSnapshotNeverArrives(t *test
 	}
 }
 
+// A scheduler stopped while it waits for the formation list must stop
+// waiting, not exit the process when the give-up timer fires. A test
+// scheduler stopped before its snapshot used to end the whole test binary
+// five minutes later, so `go test -count=N` died after ~5m with no message.
+func TestStoppedSchedulerDoesNotExitWaitingForFormations(t *testing.T) {
+	l := log15.New()
+	l.SetHandler(log15.DiscardHandler())
+	cc := &silentFormationController{FakeControllerClient: testutils.NewFakeControllerClient()}
+	s := NewScheduler(newTestCluster(nil), cc, newFakeDiscoverd(true), l)
+	s.formationSnapshotTimeout = 40 * time.Millisecond
+	s.formationSnapshotGiveUp = 300 * time.Millisecond
+	var exits int32
+	s.exit = func() { atomic.AddInt32(&exits, 1) }
+
+	returned := make(chan struct{})
+	go func() {
+		s.streamFormationEvents()
+		close(returned)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	s.Stop()
+
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("streamFormationEvents kept waiting after Stop")
+	}
+	time.Sleep(400 * time.Millisecond)
+	if n := atomic.LoadInt32(&exits); n != 0 {
+		t.Fatalf("stopped scheduler called exit %d time(s)", n)
+	}
+}
+
 func TestFormationSnapshotBoundsDefaults(t *testing.T) {
 	s := NewScheduler(nil, nil, nil, log15.New())
 	if s.formationSnapshotTimeout <= 0 || s.formationSnapshotGiveUp <= s.formationSnapshotTimeout {

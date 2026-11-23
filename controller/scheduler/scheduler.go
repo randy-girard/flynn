@@ -471,6 +471,10 @@ func (s *Scheduler) streamFormationEvents() {
 		select {
 		case <-current:
 			return
+		case <-s.stop:
+			// a stopped scheduler is leaving anyway; exiting the
+			// process here would end whatever else runs in it
+			return
 		case <-tick.C:
 			log.Warn("still waiting for current formation list", "duration", time.Since(start))
 		case <-giveUp.C:
