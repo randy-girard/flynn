@@ -1875,6 +1875,7 @@ func (TestSuite) TestApplyControllerJobListKeepsPendingBuilder(c *C) {
 // Formation.key() on a nil formation panics; an empty host-count map piles
 // every compile onto whichever host the shuffle returns first.
 func (TestSuite) TestBuildPlacementWithoutFormation(c *C) {
+	defer reseedMathRandomly()
 	for seed := int64(1); seed <= 40; seed++ {
 		random.Math.Seed(seed)
 		s := &Scheduler{
@@ -1920,6 +1921,35 @@ func (TestSuite) TestBuildPlacementWithoutFormation(c *C) {
 			c.Fatalf("seed %d: volumes = %+v, want one DeleteOnStop /tmp on hostB", seed, job.Volumes)
 		}
 	}
+}
+
+// reseedMathRandomly gives random.Math a fresh crypto/rand seed. A test that
+// seeds the process-wide RNG for repeatable shuffles must call it when it
+// finishes. Otherwise every later test in the package replays the same
+// "random" host shuffles, and a test that relies on a retry eventually
+// picking another host (TestFailingAddJob) can keep losing.
+func reseedMathRandomly() {
+	var seed int64
+	for _, b := range random.Bytes(8) {
+		seed = seed<<8 | int64(b)
+	}
+	random.Math.Seed(seed)
+}
+
+// A test that seeds random.Math must not leave it seeded. Two runs of the
+// seeded placement test are followed by the same draws only if the RNG was
+// left in a fixed state.
+func (TestSuite) TestSeededPlacementTestLeavesRandomUnpredictable(c *C) {
+	draws := func() []int64 {
+		TestSuite{}.TestBuildPlacementWithoutFormation(c)
+		out := make([]int64, 8)
+		for i := range out {
+			out[i] = random.Math.Int63()
+		}
+		return out
+	}
+	first, second := draws(), draws()
+	c.Assert(second, Not(DeepEquals), first, Commentf("random.Math replays the same sequence after TestBuildPlacementWithoutFormation"))
 }
 
 func TestIsMissingHostVolumeError(t *testing.T) {
