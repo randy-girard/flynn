@@ -127,6 +127,9 @@ func (x *Cluster) collectDebugInfo() {
 		"flynn-host",
 		"collect-debug-info",
 		"--log-dir", filepath.Join("/var/lib/flynn", x.Host.JobID, "logs"),
+		// Local-only (the default): keep the redacted archive next to the
+		// nested host's logs on the test VM.
+		"--filename", filepath.Join("/var/lib/flynn", x.Host.JobID, "logs", "debug-info.tar.gz"),
 	)
 	cmd.Env = map[string]string{"DISCOVERD": fmt.Sprintf("http://%s:1111", x.IP)}
 	cmd.Mounts = []host.Mount{{
