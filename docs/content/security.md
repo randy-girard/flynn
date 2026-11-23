@@ -579,7 +579,10 @@ subkey derived from the cluster key with HKDF, and it stops working at `exp`
 (`GET`/`HEAD`) and `BUILD_CACHE_PUT_URL` can only write (`PUT`); each is valid
 only for that app's `-cache.tgz` or `-docker-cache.tgz` object, as named in the
 token. The slugbuilder script does the cache download and upload as root and
-unsets both URLs before any buildpack runs, so buildpack code never sees them. A scoped
+unsets both URLs before any buildpack runs, so buildpack code never sees them. The
+app's `.slugignore` is applied by the unprivileged build user, never as root,
+and only to paths inside the build directory (`..` patterns and symlink escapes
+are skipped). A scoped
 `build:artifacts` token (the same one create-artifact uses for the
 controller) may GET/HEAD/PUT only its own app's objects:
 `/slugs/apps/<app-id>/layers/`, `/slugs/apps/<app-id>/images/`, and

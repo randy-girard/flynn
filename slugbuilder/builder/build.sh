@@ -51,7 +51,7 @@ ensure_indent() {
 }
 
 run_unprivileged() {
-  setuidgid "${USER}" $@
+  setuidgid "${USER}" "$@"
 }
 
 # run curl silently and retry upto 3 times
@@ -65,30 +65,6 @@ trim() {
   var="${var#"${var%%[![:space:]]*}"}"
   var="${var%"${var##*[![:space:]]}"}"
   echo -n "$var"
-}
-
-prune_slugignore() {
-  shopt -s nullglob
-  # read slugignore into array
-  local globs=()
-  local paths=()
-  readarray -t globs < "${build_dir}/.slugignore"
-  # for line in slugignore
-  for glob in ${globs[@]}; do
-    # strip whitespace
-    glob=$(trim ${glob})
-    # ignore blank lines and comment lines
-    if [[ ${glob} == "" ]] || [[ ${glob:0:1} == "#" ]]; then
-      continue
-    fi
-    # remove leading slash(es)
-    glob="${glob#"${glob%%[!"/"]*}"}"
-    # append to build root and add to array of paths to remove
-    paths=("${paths[@]}" ${build_dir}/${glob})
-  done
-  echo_title "Deleting ${#paths[@]} files matching .slugignore patterns."
-  rm -rf ${paths[@]}
-  shopt -u nullglob
 }
 
 cd ${app_dir}
@@ -150,9 +126,11 @@ export CURL_CONNECT_TIMEOUT=30
 # 30s (only makes sense on EC2) to 10 minutes
 export CURL_TIMEOUT=600
 
-# Remove files matched by .slugignore
-if [[ -f "${build_dir}/.slugignore" ]]; then
-  prune_slugignore
+# Remove files matched by .slugignore. EDGE-23: the patterns are tenant input,
+# so the build user applies them and slugignore.sh keeps every match inside
+# build_dir (no `..`, no symlink escapes, patterns are never word-split).
+if [[ -f "${build_dir}/.slugignore" || -L "${build_dir}/.slugignore" ]]; then
+  run_unprivileged bash /builder/slugignore.sh "${build_dir}"
 fi
 
 ## Buildpack detection

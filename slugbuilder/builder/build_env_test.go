@@ -259,3 +259,32 @@ func TestBuildScriptUsesSSHKeyHelpers(t *testing.T) {
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// EDGE-23: .slugignore is tenant input; root must not apply it.
+func TestBuildScriptPrunesSlugignoreUnprivileged(t *testing.T) {
+	src, err := os.ReadFile("build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	if strings.Contains(text, "prune_slugignore") || strings.Contains(text, "rm -rf ${paths") {
+		t.Fatal("build.sh still prunes .slugignore as root with unquoted patterns")
+	}
+	call := `run_unprivileged bash /builder/slugignore.sh "${build_dir}"`
+	if !strings.Contains(text, call) {
+		t.Fatalf("build.sh must prune with %q", call)
+	}
+	if !strings.Contains(text, `setuidgid "${USER}" "$@"`) {
+		t.Fatal(`run_unprivileged must pass its arguments quoted ("$@")`)
+	}
+	if strings.Index(text, call) > strings.Index(text, "source /builder/buildpack-policy.sh") {
+		t.Fatal("prune must stay before buildpack detection")
+	}
+	manifest, err := os.ReadFile(filepath.Join("..", "..", "builder", "manifest.json.template"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(manifest), `"slugbuilder/builder/slugignore.sh": "/builder/slugignore.sh"`) {
+		t.Fatal("builder/manifest.json.template must copy slugignore.sh into the slugbuilder image")
+	}
+}

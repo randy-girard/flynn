@@ -138,6 +138,28 @@ a custom buildpack:
 flynn env:set BUILDPACK_URL=https://github.com/ryandotsmith/null-buildpack
 ```
 
+### Excluding files with `.slugignore`
+
+A `.slugignore` file in the repository root lists files to delete before the
+buildpack runs, so they stay out of the slug. Each line is one shell glob,
+relative to the app root:
+
+```text
+# comments and blank lines are ignored
+*.md
+docs/
+/spec/fixtures
+```
+
+A leading `/` still means the app root, not the filesystem root. A line is a
+single pattern: spaces, quotes, `$()` and leading dashes are matched as
+literal characters. `*` does not match dotfiles and `**` is not special. A
+pattern with a `..` component is skipped with a message in the build output.
+Patterns are applied by the unprivileged build user and only inside the app
+directory: a match reached through a symlink to somewhere else is left alone
+(a matched symlink is removed itself), and a `.slugignore` that is a symlink is
+ignored.
+
 ## Deployment
 
 Each time new code is pushed or the app configuration is changed, a new release
