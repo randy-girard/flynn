@@ -356,7 +356,7 @@ func (s *HTTPListener) listenAndServe() error {
 			return listenErr{addr, err}
 		}
 		if s.proxyProtocol {
-			listener = proxyproto.Listener{listener}
+			listener = proxyproto.Listener{Listener: listener}
 		}
 		s.listeners = append(s.listeners, listener)
 
@@ -414,7 +414,7 @@ func (s *HTTPListener) listenAndServeTLS() error {
 			return listenErr{addr, err}
 		}
 		if s.proxyProtocol {
-			l = proxyproto.Listener{l}
+			l = proxyproto.Listener{Listener: l}
 		}
 		listener := tls.NewListener(l, tlsConfig)
 		s.tlsListeners = append(s.tlsListeners, listener)

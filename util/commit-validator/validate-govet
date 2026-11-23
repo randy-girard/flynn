@@ -4,7 +4,8 @@
 # script/run-unit-tests call this; it fails on any vet finding.
 #
 # Usage: util/commit-validator/validate-govet [packages...]
-#   default packages: ./discoverd/...
+#   default packages: discoverd and the edge services (router, blobstore,
+#   gitreceive, logaggregator, tarreceive, cli, slugbuilder)
 #
 set -eo pipefail
 
@@ -13,7 +14,15 @@ cd "$(dirname "${BASH_SOURCE}")/../.."
 export GOFLAGS="${GOFLAGS:--mod=vendor -buildvcs=false}"
 
 if [ $# -eq 0 ]; then
-  set -- ./discoverd/...
+  set -- \
+    ./discoverd/... \
+    ./router/... \
+    ./blobstore/... \
+    ./gitreceive/... \
+    ./logaggregator/... \
+    ./tarreceive/... \
+    ./cli/... \
+    ./slugbuilder/...
 fi
 
 echo "==> go vet $*"

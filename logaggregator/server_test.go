@@ -80,24 +80,24 @@ func (s *ServerTestSuite) TestHostCursors(c *C) {
 	write(msg2)
 
 	assertCursors(map[string]utils.HostCursor{
-		"host1": {msg1.Timestamp, 1},
-		"host2": {msg2.Timestamp, 1},
+		"host1": {Time: msg1.Timestamp, Seq: 1},
+		"host2": {Time: msg2.Timestamp, Seq: 1},
 	})
 
 	// test new timestamp with seq rolled over
 	msg3 := newSeqMessage("host1", 1, 1)
 	write(msg3)
 	assertCursors(map[string]utils.HostCursor{
-		"host1": {msg3.Timestamp, 1},
-		"host2": {msg2.Timestamp, 1},
+		"host1": {Time: msg3.Timestamp, Seq: 1},
+		"host2": {Time: msg2.Timestamp, Seq: 1},
 	})
 
 	// test same timestamp with new seq
 	msg4 := newSeqMessage("host1", 2, 1)
 	write(msg4)
 	assertCursors(map[string]utils.HostCursor{
-		"host1": {msg4.Timestamp, 2},
-		"host2": {msg2.Timestamp, 1},
+		"host1": {Time: msg4.Timestamp, Seq: 2},
+		"host2": {Time: msg2.Timestamp, Seq: 1},
 	})
 }
 
