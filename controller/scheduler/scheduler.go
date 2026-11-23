@@ -2856,7 +2856,20 @@ func (s *Scheduler) handleActiveJob(activeJob *host.ActiveJob) *Job {
 	// host does in fact start the job (e.g. the AddJob HTTP request timed
 	// out), and in the meantime the job was started successfully on a
 	// different host.
+	//
+	// A compile this scheduler adopted from the controller before anyone
+	// placed it has no host yet (EDGE-34). Its first host event is the
+	// placement another scheduler made, not a stray copy, so take it.
+	if job.HostID == "" && ct.IsBuilderProcessType(job.Type) && buildadmit.JobOnHost(hostJob.ID, activeJob.HostID) {
+		job.HostID = activeJob.HostID
+		job.JobID = hostJob.ID
+	}
 	if job.HostID != activeJob.HostID {
+		// Only the leader stops jobs. A follower's view may simply be older
+		// than the leader's placement.
+		if s.isLeader != nil && !*s.isLeader {
+			return job
+		}
 		s.logger.Warn("stopping job with incorrect host ID", "job.id", job.ID, "expected", job.HostID, "actual", activeJob.HostID)
 		if host, ok := s.hosts[activeJob.HostID]; ok && host.client != nil {
 			client := host.client

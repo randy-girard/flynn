@@ -198,8 +198,10 @@ The controller's scheduler gets updates whenever desired formations change and
 ensures that jobs are always running as required by talking to the flynn-host
 APIs on each host. A scheduler instance runs on every host in the cluster for
 fault tolerance, but only the leader elected by discoverd makes scheduling
-decisions. The leader's loop is the only writer of in-memory jobs, volumes,
-and placements. Host and controller calls from that loop run outside it, and
+decisions. Followers keep a copy of the job list but never stop a job; a
+follower that learned of a git compile before the leader placed it takes the
+leader's placement from the host's event. The leader's loop is the only
+writer of in-memory jobs, volumes, and placements. Host and controller calls from that loop run outside it, and
 the loop only applies the results. When a host rejects a job because a volume
 is missing, the loop resets or blocks the job only if it is still the pending
 job that was sent. A job the loop has already stopped is not placed again. A

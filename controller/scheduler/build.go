@@ -127,6 +127,10 @@ func (s *Scheduler) noteForeignBuild(cj *ct.Job) {
 	if cj == nil || cj.ID == "" || cj.HostID == "" || buildadmit.JobOnHost(cj.ID, cj.HostID) {
 		return
 	}
+	// Only the leader stops builds (EDGE-34).
+	if s.isLeader != nil && !*s.isLeader {
+		return
+	}
 	jobID, hostID := cj.ID, cj.HostID
 	go s.stopBuildOnHost(jobID, hostID)
 }
