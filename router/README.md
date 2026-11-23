@@ -60,7 +60,9 @@ replaces it in place. The router drops the old route's service reference, so
 a service no route uses any more stops its discoverd watch. It closes the
 old route's idle backend connections. A request still running on the old
 route finishes, and its connection is closed after 90 seconds idle. Changing
-the domain stops serving the old domain. Once the last route of an app is
+the domain stops serving the old domain. A domain stays served while any
+of its routes remains: removing or moving the root (`/`) route leaves the
+path routes reachable, and `/` returns 404 until a root route is set. Once the last route of an app is
 gone and its requests have finished, the app's concurrency counter is
 deleted too.
 

@@ -2128,3 +2128,63 @@ func (s *S) TestRemoveMixedCaseDomainRoute(c *C) {
 	res.Body.Close()
 	c.Assert(res.StatusCode, Equals, 404)
 }
+
+func (s *S) TestRemoveRootRouteKeepsPathRoutes(c *C) {
+	srv1 := httptest.NewServer(httpTestHandler("1"))
+	srv2 := httptest.NewServer(httpTestHandler("2"))
+	defer srv1.Close()
+	defer srv2.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+
+	root := s.addRoute(c, l, router.HTTPRoute{
+		Domain:  "rootgone.example.com",
+		Service: "rootgone-1",
+	}.ToRoute())
+	path := s.addRoute(c, l, router.HTTPRoute{
+		Domain:  "rootgone.example.com",
+		Service: "rootgone-2",
+		Path:    "/2/",
+	}.ToRoute())
+	discoverdRegisterHTTPService(c, l, "rootgone-1", srv1.Listener.Addr().String())
+	discoverdRegisterHTTPService(c, l, "rootgone-2", srv2.Listener.Addr().String())
+	assertGet(c, "http://"+l.Addrs[0]+"/2/", "rootgone.example.com", "2")
+
+	s.removeRoute(c, l, root)
+	assertGet(c, "http://"+l.Addrs[0]+"/2/", "rootgone.example.com", "2")
+	res, err := httpClient.Do(newReq("http://"+l.Addrs[0], "rootgone.example.com"))
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 404)
+
+	// the domain goes once its last route goes
+	s.removeRoute(c, l, path)
+	l.mtx.RLock()
+	domains := len(l.domains)
+	l.mtx.RUnlock()
+	c.Assert(domains, Equals, 0)
+}
+
+func (s *S) TestRootRouteChangedToPathIsServed(c *C) {
+	srv := httptest.NewServer(httpTestHandler("1"))
+	defer srv.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+
+	r := s.addRoute(c, l, router.HTTPRoute{
+		Domain:  "topath.example.com",
+		Service: "topath",
+	}.ToRoute())
+	discoverdRegisterHTTPService(c, l, "topath", srv.Listener.Addr().String())
+	assertGet(c, "http://"+l.Addrs[0], "topath.example.com", "1")
+
+	r.Path = "/sub/"
+	s.updateHTTPRoute(c, l, r)
+	assertGet(c, "http://"+l.Addrs[0]+"/sub/", "topath.example.com", "1")
+	res, err := httpClient.Do(newReq("http://"+l.Addrs[0], "topath.example.com"))
+	c.Assert(err, IsNil)
+	res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 404)
+}

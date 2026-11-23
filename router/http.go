@@ -284,14 +284,11 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 	}
 
 	// An update (an edit, a certificate renewal, or every route again after
-	// a resync) replaces the route with this id. Unlink the old one from a
-	// domain or path it no longer serves, then drop its service reference
-	// and its backend connections, or each Set leaks one of each.
+	// a resync) replaces the route with this id. The old one is unlinked
+	// from a domain or path it no longer serves, and its service reference
+	// and backend connections are dropped, or each Set leaks one of each.
 	existing := h.l.routes[data.ID]
 	domain := httpRouteDomainKey(r)
-	if existing != nil && (httpRouteDomainKey(existing) != domain || existing.Path != r.Path) {
-		h.l.unlinkRouteLocked(existing)
-	}
 
 	h.l.routes[data.ID] = r
 	if data.Path == "/" {
@@ -309,6 +306,11 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 	}
 
 	if existing != nil {
+		// unlink after the insert, so a root route that becomes a path
+		// route on the same domain keeps the domain's tree
+		if httpRouteDomainKey(existing) != domain || existing.Path != r.Path {
+			h.l.unlinkRouteLocked(existing)
+		}
 		h.l.releaseService(existing.service)
 		existing.rp.Close()
 	}
@@ -347,7 +349,9 @@ func httpRouteDomainKey(r *httpRoute) string {
 }
 
 // unlinkRouteLocked removes r from the domain tree if it is still the route
-// serving its domain and path. The caller holds s.mtx.
+// serving its domain and path. The tree stays while any other route (a root
+// or a path) uses it, so removing or moving the root route does not strand
+// the path routes. The caller holds s.mtx.
 func (s *HTTPListener) unlinkRouteLocked(r *httpRoute) {
 	domain := httpRouteDomainKey(r)
 	tree, ok := s.domains[domain]
@@ -356,10 +360,13 @@ func (s *HTTPListener) unlinkRouteLocked(r *httpRoute) {
 	}
 	if r.Path == "/" {
 		if tree.backend == r {
-			delete(s.domains, domain)
+			tree.backend = nil
 		}
 	} else if tree.Lookup(r.Path) == r {
 		tree.Remove(r.Path)
+	}
+	if tree.backend == nil && len(tree.children) == 0 {
+		delete(s.domains, domain)
 	}
 }
 
