@@ -21,3 +21,13 @@ func TestSetContext(t *testing.T) {
 		t.Fatalf("Context value = %v, want principal", got.Value(key{}))
 	}
 }
+
+// http.ResponseController finds the connection through Unwrap, which the
+// blobstore needs to put a read deadline on PUT bodies (EDGE-33).
+func TestResponseWriterUnwrap(t *testing.T) {
+	inner := httptest.NewRecorder()
+	rw := NewResponseWriter(inner, context.Background())
+	if got := rw.Unwrap(); got != inner {
+		t.Fatalf("Unwrap() = %v, want the wrapped writer", got)
+	}
+}

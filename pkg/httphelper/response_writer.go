@@ -46,6 +46,12 @@ func (r *ResponseWriter) Write(b []byte) (int, error) {
 	return r.w.Write(b)
 }
 
+// Unwrap returns the wrapped writer, so http.ResponseController can reach
+// the connection (read deadlines on request bodies, for example).
+func (r *ResponseWriter) Unwrap() http.ResponseWriter {
+	return r.w
+}
+
 func (r *ResponseWriter) Written() bool {
 	return r.status != 0
 }
