@@ -59,21 +59,6 @@ Options:
 }
 
 func runExport(args *docopt.Args, client controller.Client) error {
-	var dest io.Writer = os.Stdout
-	if filename := args.String["--file"]; filename != "" {
-		f, err := os.Create(filename)
-		if err != nil {
-			return fmt.Errorf("error creating export file: %s", err)
-		}
-		defer f.Close()
-		dest = f
-	}
-
-	app, err := client.GetApp(mustApp())
-	if err != nil {
-		return fmt.Errorf("error getting app: %s", err)
-	}
-
 	var bar backup.ProgressBar
 	if !args.Bool["--quiet"] && term.IsTerminal(os.Stderr.Fd()) {
 		b := pb.New(0)
@@ -86,9 +71,34 @@ func runExport(args *docopt.Args, client controller.Client) error {
 		bar = b
 	}
 
-	tw := backup.NewTarWriter(app.Name, dest, bar)
-	defer tw.Close()
+	// The export holds the release env and database dumps, so a file is
+	// written owner-only and only replaces path once it is complete.
+	if filename := args.String["--file"]; filename != "" {
+		return backup.WriteFileAtomic(filename, func(w io.Writer) error {
+			return exportApp(client, w, bar)
+		})
+	}
+	return exportApp(client, os.Stdout, bar)
+}
 
+// exportApp writes the app export tar to dest. The tar trailer is part of the
+// export, so an error closing the tar writer is returned.
+func exportApp(client controller.Client, dest io.Writer, bar backup.ProgressBar) error {
+	app, err := client.GetApp(mustApp())
+	if err != nil {
+		return fmt.Errorf("error getting app: %s", err)
+	}
+	tw := backup.NewTarWriter(app.Name, dest, bar)
+	if err := writeExportEntries(client, tw, app, bar); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("error finishing export: %w", err)
+	}
+	return nil
+}
+
+func writeExportEntries(client controller.Client, tw *backup.TarWriter, app *ct.App, bar backup.ProgressBar) error {
 	if err := tw.WriteJSON("app.json", app); err != nil {
 		return fmt.Errorf("error exporting app: %s", err)
 	}

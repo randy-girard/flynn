@@ -1001,7 +1001,12 @@ To export a single app, run `flynn -a APPNAME apps:export --file app.tar`. A fil
 named `app.tar` will be created with the app configuration and image, along with
 a copy of all data stored in associated databases. The app export can be
 restored to the same cluster under a different name, or a different Flynn
-cluster.
+cluster. The export holds the release env (app secrets) and the Postgres and
+MySQL dumps, so `--file` writes it owner-only (mode 0600, tar entries 0600)
+the same way as a cluster backup: to a temp file beside the destination,
+synced, and renamed into place. A failed export, including a full disk on the
+final flush, exits non-zero and never replaces an earlier export. Without
+`--file` the tar goes to stdout and its mode is whatever the redirect creates.
 
 Slug and image layers are copied by a one-off on the blobstore app, using the
 blobstore release. That job is a system job, so it can resolve

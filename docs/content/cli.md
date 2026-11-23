@@ -113,7 +113,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `env` / `env:get` / `env:set` / `env:unset` | App config (`-t <proc>` scopes to one process type). `env:set` / `env:unset` return after creating the release; if a deploy is already running, the new one is queued and runs next |
 | `limit` / `limit:profiles` / `limit:runtime` / `limit:set` | Named runtimes; raw `limit:set` for numeric CPU/memory (when allowed), `max_fd`, `temp_disk`. |
 | `meta` / `meta:set` / `meta:unset` | App metadata |
-| `apps:export` / `apps:import` | Backup and restore an app (`export` / `import` are aliases) |
+| `apps:export` / `apps:import` | Backup and restore an app (`export` / `import` are aliases). The export holds the release env and database dumps, so `apps:export --file` writes it owner-only (mode 0600) to a temp file beside the destination, then syncs and renames it; a failed export, including a failed final write, exits non-zero and leaves an existing file unchanged |
 | `apps:create --owner <handle>` / `apps:transfer <app> <handle>` | Set the owning account on create, or transfer an app. The cluster key with no owner leaves the app unowned. A user may create apps only in its own account, an org where it is owner or admin, or an account where it is an admin collaborator; any other `owner_account` is `403`. `created_by` is always the caller for a user token. |
 
 ### Routing and resources
