@@ -696,6 +696,16 @@ on every error.
 configured before requesting a certificate. Let's Encrypt validates domain
 ownership using HTTP-01 challenges.
 
+Every router answers `/.well-known/acme-challenge/` itself on every host, over HTTP and
+HTTPS, before route lookup, so an app cannot serve that path. It asks each
+`acme-challenge` instance in turn (skipping tenant and build job IPs) and
+returns the first `200`. If no instance has the token it returns the first
+instance's answer (usually `404`), and `502` if none answered. Each attempt has
+a 5 second limit, so a stuck instance delays the answer and does not hold it.
+Only `GET` and `HEAD` are accepted (`405` otherwise). With no usable instance,
+or while the router cannot start its discoverd watch, the answer is `503`. A
+failed watch start is retried after 5 seconds, not on every request.
+
 ### Service Discovery
 
 Flynn registers each web process type in service discovery so the **router**

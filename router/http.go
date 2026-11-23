@@ -65,6 +65,17 @@ type HTTPListener struct {
 	// user/build overlay IP services whose instances it must never use.
 	acmeService *cache.ServiceCache
 	acmeDeny    []*cache.ServiceCache
+	// acmeTimeout bounds each responder attempt and the wait for the
+	// watches to start; acmeRetryDelay is how long a failed start is
+	// remembered. Zero means the defaults.
+	acmeTimeout    time.Duration
+	acmeRetryDelay time.Duration
+	// acmeStarting is the in-flight watch start; acmeFailErr and
+	// acmeFailedUntil remember a failed one. Guarded by mtx.
+	acmeStarting    *acmeStart
+	acmeFailErr     error
+	acmeFailedUntil time.Time
+	acmeClient      *http.Client
 }
 
 type DiscoverdClient interface {
@@ -87,6 +98,9 @@ func (s *HTTPListener) Close() error {
 	}
 	for _, sc := range s.acmeDeny {
 		sc.Close()
+	}
+	if s.acmeClient != nil {
+		s.acmeClient.CloseIdleConnections()
 	}
 	for _, listener := range s.listeners {
 		listener.Close()
@@ -123,7 +137,8 @@ func (s *HTTPListener) Start() error {
 		s.cookieKey = &[32]byte{}
 	}
 
-	// ACME challenge service cache will be initialized lazily when needed
+	// The ACME challenge watches start on the first challenge request.
+	s.acmeClient = newACMEClient(s.acmeTimeoutValue())
 
 	if err := s.startSync(ctx); err != nil {
 		s.Close()
