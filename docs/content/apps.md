@@ -262,6 +262,19 @@ The lock is a lease in the controller (`PUT /apps/:app/build-lock`). Its
 holder renews it every 40 seconds, so a gitreceive or taffy job that dies
 frees the app within two minutes.
 
+### Push limits
+
+A push larger than the cluster's push limit (8 GiB unless an operator
+changed it), or one that stops sending for a minute, is refused before
+anything is built, with the limit and the setting that changes it:
+
+```
+remote: -----> Push refused: it is larger than the gitreceive limit of 8 GiB (MAX_PUSH_SIZE).
+ ! [remote rejected] main -> main (push larger than MAX_PUSH_SIZE (8 GiB))
+```
+
+See [Upload limits](production.html.md#upload-limits).
+
 ### Cancelling Deploys
 
 Deploys via `git push` can be cancelled by killing the push process with

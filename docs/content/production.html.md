@@ -774,12 +774,13 @@ images.
 | Setting | App | Default | Limits |
 | --- | --- | --- | --- |
 | `MAX_PUSH_SIZE` | `gitreceive` | `8g` | The data one `git push` sends (the pack). |
+| `MAX_PUSH_DRAIN` | `gitreceive` | `1g` | How much of a refused push gitreceive still reads, and throws away, past `MAX_PUSH_SIZE`, so that git prints why it was refused (see below). It costs network and time, never disk. `0` turns it off. |
 | `MAX_LAYER_SIZE` | `tarreceive` | `32g` | The layer tar one upload sends. `flynn docker:push` sends the whole image as one uncompressed tar, so this is the largest image you can push. |
 | `MAX_CONCURRENT_LAYERS` | `tarreceive` | `2` | Layers that unpack and run `mksquashfs` at the same time. Others wait for a slot. |
 | `MAX_CONCURRENT_UPLOADS` | `tarreceive` | `8` | Layers received and kept on the tarreceive temp disk at the same time, from the first byte until their temp files are removed. Another layer waits up to 30 seconds for a slot, then gets `503 Service Unavailable` with `Retry-After: 30`; `flynn docker:push` sends the layer again after each `503`, up to 10 times. |
 | `MIN_FREE_DISK` | `tarreceive` | `1g` | Free space left on the tarreceive temp disk. A layer reserves twice its declared length (the tar, then its unpacked files) and is refused before anything is written when the free space, less what the layers in progress have reserved, would fall under this: `507 Insufficient Storage` when it does not fit even alone, a retryable `503` when it fits once the other layers finish. While a layer is written the free space is checked every 64 MiB, which also stops a layer sent without a length; it then fails with `507` and its temp file is removed. `0` turns the check off. |
 | `UPLOAD_IDLE_TIMEOUT` | `tarreceive` | `60s` | How long a layer body may send nothing. A stalled layer is cut off with `408 Request Timeout`, the connection is closed and its temp file removed. Unpack and `mksquashfs` after the body are not limited. |
-| `PUSH_IDLE_TIMEOUT` | `gitreceive` | `60s` | How long the pack of a `git push` (or the request of a fetch) may send nothing. A stalled push is cut off with `408 Request Timeout`: git is stopped before the pre-receive hook runs, nothing is built, the repo cache is not stored and the app's build lock is released. The build after the pack is not limited. |
+| `PUSH_IDLE_TIMEOUT` | `gitreceive` | `60s` | How long the pack of a `git push` (or the request of a fetch) may send nothing. A stalled push is cut off and refused (see below): git is stopped before the pre-receive hook runs, nothing is built, the repo cache is not stored and the app's build lock is released. The build after the pack is not limited. |
 | `MAX_OBJECT_SIZE` | `blobstore` | `32g` | One stored object: a slug, a squashfs layer, a build cache, a repo archive. An append counts the bytes already stored. |
 | `APP_QUOTA` | `blobstore` | `100g` | The live bytes stored for one app: its `/slugs/apps/<app>/` and `/tarreceive/apps/<app>/` objects (its slugs, its Docker image layers and manifests), its build caches and its repo archive. |
 | `LAYER_GC_INTERVAL` | `blobstore` | off | How often the blobstore deletes Docker image layers that no artifact uses (see [Unused Docker layers](#unused-docker-layers)). A duration (`6h`); unset or `0` is off. |
@@ -797,7 +798,7 @@ or `off` turns a limit off. Set them on the system app; the new release
 restarts it and `flynn-host update` keeps the value:
 
 ```text
-flynn -a gitreceive env:set MAX_PUSH_SIZE=4g PUSH_IDLE_TIMEOUT=2m
+flynn -a gitreceive env:set MAX_PUSH_SIZE=4g MAX_PUSH_DRAIN=512m PUSH_IDLE_TIMEOUT=2m
 flynn -a tarreceive env:set MAX_LAYER_SIZE=16g MAX_CONCURRENT_LAYERS=1 MAX_CONCURRENT_UPLOADS=4
 flynn -a blobstore env:set MAX_OBJECT_SIZE=16g APP_QUOTA=50g UPLOAD_IDLE_TIMEOUT=2m
 ```
@@ -806,8 +807,39 @@ Each component logs its limits when it starts. An upload over a limit is
 refused as soon as its declared length is known, before anything is written,
 and otherwise when the limit is passed:
 
-- `git push` fails with `error: RPC failed; HTTP 413`, the branch does not
-  move and the gitreceive log names the limit.
+- `git push` prints the limit and the setting, the branch does not move and
+  nothing is built:
+
+  ```text
+  remote: -----> Push refused: it is larger than the gitreceive limit of 8 GiB (MAX_PUSH_SIZE).
+  remote:        Push fewer commits at a time or keep large files out of the repository, or ask an
+  remote:        operator to raise the limit with `flynn -a gitreceive env:set MAX_PUSH_SIZE=<size>`.
+  error: remote unpack failed: push larger than MAX_PUSH_SIZE (8 GiB)
+   ! [remote rejected] main -> main (push larger than MAX_PUSH_SIZE (8 GiB))
+  error: failed to push some refs to '...'
+  ```
+
+  git prints nothing of an HTTP error answer but its status, so the refusal
+  is a normal git answer that rejects every ref. git reads it only after it
+  has sent its whole request. A request git sends with its length (a pack
+  that fits `http.postBuffer`, 1 MiB unless the client raised it) is
+  answered at once, without reading the pack. A larger pack is sent in
+  chunks and is read to its end and thrown away, at most `MAX_PUSH_DRAIN`
+  past the limit; a push larger than that, or with `MAX_PUSH_DRAIN=0`, is
+  cut off at the limit with `413 Request Entity Too Large`, and git prints
+  only `error: RPC failed; HTTP 413 curl 22 The requested URL returned
+  error: 413` (the message is in the answer body, which
+  `GIT_CURL_VERBOSE=1 git push` shows).
+- A push that sends nothing for `PUSH_IDLE_TIMEOUT` is refused the same way
+  (`remote: -----> Push refused: no data arrived for 1m0s, the gitreceive
+  upload idle timeout (PUSH_IDLE_TIMEOUT).`) and its connection closed. If
+  the client then resumes, git sends the rest of its pack as a new request,
+  which is answered `400`, so the output ends with `error: RPC failed; HTTP
+  400` and `Everything up-to-date`; the push was still refused. A client
+  that did not ask for git's status report gets `408 Request Timeout`.
+- Each refused push is logged by gitreceive as `push refused` with the app,
+  the setting, the limit, the bytes received and the answer
+  (`report-status`, `413` or `408`).
 - `flynn docker:push` fails with `layer exceeds the tarreceive limit ...`,
   or, when the image would take the app past `APP_QUOTA`, with
   `blobstore refused the upload: app <id> already stores ... the blobstore
