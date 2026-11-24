@@ -42,6 +42,17 @@ type fakeFormationCluster struct {
 	jobsOverride func([]*ct.Job) []*ct.Job
 	// observe runs after every formation change, with the lock held.
 	observe func(f *fakeFormationCluster)
+	// callErr, when set, can fail a call before it does anything: call is
+	// "scale", "put_formation", "get_formation", "get_release" or
+	// "set_release" (EDGE-65: one transient controller error mid-roll).
+	callErr func(call, releaseID string) error
+}
+
+func (f *fakeFormationCluster) failCall(call, releaseID string) error {
+	if f.callErr == nil {
+		return nil
+	}
+	return f.callErr(call, releaseID)
 }
 
 func newFakeFormationCluster(hosts ...string) *fakeFormationCluster {
@@ -72,6 +83,9 @@ func copyFormation(f *ct.Formation) *ct.Formation {
 func (f *fakeFormationCluster) GetRelease(id string) (*ct.Release, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failCall("get_release", id); err != nil {
+		return nil, err
+	}
 	if r, ok := f.releases[id]; ok {
 		return r, nil
 	}
@@ -81,6 +95,9 @@ func (f *fakeFormationCluster) GetRelease(id string) (*ct.Release, error) {
 func (f *fakeFormationCluster) GetFormation(appID, releaseID string) (*ct.Formation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failCall("get_formation", releaseID); err != nil {
+		return nil, err
+	}
 	if form, ok := f.formations[releaseID]; ok {
 		return copyFormation(form), nil
 	}
@@ -107,6 +124,10 @@ func (f *fakeFormationCluster) DeploymentList(appID string) ([]*ct.Deployment, e
 func (f *fakeFormationCluster) ScaleAppRelease(appID, releaseID string, opts ct.ScaleOptions) error {
 	f.mu.Lock()
 	if err := f.putErr[releaseID]; err != nil {
+		f.mu.Unlock()
+		return err
+	}
+	if err := f.failCall("scale", releaseID); err != nil {
 		f.mu.Unlock()
 		return err
 	}
@@ -158,6 +179,9 @@ func (f *fakeFormationCluster) DeleteFormation(appID, releaseID string) error {
 func (f *fakeFormationCluster) SetAppRelease(appID, releaseID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failCall("set_release", releaseID); err != nil {
+		return err
+	}
 	f.appRelease = releaseID
 	return nil
 }
@@ -283,6 +307,8 @@ func assertOneSchedulerPerHost(t *testing.T, f *fakeFormationCluster, release st
 // returned before deleting the new formation and the new release kept
 // scheduler=1 on every host.
 func TestFailedOneByOneRollbackZeroesNewOmniFormation(t *testing.T) {
+	// The controller stays unreachable: fail at the shortened deadlines.
+	shortTransientBudgets(t)
 	f := newFakeFormationCluster("devnode1", "devnode2", "devnode3")
 	controllerReleases(f, "old", "new")
 	f.formations["old"] = &ct.Formation{AppID: "controller", ReleaseID: "old",
@@ -321,6 +347,8 @@ func TestFailedOneByOneRollbackZeroesNewOmniFormation(t *testing.T) {
 // hosts it had not left yet. The rollback must lift that pin, or the old
 // release never comes back on the hosts the new one is leaving.
 func TestFailedOneByOneRollbackClearsOldOmniHostPins(t *testing.T) {
+	// The controller stays unreachable: fail at the shortened deadlines.
+	shortTransientBudgets(t)
 	f := newFakeFormationCluster("devnode1", "devnode2", "devnode3")
 	controllerReleases(f, "old", "new")
 	f.formations["old"] = &ct.Formation{AppID: "controller", ReleaseID: "old",
@@ -354,6 +382,8 @@ func TestFailedOneByOneRollbackClearsOldOmniHostPins(t *testing.T) {
 // new release (that could leave no scheduler at all); it reports the error
 // and the next deploy cleans up.
 func TestRollbackKeepsNewFormationWhenRestoreIsNotWritten(t *testing.T) {
+	// The controller stays unreachable: fail at the shortened deadlines.
+	shortTransientBudgets(t)
 	f := newFakeFormationCluster("devnode1")
 	controllerReleases(f, "old", "new")
 	f.formations["old"] = &ct.Formation{AppID: "controller", ReleaseID: "old", Processes: map[string]int{"scheduler": 0}}

@@ -56,24 +56,36 @@ func (d *DeployJob) Perform() error {
 
 	log.Info("getting old release", "release.id", d.OldReleaseID)
 	var err error
-	d.oldRelease, err = d.client.GetRelease(d.OldReleaseID)
+	err = d.retryAPI("get old release "+d.OldReleaseID, log, func() (err error) {
+		d.oldRelease, err = d.client.GetRelease(d.OldReleaseID)
+		return err
+	})
 	if err != nil {
 		log.Error("error getting old release", "release.id", d.OldReleaseID, "err", err)
 		return err
 	}
-	d.oldFormation, err = d.client.GetFormation(d.AppID, d.OldReleaseID)
+	err = d.retryAPI("get old formation "+d.OldReleaseID, log, func() (err error) {
+		d.oldFormation, err = d.client.GetFormation(d.AppID, d.OldReleaseID)
+		return err
+	})
 	if err != nil {
 		log.Error("error getting old formation", "release.id", d.OldReleaseID, "err", err)
 		return err
 	}
 
 	log.Info("getting new release", "release.id", d.NewReleaseID)
-	d.newRelease, err = d.client.GetRelease(d.NewReleaseID)
+	err = d.retryAPI("get new release "+d.NewReleaseID, log, func() (err error) {
+		d.newRelease, err = d.client.GetRelease(d.NewReleaseID)
+		return err
+	})
 	if err != nil {
 		log.Error("error getting new release", "release.id", d.NewReleaseID, "err", err)
 		return err
 	}
-	d.newFormation, err = d.client.GetFormation(d.AppID, d.NewReleaseID)
+	err = d.retryAPI("get new formation "+d.NewReleaseID, log, func() (err error) {
+		d.newFormation, err = d.client.GetFormation(d.AppID, d.NewReleaseID)
+		return err
+	})
 	if err == controller.ErrNotFound {
 		d.newFormation = &ct.Formation{
 			AppID:     d.AppID,
@@ -132,7 +144,35 @@ func (d *DeployJob) scaleOldRelease(wait bool) error {
 		NoWait:           !wait,
 		JobEventCallback: d.logJobEvent,
 	}
-	err := d.client.ScaleAppRelease(d.AppID, d.OldReleaseID, opts)
+	return d.scaleAppRelease(d.OldReleaseID, opts)
+}
+
+// scaleAppRelease writes a scale request and, unless opts.NoWait, waits for
+// it. A transient error before the scale request is written (the PUT timed
+// out, was refused, or got a 5xx) is retried for apiRetryBudget (EDGE-65):
+// the request sets absolute counts, so writing it again is safe. An error
+// once the request is written (a job failed to start, the wait timed out) is
+// the scale's outcome and is returned as before.
+func (d *DeployJob) scaleAppRelease(releaseID string, opts ct.ScaleOptions) error {
+	written := false
+	cb := opts.ScaleRequestCallback
+	opts.ScaleRequestCallback = func(req *ct.ScaleRequest) {
+		written = true
+		if cb != nil {
+			cb(req)
+		}
+	}
+	var err error
+	retryErr := d.retryAPI("scale release "+releaseID, d.logger, func() error {
+		err = d.client.ScaleAppRelease(d.AppID, releaseID, opts)
+		if err == nil || written {
+			return nil
+		}
+		return err
+	})
+	if retryErr != nil {
+		err = retryErr
+	}
 	if err == ct.ErrScalingStopped {
 		err = worker.ErrStopped
 	}
@@ -171,11 +211,7 @@ func (d *DeployJob) scaleNewReleaseWait(wait bool) error {
 			return nil
 		},
 	}
-	err := d.client.ScaleAppRelease(d.AppID, d.NewReleaseID, opts)
-	if err == ct.ErrScalingStopped {
-		err = worker.ErrStopped
-	}
-	return err
+	return d.scaleAppRelease(d.NewReleaseID, opts)
 }
 
 func (d *DeployJob) jobStartFailure(job *ct.Job) error {
@@ -449,8 +485,11 @@ func (d *DeployJob) sireniaEnginesOutsideNewRelease() bool {
 	if processType == "" {
 		return false
 	}
-	forms, err := d.client.FormationList(d.AppID)
-	if err != nil {
+	var forms []*ct.Formation
+	if err := d.retryAPI("list formations", nil, func() (err error) {
+		forms, err = d.client.FormationList(d.AppID)
+		return err
+	}); err != nil {
 		return false
 	}
 	for _, f := range forms {

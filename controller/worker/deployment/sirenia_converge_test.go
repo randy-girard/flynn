@@ -23,6 +23,9 @@ func (f *fakeFormationCluster) PutFormation(form *ct.Formation) error {
 	if err := f.putErr[form.ReleaseID]; err != nil {
 		return err
 	}
+	if err := f.failCall("put_formation", form.ReleaseID); err != nil {
+		return err
+	}
 	f.formations[form.ReleaseID] = copyFormation(form)
 	if f.observe != nil {
 		f.observe(f)

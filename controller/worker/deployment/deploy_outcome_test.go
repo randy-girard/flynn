@@ -371,13 +371,17 @@ func TestSuccessfulDeployFinishesWithTheCompleteOutcome(t *testing.T) {
 // The failed event carries what the rollback left (EDGE-76 (d)), which
 // flynn-host update and `flynn deployment` print.
 func TestFailedEventCarriesTheRollbackError(t *testing.T) {
+	shortTransientBudgets(t)
 	c, client, store, _ := newOutcomeFixture(true)
 	client.fakeFormationCluster.putErr["old"] = errors.New("old formation write refused")
 	if err := c.HandleDeployment(deployQueJob(t)); err == nil {
 		t.Error("a failed rollback must return its error so que retries")
 	}
 	last := store.lastEvent()
-	if last.Status != "failed" || !strings.Contains(last.Error, errWebFails.Error()+"; rollback: old formation write refused") {
+	// The restore write is retried (EDGE-65), then the rollback reports
+	// the last error.
+	if last.Status != "failed" || !strings.Contains(last.Error, errWebFails.Error()+"; rollback: restore the original formation: ") ||
+		!strings.Contains(last.Error, "last error: old formation write refused") {
 		t.Errorf("last event %+v, want failed with the deploy and the rollback errors", last)
 	}
 }

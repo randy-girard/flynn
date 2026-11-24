@@ -230,7 +230,7 @@ waitCurrent:
 	// the in-use volume (retrying) and only then stops the old job.
 	d.newFormation.Processes[processType] = d.Processes[processType]
 	log.Info("scaling new formation up", "release.id", d.NewReleaseID, "job.type", processType, "count", d.Processes[processType])
-	if err := d.client.PutFormation(d.newFormation); err != nil {
+	if err := d.putFormation(d.newFormation, log); err != nil {
 		log.Error("error scaling new formation up", "release.id", d.NewReleaseID, "err", err)
 		return err
 	}
@@ -242,7 +242,7 @@ waitCurrent:
 
 	d.oldFormation.Processes[processType] = 0
 	log.Info("scaling old formation down", "release.id", d.OldReleaseID, "job.type", processType)
-	if err := d.client.PutFormation(d.oldFormation); err != nil {
+	if err := d.putFormation(d.oldFormation, log); err != nil {
 		log.Error("error scaling old formation down", "release.id", d.OldReleaseID, "err", err)
 		return err
 	}
@@ -324,7 +324,11 @@ var sireniaRollHA = (*DeployJob).deploySireniaHA
 // moving them.
 func (d *DeployJob) locateSireniaEngines(processType string, proc ct.ProcessType, log log15.Logger) error {
 	d.sireniaEngine = nil
-	forms, err := d.client.FormationList(d.AppID)
+	var forms []*ct.Formation
+	err := d.retryAPI("list formations to find the sirenia engines", log, func() (err error) {
+		forms, err = d.client.FormationList(d.AppID)
+		return err
+	})
 	if err != nil {
 		log.Warn("could not list formations to find the sirenia engines", "err", err)
 		return nil
@@ -396,7 +400,11 @@ func (d *DeployJob) scaleSireniaEngineReleaseDown(processType string, wait bool,
 		return nil
 	}
 	rid := d.sireniaEngine.ReleaseID
-	form, err := d.client.GetFormation(d.AppID, rid)
+	var form *ct.Formation
+	err := d.retryAPI("get the engines' formation "+rid, log, func() (err error) {
+		form, err = d.client.GetFormation(d.AppID, rid)
+		return err
+	})
 	if err == controller.ErrNotFound {
 		return nil
 	} else if err != nil {
@@ -414,26 +422,32 @@ func (d *DeployJob) scaleSireniaEngineReleaseDown(processType string, wait bool,
 	log.Info("scaling the replaced engines' formation down", "release.id", rid, "job.type", processType)
 	if !wait {
 		form.Processes = processes
-		if err := d.client.PutFormation(form); err != nil {
+		if err := d.putFormation(form, log); err != nil {
 			log.Error("error scaling the engines' formation down", "release.id", rid, "err", err)
 			return err
 		}
 		return nil
 	}
-	err = d.client.ScaleAppRelease(d.AppID, rid, ct.ScaleOptions{
+	err = d.scaleAppRelease(rid, ct.ScaleOptions{
 		Processes:        processes,
 		Tags:             form.Tags,
 		Timeout:          &d.timeout,
 		Stop:             d.stop,
 		JobEventCallback: d.logJobEvent,
 	})
-	if err == ct.ErrScalingStopped {
-		err = worker.ErrStopped
-	}
 	if err != nil {
 		log.Error("error scaling the engines' formation down", "release.id", rid, "err", err)
 	}
 	return err
+}
+
+// putFormation writes a formation, retrying a transient error for
+// apiRetryBudget (EDGE-65). The write sets absolute counts, so repeating it
+// after a lost answer is safe.
+func (d *DeployJob) putFormation(form *ct.Formation, log log15.Logger) error {
+	return d.retryAPI("put formation "+form.ReleaseID, log, func() error {
+		return d.client.PutFormation(form)
+	})
 }
 
 // sireniaPrimaryRelease returns FLYNN_RELEASE_ID of the sirenia primary that
@@ -704,7 +718,7 @@ loop:
 		d.newFormation.Processes[processType]++
 		// use PutFormation rather than ScaleAppRelease so we can use a
 		// custom wait loop below
-		if err := d.client.PutFormation(d.newFormation); err != nil {
+		if err := d.putFormation(d.newFormation, log); err != nil {
 			log.Error("error scaling new formation up by one", "err", err)
 			return nil, err
 		}

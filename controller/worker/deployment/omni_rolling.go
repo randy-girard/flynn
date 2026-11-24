@@ -118,6 +118,21 @@ func (d *DeployJob) omniHostIDs(typ, releaseID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return omniHostIDsIn(jobs, typ, releaseID), nil
+}
+
+// omniHostIDsRetry is omniHostIDs for a one-off read of the roll, retried on
+// a transient error for omniStopWaitLimit (EDGE-65).
+func (d *DeployJob) omniHostIDsRetry(typ, releaseID string, log log15.Logger) ([]string, error) {
+	var ids []string
+	err := retryAPICall("omni roll: list "+typ+" jobs of release "+releaseID, omniStopWaitLimit, d.stop, log, func() (err error) {
+		ids, err = d.omniHostIDs(typ, releaseID)
+		return err
+	})
+	return ids, err
+}
+
+func omniHostIDsIn(jobs []*ct.Job, typ, releaseID string) []string {
 	var ids []string
 	for _, job := range jobs {
 		if job == nil || job.ReleaseID != releaseID || job.Type != typ || job.HostID == "" {
@@ -128,7 +143,7 @@ func (d *DeployJob) omniHostIDs(typ, releaseID string) ([]string, error) {
 		}
 		ids = append(ids, job.HostID)
 	}
-	return uniqueSortedHostIDs(ids), nil
+	return uniqueSortedHostIDs(ids)
 }
 
 func hostIDProcessTags(typ string, ids []string, clear bool) map[string]map[string]string {
@@ -154,11 +169,11 @@ func (d *DeployJob) scaleOmniOneDownOneUp(typ string, log log15.Logger) error {
 	log = log.New("fn", "scaleOmniOneDownOneUp", "job.type", typ)
 	log.Info("rolling omni process one host at a time")
 
-	oldHosts, err := d.omniHostIDs(typ, d.OldReleaseID)
+	oldHosts, err := d.omniHostIDsRetry(typ, d.OldReleaseID, log)
 	if err != nil {
 		return err
 	}
-	alreadyNew, err := d.omniHostIDs(typ, d.NewReleaseID)
+	alreadyNew, err := d.omniHostIDsRetry(typ, d.NewReleaseID, log)
 	if err != nil {
 		return err
 	}
@@ -177,7 +192,7 @@ func (d *DeployJob) scaleOmniOneDownOneUp(typ string, log log15.Logger) error {
 			// cluster host (add-node node4 may not have the new job yet;
 			// 30s of waiting for it blocked the upgrade). Host-network
 			// omni (router) still stops first so :80/:443 can bind.
-			haveNew, err := d.omniHostIDs(typ, d.NewReleaseID)
+			haveNew, err := d.omniHostIDsRetry(typ, d.NewReleaseID, log)
 			if err != nil {
 				return err
 			}
@@ -306,16 +321,34 @@ func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, 
 	started := time.Now()
 	deadline := started.Add(omniStopWaitLimit)
 	var lastForce time.Time
+	polls := newMissedPolls("omni roll: waiting for old "+typ+" jobs to stop", "JobList")
+	// hosts is what the last answered poll saw; nil until one answers.
+	var hosts []string
 	for {
 		jobs, err := d.client.JobList(d.AppID)
 		if err != nil {
-			return err
+			// A missed poll (EDGE-65): one timed-out JobList ended the
+			// controller deploy c7b6063a right after its last old
+			// scheduler was scaled to zero.
+			if err := polls.miss(err, deadline, log); err != nil {
+				return err
+			}
+			if time.Now().After(deadline) {
+				return polls.timedOut(fmt.Sprintf("timed out waiting for old %s jobs to stop on %v", typ, hostsOrUnknown(hosts, remainingHosts)))
+			}
+			select {
+			case <-d.stop:
+				return worker.ErrStopped
+			case <-time.After(polls.wait(omniStopPoll)):
+			}
+			continue
 		}
+		polls.answered(log)
 		leftover := leftoverOmniJobs(jobs, d.OldReleaseID, typ, allowed)
 		if len(leftover) == 0 {
 			return nil
 		}
-		hosts := make([]string, 0, len(leftover))
+		hosts = make([]string, 0, len(leftover))
 		for _, job := range leftover {
 			hosts = append(hosts, job.HostID)
 		}
@@ -349,7 +382,7 @@ func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, 
 			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for old %s jobs to stop on %v", typ, hosts)
+			return polls.timedOut(fmt.Sprintf("timed out waiting for old %s jobs to stop on %v", typ, hosts))
 		}
 		select {
 		case <-d.stop:
@@ -368,11 +401,26 @@ func (d *DeployJob) waitNewOmniJobsUp(typ string, waitHosts []string, log log15.
 	}
 	started := time.Now()
 	deadline := started.Add(omniStopWaitLimit)
+	polls := newMissedPolls("omni roll: waiting for new "+typ+" jobs to start", "JobList")
+	var have []string
 	for {
-		have, err := d.omniHostIDs(typ, d.NewReleaseID)
+		jobs, err := d.client.JobList(d.AppID)
 		if err != nil {
-			return err
+			if err := polls.miss(err, deadline, log); err != nil {
+				return err
+			}
+			if time.Now().After(deadline) {
+				return polls.timedOut(fmt.Sprintf("timed out waiting for new %s jobs to start (want %v, have %v)", typ, waitHosts, have))
+			}
+			select {
+			case <-d.stop:
+				return worker.ErrStopped
+			case <-time.After(polls.wait(omniStopPoll)):
+			}
+			continue
 		}
+		polls.answered(log)
+		have = omniHostIDsIn(jobs, typ, d.NewReleaseID)
 		present := make(map[string]struct{}, len(have))
 		for _, id := range have {
 			present[id] = struct{}{}
@@ -394,7 +442,7 @@ func (d *DeployJob) waitNewOmniJobsUp(typ string, waitHosts []string, log log15.
 		}
 		log.Info("waiting for new omni jobs to start", "want", waitHosts, "have", have)
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for new %s jobs to start (want %v, have %v)", typ, waitHosts, have)
+			return polls.timedOut(fmt.Sprintf("timed out waiting for new %s jobs to start (want %v, have %v)", typ, waitHosts, have))
 		}
 		select {
 		case <-d.stop:
@@ -402,6 +450,18 @@ func (d *DeployJob) waitNewOmniJobsUp(typ string, waitHosts []string, log log15.
 		case <-time.After(omniStopPoll):
 		}
 	}
+}
+
+// hostsOrUnknown names the hosts a stop wait is about before any poll has
+// answered.
+func hostsOrUnknown(seen, remaining []string) string {
+	if seen != nil {
+		return fmt.Sprint(seen)
+	}
+	if len(remaining) > 0 {
+		return fmt.Sprintf("hosts other than %v", remaining)
+	}
+	return "any host"
 }
 
 func leftoverJobReleasedOnHost(err error) bool {

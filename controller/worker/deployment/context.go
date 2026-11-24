@@ -165,7 +165,10 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 
 	// for recovery purposes, fetch old formation
 	log.Info("getting old formation")
-	f, err = c.client.GetFormation(deployment.AppID, deployment.OldReleaseID)
+	err = retryAPICall("get old formation "+deployment.OldReleaseID, apiRetryBudget, job.Stop, log, func() (err error) {
+		f, err = c.client.GetFormation(deployment.AppID, deployment.OldReleaseID)
+		return err
+	})
 	if err != nil {
 		log.Error("error getting old formation", "release_id", deployment.OldReleaseID, "err", err)
 		return err
@@ -185,7 +188,11 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		return err
 	}
 	log.Info("setting the app release")
-	if err := c.client.SetAppRelease(deployment.AppID, deployment.NewReleaseID); err != nil {
+	// Every process has rolled by now: a transient error here must not roll
+	// the finished deploy back (EDGE-65).
+	if err := retryAPICall("set the app release", apiRetryBudget, job.Stop, log, func() error {
+		return c.client.SetAppRelease(deployment.AppID, deployment.NewReleaseID)
+	}); err != nil {
 		log.Error("error setting the app release", "err", err)
 		return err
 	}
@@ -299,7 +306,19 @@ func (c *context) restoreOriginalFormation(log log15.Logger, original *ct.Format
 			return nil
 		},
 	}
-	if err := c.client.ScaleAppRelease(original.AppID, original.ReleaseID, opts); err != nil {
+	// Retry a restore that was not written because of a transient error
+	// (EDGE-65); once written, its outcome is handled below.
+	var err error
+	if rerr := retryAPICall("restore the original formation", apiRetryBudget, stop, log, func() error {
+		err = c.client.ScaleAppRelease(original.AppID, original.ReleaseID, opts)
+		if err == nil || restoreWritten {
+			return nil
+		}
+		return err
+	}); rerr != nil {
+		err = rerr
+	}
+	if err != nil {
 		if !restoreWritten || err == ct.ErrScalingStopped {
 			log.Error("error restoring the original formation", "err", err)
 			return err

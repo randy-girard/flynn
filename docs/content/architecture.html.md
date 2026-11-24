@@ -237,11 +237,32 @@ against one, a deployment with `finished_at` and no outcome is waited on for
 two minutes, then counts as a success only if the app's current release is
 the deployment's new release, and fails otherwise.
 
+A deploy talks to the controller the whole time it rolls the app, and for
+the controller app that is the controller being replaced. A transient error
+from the controller API (a timed-out request, a refused or reset connection,
+a 5xx answer, discoverd's 503 while it catches up) does not fail the deploy.
+In a wait loop, such as an omni roll waiting for the old `scheduler` or
+`router` jobs to stop and the new ones to start (30 seconds) or the wait for
+the release command, a failed job list counts as a missed poll: the worker
+logs it with its attempt count (`missed poll, retrying until the loop's
+deadline`), backs off and polls again. Only when the loop's deadline passes
+does the deploy fail, with an error that names the loop, the time it waited
+and the last error. A one-off call (reading the releases and formations,
+writing a scale request or a formation, making the new release current) is
+retried with backoff for 30 seconds (`controller call failed, retrying`). An
+answer that a retry would not change (a 404 for a deleted app or release,
+401, 403, a validation error, a conflict) still fails the deploy at once. A
+scale request that was written and then failed (a job did not start, the
+scale timed out) is the scale's outcome and is not retried. When `flynn-host
+update` replaces a host-infra job, a failed job list from the host while the
+replacement starts is also a missed poll until the replacement's deadline.
+
 A deploy that fails is rolled back by the controller worker. The rollback
 restores the old release's process counts and tags, which also removes the
 per-host pins an omni roll puts on the old formation. It then deletes the new
 release's formation. It deletes it even when the restore was written but did
-not finish within the rollback's 10-second wait. If the restore could not be
+not finish within the rollback's 10-second wait. A restore that fails with a
+transient error is retried for 30 seconds. If the restore could not be
 written at all, the new formation stays, so the app is not left with nothing
 running. In that case, the next successful deploy of the app can scale it to
 zero. After a deploy succeeds and its release is current, the worker looks
