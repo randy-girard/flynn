@@ -254,6 +254,24 @@ func TestPutFailureDeletesNewExternalObject(t *testing.T) {
 	}
 	assertNoUploads(t, r)
 
+	// the whole object reached the bucket, then the commit failed: here
+	// the upload's record vanished, so the swap transaction rolls back
+	b.onStored = func() {
+		if err := r.DB().Exec("DELETE FROM uploads"); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := r.Put(name, strings.NewReader("new"), 0, "application/x-tar"); err == nil {
+		t.Fatal("expected the upload whose commit failed to fail")
+	}
+	b.onStored = nil
+	if n := b.count(); n != 1 {
+		t.Fatalf("an upload whose commit failed left %d objects in the bucket", n)
+	}
+	if got := readBlob(t, r, name); got != "old" {
+		t.Fatalf("got %q after an overwrite whose commit failed", got)
+	}
+
 	// the client's body breaks off part way
 	if err := r.Put(name, io.MultiReader(strings.NewReader("ne"), errReader{errors.New("connection reset")}), 0, "application/x-tar"); err == nil {
 		t.Fatal("expected the broken upload to fail")

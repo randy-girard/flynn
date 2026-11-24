@@ -24,8 +24,10 @@ type fakeExternalBackend struct {
 	// failAfterStore stores the object, then reports an error, like an
 	// upload whose last request or commit failed after the data arrived
 	failAfterStore bool
-	failDel        bool
-	deleted        []string
+	// onStored runs after the object is stored, before Put returns
+	onStored func()
+	failDel  bool
+	deleted  []string
 }
 
 func newFakeExternalBackend() *fakeExternalBackend {
@@ -49,6 +51,11 @@ func (b *fakeExternalBackend) Put(_ *postgres.DB, info backend.FileInfo, r io.Re
 		return errors.New("fake upload interrupted")
 	}
 	b.objects[info.ExternalID] = buf
+	if b.onStored != nil {
+		b.mtx.Unlock()
+		b.onStored()
+		b.mtx.Lock()
+	}
 	if b.failAfterStore {
 		return errors.New("fake upload failed after storing")
 	}
