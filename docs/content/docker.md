@@ -33,7 +33,11 @@ for each process.
 
 The CLI flattens the image into one uncompressed tar. tarreceive refuses one
 over `MAX_LAYER_SIZE` (default 32 GiB) with `layer exceeds the tarreceive
-limit` before the upload starts. The layer is stored under the app's own
+limit` before the upload starts, and one its temp disk cannot hold (twice the
+tar plus `MIN_FREE_DISK`) with `507`. When tarreceive is already receiving
+`MAX_CONCURRENT_UPLOADS` layers, the CLI waits and sends the image again. A
+push whose upload stops sending for `UPLOAD_IDLE_TIMEOUT` (60 seconds) fails
+with `408`. The layer is stored under the app's own
 blobstore prefix and counts toward its `APP_QUOTA`; an image pushed to two
 apps is stored once for each. See
 [Upload limits](production.html.md#upload-limits).

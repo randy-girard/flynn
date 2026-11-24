@@ -776,19 +776,29 @@ images.
 | `MAX_PUSH_SIZE` | `gitreceive` | `8g` | The data one `git push` sends (the pack). |
 | `MAX_LAYER_SIZE` | `tarreceive` | `32g` | The layer tar one upload sends. `flynn docker:push` sends the whole image as one uncompressed tar, so this is the largest image you can push. |
 | `MAX_CONCURRENT_LAYERS` | `tarreceive` | `2` | Layers that unpack and run `mksquashfs` at the same time. Others wait for a slot. |
+| `MAX_CONCURRENT_UPLOADS` | `tarreceive` | `8` | Layers received and kept on the tarreceive temp disk at the same time, from the first byte until their temp files are removed. Another layer waits up to 30 seconds for a slot, then gets `503 Service Unavailable` with `Retry-After: 30`; `flynn docker:push` sends it again (up to 10 times). |
+| `MIN_FREE_DISK` | `tarreceive` | `1g` | Free space left on the tarreceive temp disk. A layer reserves twice its declared length (the tar, then its unpacked files) and is refused before anything is written when the free space, less what the layers in progress have reserved, would fall under this: `507 Insufficient Storage` when it does not fit even alone, a retryable `503` when it fits once the other layers finish. While a layer is written the free space is checked every 64 MiB, which also stops a layer sent without a length; it then fails with `507` and its temp file is removed. `0` turns the check off. |
+| `UPLOAD_IDLE_TIMEOUT` | `tarreceive` | `60s` | How long a layer body may send nothing. A stalled layer is cut off with `408 Request Timeout`, the connection is closed and its temp file removed. Unpack and `mksquashfs` after the body are not limited. |
+| `PUSH_IDLE_TIMEOUT` | `gitreceive` | `60s` | How long the pack of a `git push` (or the request of a fetch) may send nothing. A stalled push is cut off with `408 Request Timeout`: git is stopped before the pre-receive hook runs, nothing is built, the repo cache is not stored and the app's build lock is released. The build after the pack is not limited. |
 | `MAX_OBJECT_SIZE` | `blobstore` | `32g` | One stored object: a slug, a squashfs layer, a build cache, a repo archive. An append counts the bytes already stored. |
 | `APP_QUOTA` | `blobstore` | `100g` | The live bytes stored for one app: its `/slugs/apps/<app>/` and `/tarreceive/apps/<app>/` objects (its slugs, its Docker image layers and manifests), its build caches and its repo archive. |
 | `LAYER_GC_INTERVAL` | `blobstore` | off | How often the blobstore deletes Docker image layers that no artifact uses (see [Unused Docker layers](#unused-docker-layers)). A duration (`6h`); unset or `0` is off. |
 | `LAYER_GC_GRACE` | `blobstore` | `24h` | How old an unused layer must be before the layer GC deletes it. |
-| `UPLOAD_IDLE_TIMEOUT` | `blobstore` | `60s` | How long a PUT body may send nothing. A stalled upload is then cut off with `408 Request Timeout`, nothing is stored, and an overwritten object keeps its old content. A duration (`90s`, `5m`) or seconds; `0` or `off` turns it off. |
+| `UPLOAD_IDLE_TIMEOUT` | `blobstore` | `60s` | How long a PUT body may send nothing. A stalled upload is then cut off with `408 Request Timeout`, nothing is stored, and an overwritten object keeps its old content. |
+
+The idle timeouts are a duration (`90s`, `5m`) or a number of seconds; `0` or
+`off` turns one off. A body that keeps sending, however slowly, is never cut
+off, and there is no limit on how long a whole upload takes. The three servers
+also give clients 30 seconds to send their request headers and close idle
+keep-alive connections after 2 minutes.
 
 Sizes are bytes or a number with a binary unit (`512m`, `32g`, `1t`). `0`
 or `off` turns a limit off. Set them on the system app; the new release
 restarts it and `flynn-host update` keeps the value:
 
 ```text
-flynn -a gitreceive env:set MAX_PUSH_SIZE=4g
-flynn -a tarreceive env:set MAX_LAYER_SIZE=16g MAX_CONCURRENT_LAYERS=1
+flynn -a gitreceive env:set MAX_PUSH_SIZE=4g PUSH_IDLE_TIMEOUT=2m
+flynn -a tarreceive env:set MAX_LAYER_SIZE=16g MAX_CONCURRENT_LAYERS=1 MAX_CONCURRENT_UPLOADS=4
 flynn -a blobstore env:set MAX_OBJECT_SIZE=16g APP_QUOTA=50g UPLOAD_IDLE_TIMEOUT=2m
 ```
 
@@ -802,6 +812,11 @@ and otherwise when the limit is passed:
   or, when the image would take the app past `APP_QUOTA`, with
   `blobstore refused the upload: app <id> already stores ... the blobstore
   quota per app is ...` (`507`).
+- A `flynn docker:push` that tarreceive has no room for fails with
+  `the tarreceive temp disk has ... free; this layer needs ...` (`507`), and
+  one that is still waiting for a slot or disk space after its retries with
+  `tarreceive is already receiving ...` or `... reserved by layers in
+  progress` (`503`).
 - A build whose slug is over `MAX_OBJECT_SIZE` fails with
   `blobstore refused the slug (413 ...)`, and one over `APP_QUOTA` with
   `507 Insufficient Storage`; a refused overwrite leaves the old object in
