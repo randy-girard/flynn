@@ -102,10 +102,15 @@ func TestClientNamesApp(t *testing.T) {
 // which cannot be rewound, and other errors are not retried.
 func TestCreateLayerRetriesBusyTarreceive(t *testing.T) {
 	var bodies []string
-	busy := 2
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	busy, plain := 2, 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		bodies = append(bodies, string(b))
+		if plain > 0 {
+			plain--
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if busy > 0 {
 			busy--
@@ -115,7 +120,8 @@ func TestCreateLayerRetriesBusyTarreceive(t *testing.T) {
 			return
 		}
 		w.Write([]byte(`{"id":"abc"}`))
-	}))
+	})
+	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	c := NewClient(srv.URL, "key")
 	var waits []time.Duration
@@ -142,6 +148,18 @@ func TestCreateLayerRetriesBusyTarreceive(t *testing.T) {
 	}
 	if waits[0] != 30*time.Second {
 		t.Fatalf("waited %s, want the Retry-After", waits[0])
+	}
+
+	// the router answers a plain 503 when tarreceive does not read the
+	// body for a few seconds (it is waiting for a slot); a file is sent
+	// again then too
+	plain, busy, bodies, waits = 1, 0, nil, nil
+	f.Seek(0, io.SeekStart)
+	if _, err := c.CreateFlatLayer("abc", f); err != nil {
+		t.Fatalf("plain 503 from the router: %v", err)
+	}
+	if len(bodies) != 2 || bodies[1] != "layer-data" || len(waits) != 1 {
+		t.Fatalf("plain 503: %d requests %q, %d waits", len(bodies), bodies, len(waits))
 	}
 
 	// a stream is not retried

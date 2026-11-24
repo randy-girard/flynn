@@ -125,8 +125,10 @@ func (c *Client) createLayer(id string, src io.Reader, flat bool) (*ct.ImageLaye
 		}
 		res, err := c.RawReq("POST", c.path("/layer/"+id), header, body, &layer)
 		// EDGE-36: tarreceive is receiving MAX_CONCURRENT_UPLOADS layers or
-		// its temp disk is reserved; a file can be sent again
-		if sized && attempt < maxBusyRetries && busy(err) {
+		// its temp disk is reserved (a JSON 503), or the router gave up on
+		// it while it waited for a slot without reading the body (a plain
+		// 503). A layer is named by its hash, so a file can be sent again.
+		if sized && attempt < maxBusyRetries && busy(res, err) {
 			c.sleep(retryDelay(res))
 			if _, serr := src.(*os.File).Seek(start, io.SeekStart); serr == nil {
 				continue
@@ -136,10 +138,10 @@ func (c *Client) createLayer(id string, src io.Reader, flat bool) (*ct.ImageLaye
 	}
 }
 
-// busy reports whether err is tarreceive's retryable 503.
-func busy(err error) bool {
-	var e httphelper.JSONError
-	return errors.As(err, &e) && e.Code == httphelper.ServiceUnavailableErrorCode && e.Retry
+// busy reports whether the answer was a 503 (tarreceive's retryable one,
+// or the router's).
+func busy(res *http.Response, err error) bool {
+	return err != nil && res != nil && res.StatusCode == http.StatusServiceUnavailable
 }
 
 // retryDelay is the Retry-After of res, 30 seconds when it has none, at
