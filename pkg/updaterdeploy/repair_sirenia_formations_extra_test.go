@@ -29,7 +29,8 @@ func TestRepairOrphanSireniaFormationsNoopWhenNoOrphans(t *testing.T) {
 		return &fakeDiscoverdService{meta: &discoverd.ServiceMeta{Data: meta}}
 	}
 	ctrl := &fakeRepairController{
-		apps: []*ct.App{{ID: appID, Name: "postgres"}},
+		apps:        []*ct.App{{ID: appID, Name: "postgres"}},
+		appReleases: map[string]string{appID: release},
 		releases: map[string]*ct.Release{
 			release: {ID: release, Env: map[string]string{"SIRENIA_PROCESS": "postgres"}},
 		},
@@ -97,7 +98,8 @@ func TestRepairOrphanSireniaFormationsIgnoresAlreadyZeroOrphans(t *testing.T) {
 		return &fakeDiscoverdService{meta: &discoverd.ServiceMeta{Data: meta}}
 	}
 	ctrl := &fakeRepairController{
-		apps: []*ct.App{{ID: appID, Name: "postgres"}},
+		apps:        []*ct.App{{ID: appID, Name: "postgres"}},
+		appReleases: map[string]string{appID: activeRelease},
 		releases: map[string]*ct.Release{
 			activeRelease: {ID: activeRelease, Env: map[string]string{"SIRENIA_PROCESS": "postgres"}},
 		},

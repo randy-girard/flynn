@@ -12,14 +12,26 @@ import (
 
 type fakeRepairController struct {
 	controller.Client
-	apps       []*ct.App
-	releases   map[string]*ct.Release
-	formations map[string][]*ct.Formation
-	puts       []*ct.Formation
+	apps        []*ct.App
+	appReleases map[string]string // app ID -> current release ID
+	releases    map[string]*ct.Release
+	formations  map[string][]*ct.Formation
+	puts        []*ct.Formation
 }
 
 func (f *fakeRepairController) AppList() ([]*ct.App, error) {
 	return f.apps, nil
+}
+
+func (f *fakeRepairController) GetAppRelease(appID string) (*ct.Release, error) {
+	id, ok := f.appReleases[appID]
+	if !ok {
+		return nil, controller.ErrNotFound
+	}
+	if r, ok := f.releases[id]; ok {
+		return r, nil
+	}
+	return &ct.Release{ID: id}, nil
 }
 
 func (f *fakeRepairController) GetRelease(id string) (*ct.Release, error) {
@@ -71,7 +83,8 @@ func TestRepairOrphanSireniaFormationsScalesStaleRelease(t *testing.T) {
 	}
 
 	ctrl := &fakeRepairController{
-		apps: []*ct.App{{ID: appID, Name: "postgres"}},
+		apps:        []*ct.App{{ID: appID, Name: "postgres"}},
+		appReleases: map[string]string{appID: activeRelease},
 		releases: map[string]*ct.Release{
 			activeRelease: {ID: activeRelease, Env: map[string]string{"SIRENIA_PROCESS": "postgres"}},
 		},
