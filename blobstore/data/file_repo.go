@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -794,3 +795,127 @@ func (r *FileRepo) AppUsage(app, exclude string) (int64, error) {
 
 // DB is the repo's database.
 func (r *FileRepo) DB() *postgres.DB { return r.db }
+
+// layerNamePattern matches the layer objects tarreceive stores: the shared
+// /tarreceive/layers/<id>.{squashfs,json} and, since EDGE-35, each app's
+// /tarreceive/apps/<app>/layers/<id>.{squashfs,json}.
+const layerNamePattern = `^/tarreceive/(layers|apps/[^/]+/layers)/[^/]+\.(squashfs|json)$`
+
+// LayerObject is a live tarreceive layer object (its squashfs or config).
+type LayerObject struct {
+	Name string
+	Size int64
+	// Age is how long ago the object was stored (by the database clock).
+	Age time.Duration
+	// Uploading is set when an upload of the layer's squashfs or config
+	// is in progress (or abandoned and not yet swept).
+	Uploading bool
+}
+
+// ListLayerObjects lists the live tarreceive layer objects, for the layer
+// GC (`flynn-blobstore cleanup-layers`).
+func (r *FileRepo) ListLayerObjects() ([]LayerObject, error) {
+	rows, err := r.db.Query(`
+SELECT f.name, COALESCE(f.size, 0)::bigint, EXTRACT(EPOCH FROM now() - f.created_at)::float8,
+  EXISTS (SELECT 1 FROM uploads u WHERE regexp_replace(u.name, '\.(squashfs|json)$', '') = regexp_replace(f.name, '\.(squashfs|json)$', ''))
+FROM files f WHERE f.deleted_at IS NULL AND f.name ~ $1 ORDER BY f.name`, layerNamePattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []LayerObject
+	for rows.Next() {
+		var o LayerObject
+		var age float64
+		if err := rows.Scan(&o.Name, &o.Size, &age, &o.Uploading); err != nil {
+			return nil, err
+		}
+		o.Age = time.Duration(age * float64(time.Second))
+		res = append(res, o)
+	}
+	return res, rows.Err()
+}
+
+// DeleteIdleLayer deletes the live objects named names (one layer's
+// squashfs and config) only if none of them was stored within grace and no
+// upload of any of them is in progress, checked under the same per-name locks
+// an upload takes to make its object live, so an object re-put (a tarreceive
+// reuse) after the GC listed it is kept. It reports whether it deleted the
+// layer and how many bytes it freed. Objects in an external backend are
+// deleted after the commit; one that fails stays listed for
+// `flynn-blobstore cleanup`.
+func (r *FileRepo) DeleteIdleLayer(names []string, grace time.Duration) (bool, int64, error) {
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	tx, err := r.db.Begin()
+	if err != nil {
+		return false, 0, err
+	}
+	for _, name := range sorted {
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext($1))", name); err != nil {
+			tx.Rollback()
+			return false, 0, err
+		}
+	}
+	var busy bool
+	if err := tx.QueryRow(`SELECT
+  EXISTS (SELECT 1 FROM files WHERE name = ANY($1) AND deleted_at IS NULL AND created_at > now() - make_interval(secs => $2))
+  OR EXISTS (SELECT 1 FROM uploads WHERE name = ANY($1))`, sorted, grace.Seconds()).Scan(&busy); err != nil {
+		tx.Rollback()
+		return false, 0, err
+	}
+	if busy {
+		tx.Rollback()
+		return false, 0, nil
+	}
+	rows, err := tx.Query(
+		"UPDATE files SET deleted_at = now() WHERE name = ANY($1) AND deleted_at IS NULL RETURNING file_id, external_id, backend, name, COALESCE(size, 0)::bigint", sorted,
+	)
+	if err != nil {
+		tx.Rollback()
+		return false, 0, err
+	}
+	var freed int64
+	external := make(map[string][]backend.FileInfo)
+	for rows.Next() {
+		var info backend.FileInfo
+		var backendName string
+		var externalID *string
+		var size int64
+		if err := rows.Scan(&info.ID, &externalID, &backendName, &info.Name, &size); err != nil {
+			rows.Close()
+			tx.Rollback()
+			return false, 0, err
+		}
+		if externalID != nil {
+			info.ExternalID = *externalID
+		}
+		freed += size
+		if backendName != "postgres" {
+			// the Postgres large object is unlinked by the trigger
+			external[backendName] = append(external[backendName], info)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		tx.Rollback()
+		return false, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, 0, err
+	}
+	var errs []error
+	for name, files := range external {
+		b, err := r.getBackend(name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("layer objects left for cleanup in backend %s: %w", name, err))
+			continue
+		}
+		for _, f := range files {
+			if err := b.Delete(nil, f); err != nil {
+				errs = append(errs, fmt.Errorf("deleting %s from backend %s, left for cleanup: %w", f.Name, name, err))
+			}
+		}
+	}
+	return true, freed, errors.Join(errs...)
+}

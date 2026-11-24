@@ -777,7 +777,9 @@ images.
 | `MAX_LAYER_SIZE` | `tarreceive` | `32g` | The layer tar one upload sends. `flynn docker:push` sends the whole image as one uncompressed tar, so this is the largest image you can push. |
 | `MAX_CONCURRENT_LAYERS` | `tarreceive` | `2` | Layers that unpack and run `mksquashfs` at the same time. Others wait for a slot. |
 | `MAX_OBJECT_SIZE` | `blobstore` | `32g` | One stored object: a slug, a squashfs layer, a build cache, a repo archive. An append counts the bytes already stored. |
-| `APP_QUOTA` | `blobstore` | `100g` | The live bytes stored for one app: its `/slugs/apps/<app>/` and `/tarreceive/apps/<app>/` objects, its build caches and its repo archive. Shared Docker layers under `/tarreceive/layers/` are not counted. |
+| `APP_QUOTA` | `blobstore` | `100g` | The live bytes stored for one app: its `/slugs/apps/<app>/` and `/tarreceive/apps/<app>/` objects (its slugs, its Docker image layers and manifests), its build caches and its repo archive. |
+| `LAYER_GC_INTERVAL` | `blobstore` | off | How often the blobstore deletes Docker image layers that no artifact uses (see [Unused Docker layers](#unused-docker-layers)). A duration (`6h`); unset or `0` is off. |
+| `LAYER_GC_GRACE` | `blobstore` | `24h` | How old an unused layer must be before the layer GC deletes it. |
 | `UPLOAD_IDLE_TIMEOUT` | `blobstore` | `60s` | How long a PUT body may send nothing. A stalled upload is then cut off with `408 Request Timeout`, nothing is stored, and an overwritten object keeps its old content. A duration (`90s`, `5m`) or seconds; `0` or `off` turns it off. |
 
 Sizes are bytes or a number with a binary unit (`512m`, `32g`, `1t`). `0`
@@ -796,7 +798,10 @@ and otherwise when the limit is passed:
 
 - `git push` fails with `error: RPC failed; HTTP 413`, the branch does not
   move and the gitreceive log names the limit.
-- `flynn docker:push` fails with `layer exceeds the tarreceive limit ...`.
+- `flynn docker:push` fails with `layer exceeds the tarreceive limit ...`,
+  or, when the image would take the app past `APP_QUOTA`, with
+  `blobstore refused the upload: app <id> already stores ... the blobstore
+  quota per app is ...` (`507`).
 - A build whose slug is over `MAX_OBJECT_SIZE` fails with
   `blobstore refused the slug (413 ...)`, and one over `APP_QUOTA` with
   `507 Insufficient Storage`; a refused overwrite leaves the old object in
@@ -804,6 +809,44 @@ and otherwise when the limit is passed:
 
 The app quota counts only finished uploads, so uploads running at the same
 time can pass it by up to one object each.
+
+Docker image layers count toward the quota of the app they were pushed to.
+tarreceive stores each app's layers under `/tarreceive/apps/<app>/layers/`, so
+the same image pushed to two apps is stored, and counted, once for each app,
+and a build token cannot store a layer that no app is charged for. Within one
+app a layer that is already stored is reused. A release that another app
+copies (`flynn release:add`, pipelines) keeps naming the first app's layers,
+which stay charged to that app. Layers pushed before this change, and pushes
+with the cluster key that name no app (older CLIs, operator imports), stay in
+the shared `/tarreceive/layers/` store, which no quota counts.
+
+### Unused Docker layers
+
+Deleting a release deletes its image layers unless another artifact still
+names them. A layer that nothing names, because its push failed after the
+upload (for example `image entrypoint ... not found`) or its artifact never
+made it into a release, is left behind. The layer GC deletes such a layer
+(its squashfs and its config) once no live artifact of any app names it, it
+is older than the grace period, and no upload of it is running. tarreceive
+stores a reused layer's config again, which starts its grace period over, and
+checks that the layer is still there before it hands it out.
+
+Run it once from the blobstore app, first as a dry run:
+
+```text
+flynn -a blobstore run /bin/flynn-blobstore cleanup-layers --dry-run
+flynn -a blobstore run /bin/flynn-blobstore cleanup-layers --grace 24h
+```
+
+It prints how many layers it deleted (or would delete) and how many it kept
+because an artifact uses them, they are younger than the grace period, or an
+upload is running. It deletes nothing and exits non-zero when the controller
+cannot list the artifacts. To run it in the blobstore server, set
+`LAYER_GC_INTERVAL` (and optionally `LAYER_GC_GRACE`, default `24h`):
+
+```text
+flynn -a blobstore env:set LAYER_GC_INTERVAL=6h
+```
 
 A blobstore upload holds no database transaction or row lock while its body
 arrives: the data goes to a new object first, and a short transaction swaps it

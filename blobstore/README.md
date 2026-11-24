@@ -31,8 +31,10 @@ scoped `build:artifacts` tokens get `403` on any PUT that carries it.
 A scoped `build:artifacts` token reaches only its own app's objects:
 `/slugs/apps/<app-id>/layers/*`, `/slugs/apps/<app-id>/images/*`, and
 `/tarreceive/apps/<app-id>/images/*` (GET, HEAD, PUT). Everything else,
-including the older shared `/slugs/layers/`, `/slugs/images/`, and
-`/tarreceive/` directories, needs the cluster key. Layer and image objects are
+including the app's Docker layers under `/tarreceive/apps/<app-id>/layers/`
+(only tarreceive writes them, after checking the tar hash),
+the older shared `/slugs/layers/`, `/slugs/images/`, and `/tarreceive/`
+directories, needs the cluster key. Layer and image objects are
 content addressed, so a scoped PUT over one that already exists is refused
 with `409 Conflict` and nothing is written. The cluster key may still replace
 any object.
@@ -41,9 +43,10 @@ Every PUT is bounded, whatever the credential. `MAX_OBJECT_SIZE` (default
 `32g`) caps one object, counting the bytes already stored when the PUT
 appends with `Blobstore-Offset`; a larger PUT gets `413 Request Entity Too
 Large`. `APP_QUOTA` (default `100g`) caps the live bytes stored under one
-app's names (`/slugs/apps/<app>/`, `/tarreceive/apps/<app>/`,
-`/<app>-cache.tgz`, `/<app>-docker-cache.tgz`, `/repos/<app>.tar`); a PUT that
-would pass it gets `507 Insufficient Storage`. A request with a
+app's names (`/slugs/apps/<app>/`, `/tarreceive/apps/<app>/` including the
+Docker layers tarreceive stores for the app, `/<app>-cache.tgz`,
+`/<app>-docker-cache.tgz`, `/repos/<app>.tar`); a PUT that would pass it gets
+`507 Insufficient Storage`. A request with a
 `Content-Length` over the limit is refused before a byte is stored; a chunked
 one is cut off when it passes the limit and its upload is discarded, so an
 overwritten object keeps its old content. `0` or `off` turns a limit off. See
@@ -81,6 +84,17 @@ DELETE returns `500` and logs every error, and those objects stay listed for
 `flynn-blobstore cleanup`. `cleanup` drops a row once its object is gone (an
 object that is already missing counts as gone) and exits non-zero when any
 object could not be deleted.
+
+`flynn-blobstore cleanup-layers [--dry-run] [--grace=24h]` deletes the Docker
+layers tarreceive stored (`/tarreceive/layers/` and
+`/tarreceive/apps/<app>/layers/`, the squashfs and its `.json` config) that no
+live artifact in the controller names, that are older than the grace period,
+and that have no upload in progress. It reads the artifacts with
+`CONTROLLER_KEY`, refuses to delete anything when that fails or the list is
+empty, and checks age and uploads again under the upload locks just before
+each delete, so a layer tarreceive reuses meanwhile (it re-puts the config) is
+kept. With `LAYER_GC_INTERVAL` set (off by default) the server runs it on that
+interval with `LAYER_GC_GRACE` (default `24h`).
 
 ```shell
 # create /file1.txt

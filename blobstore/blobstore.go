@@ -151,6 +151,7 @@ usage: flynn-blobstore <command> [<args>...]
 Commands:
         help        show usage for a specific command
         cleanup     delete file blobs from default backend 
+        cleanup-layers  delete Docker image layers no artifact uses
         migrate     move file blobs from default backend to a different backend
         server      run blobstore HTTP server
 
@@ -215,6 +216,16 @@ func runServer(_ *docopt.Args) error {
 	}
 	log.Printf("PUT limits: MAX_OBJECT_SIZE=%d APP_QUOTA=%d (0 is unlimited) UPLOAD_IDLE_TIMEOUT=%s (0s is off)", lim.maxObject, lim.appQuota, lim.idleTimeout)
 	go sweepUploads(repo)
+	gcInterval, gcGrace, err := layerGCFromEnv()
+	if err != nil {
+		return err
+	}
+	if gcInterval > 0 {
+		log.Printf("layer GC: every LAYER_GC_INTERVAL=%s, LAYER_GC_GRACE=%s", gcInterval, gcGrace)
+		go sweepLayers(repo, gcInterval, gcGrace)
+	} else {
+		log.Printf("layer GC: off (set LAYER_GC_INTERVAL to run it in the server; flynn-blobstore cleanup-layers runs it once)")
+	}
 	mux.Handle("/", protect(handler(repo, lim), keys, clusterAuthorizer(keys), repoExists(repo)))
 	mux.Handle(status.Path, status.Handler(func() status.Status {
 		if err := db.Exec("SELECT 1"); err != nil {
