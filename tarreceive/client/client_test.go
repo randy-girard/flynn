@@ -1,11 +1,13 @@
 package client
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 )
@@ -91,5 +93,73 @@ func TestClientNamesApp(t *testing.T) {
 	want := []string{"GET /layer/abc?app=app-1", "POST /layer/abc?app=app-1", "POST /layer/abc?app=app-1", "POST /artifact?app=app-1", "GET /layer/abc"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("requests = %v, want %v", got, want)
+	}
+}
+
+// EDGE-36: tarreceive answers a retryable 503 when it is already receiving
+// MAX_CONCURRENT_UPLOADS layers or its temp disk is reserved by layers in
+// progress. A layer read from a file is sent again after a pause; a stream,
+// which cannot be rewound, and other errors are not retried.
+func TestCreateLayerRetriesBusyTarreceive(t *testing.T) {
+	var bodies []string
+	busy := 2
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		w.Header().Set("Content-Type", "application/json")
+		if busy > 0 {
+			busy--
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"code":"service_unavailable","message":"busy","retry":true}`))
+			return
+		}
+		w.Write([]byte(`{"id":"abc"}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "key")
+	var waits []time.Duration
+	c.retrySleep = func(d time.Duration) { waits = append(waits, d) }
+
+	f, err := os.CreateTemp(t.TempDir(), "layer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	f.WriteString("layer-data")
+	f.Seek(0, io.SeekStart)
+	layer, err := c.CreateFlatLayer("abc", f)
+	if err != nil {
+		t.Fatalf("busy tarreceive: %v", err)
+	}
+	if layer.ID != "abc" || len(bodies) != 3 || len(waits) != 2 {
+		t.Fatalf("layer %+v after %d requests and %d waits", layer, len(bodies), len(waits))
+	}
+	for i, b := range bodies {
+		if b != "layer-data" {
+			t.Fatalf("request %d sent %q, want the whole file again", i, b)
+		}
+	}
+	if waits[0] != 30*time.Second {
+		t.Fatalf("waited %s, want the Retry-After", waits[0])
+	}
+
+	// a stream is not retried
+	busy, bodies, waits = 1, nil, nil
+	if _, err := c.CreateLayer("abc", onlyReader{strings.NewReader("x")}); err == nil {
+		t.Fatal("a 503 for a stream was retried or ignored")
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("stream sent %d times", len(bodies))
+	}
+
+	// the retries stop
+	busy, bodies, waits = 100, nil, nil
+	f.Seek(0, io.SeekStart)
+	if _, err := c.CreateFlatLayer("abc", f); err == nil {
+		t.Fatal("a tarreceive that stays busy was retried forever")
+	}
+	if len(bodies) != maxBusyRetries+1 {
+		t.Fatalf("sent %d times, want %d", len(bodies), maxBusyRetries+1)
 	}
 }

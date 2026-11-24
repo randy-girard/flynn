@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
+	"time"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/httpclient"
@@ -28,7 +30,14 @@ type Client struct {
 	// count toward its APP_QUOTA (EDGE-35). Empty sends no app: a build
 	// token then uses its only app, the cluster key the shared store.
 	App string
+
+	// retrySleep waits before a layer is sent again (time.Sleep).
+	retrySleep func(time.Duration)
 }
+
+// maxBusyRetries is how many times a layer read from a file is sent again
+// after a retryable 503 from tarreceive.
+const maxBusyRetries = 10
 
 // path adds the app to a request path.
 func (c *Client) path(p string) string {
@@ -96,18 +105,64 @@ func (c *Client) CreateFlatLayer(id string, src io.Reader) (*ct.ImageLayer, erro
 }
 
 func (c *Client) createLayer(id string, src io.Reader, flat bool) (*ct.ImageLayer, error) {
-	var layer ct.ImageLayer
 	header := http.Header{}
 	if flat {
 		header.Set("X-Flynn-Flattened-Layer", "1")
 	}
-	var body interface{} = src
-	if size, ok := remaining(src); ok {
-		// send the length so tarreceive can refuse an oversize layer
-		// before the upload (EDGE-08)
-		body = httpclient.SizedBody{Reader: src, Size: size}
+	size, sized := remaining(src)
+	var start int64
+	if sized {
+		start, _ = src.(*os.File).Seek(0, io.SeekCurrent)
 	}
-	return &layer, c.PostWithHeader(c.path("/layer/"+id), header, body, &layer)
+	for attempt := 0; ; attempt++ {
+		var layer ct.ImageLayer
+		var body interface{} = src
+		if sized {
+			// send the length so tarreceive can refuse an oversize layer
+			// before the upload (EDGE-08). The transport closes a body
+			// that is a Closer; the file must stay open for a retry.
+			body = httpclient.SizedBody{Reader: struct{ io.Reader }{src}, Size: size}
+		}
+		res, err := c.RawReq("POST", c.path("/layer/"+id), header, body, &layer)
+		// EDGE-36: tarreceive is receiving MAX_CONCURRENT_UPLOADS layers or
+		// its temp disk is reserved; a file can be sent again
+		if sized && attempt < maxBusyRetries && busy(err) {
+			c.sleep(retryDelay(res))
+			if _, serr := src.(*os.File).Seek(start, io.SeekStart); serr == nil {
+				continue
+			}
+		}
+		return &layer, err
+	}
+}
+
+// busy reports whether err is tarreceive's retryable 503.
+func busy(err error) bool {
+	var e httphelper.JSONError
+	return errors.As(err, &e) && e.Code == httphelper.ServiceUnavailableErrorCode && e.Retry
+}
+
+// retryDelay is the Retry-After of res, 30 seconds when it has none, at
+// most a minute.
+func retryDelay(res *http.Response) time.Duration {
+	d := 30 * time.Second
+	if res != nil {
+		if n, err := strconv.Atoi(res.Header.Get("Retry-After")); err == nil && n > 0 {
+			d = time.Duration(n) * time.Second
+		}
+	}
+	if d > time.Minute {
+		d = time.Minute
+	}
+	return d
+}
+
+func (c *Client) sleep(d time.Duration) {
+	if c.retrySleep != nil {
+		c.retrySleep(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 // remaining is the number of bytes left to read in a regular file.
