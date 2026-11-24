@@ -92,7 +92,7 @@ func main() {
 	if err := h.configure(); err != nil {
 		log.Fatalln(err)
 	}
-	log.Printf("push limits: MAX_PUSH_SIZE=%d (0 is unlimited) PUSH_IDLE_TIMEOUT=%s (0s is off)", h.maxPushSize, h.idleTimeout)
+	log.Printf("push limits: MAX_PUSH_SIZE=%d (0 is unlimited) MAX_PUSH_DRAIN=%d PUSH_IDLE_TIMEOUT=%s (0s is off)", h.maxPushSize, h.maxPushDrain, h.idleTimeout)
 	srv := &http.Server{Addr: ":" + os.Getenv("PORT"), Handler: wrapHandler(h)}
 	uploadlimit.ApplyServerTimeouts(srv)
 	log.Fatal(srv.ListenAndServe())
@@ -106,6 +106,9 @@ func (h *gitHandler) configure() error {
 	}
 	if h.idleTimeout, err = uploadlimit.DurationFromEnv("PUSH_IDLE_TIMEOUT", defaultPushIdleTimeout); err != nil {
 		return err
+	}
+	if h.maxPushDrain, err = uploadlimit.FromEnv("MAX_PUSH_DRAIN", defaultMaxPushDrain); err != nil {
+		return fmt.Errorf("error parsing MAX_PUSH_DRAIN: %s", err)
 	}
 	return nil
 }
@@ -152,6 +155,9 @@ type gitHandler struct {
 	uploadRetryDelay time.Duration
 	// maxPushSize caps the request body of a git RPC; 0 is no limit.
 	maxPushSize int64
+	// maxPushDrain is how much of a refused chunked pack is still read
+	// so the refusal reaches git (EDGE-37, MAX_PUSH_DRAIN).
+	maxPushDrain int64
 	// idleTimeout cuts off a git RPC body that sends nothing for this long
 	// (EDGE-36); 0 is off.
 	idleTimeout time.Duration
@@ -184,6 +190,9 @@ type gitEnv struct {
 	ReceiveToken string
 	// MaxBody caps the RPC request body; 0 is no limit.
 	MaxBody int64
+	// MaxDrain is how much of a chunked pack past MaxBody is read and
+	// discarded so the refusal reaches git (EDGE-37).
+	MaxDrain int64
 	// IdleTimeout cuts off an RPC request body that sends nothing for this
 	// long (EDGE-36); 0 is off.
 	IdleTimeout time.Duration
@@ -217,9 +226,10 @@ func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandle
 		prepare:    prepareRepo,
 		upload:     uploadRepo,
 
-		maxPushSize: defaultMaxPushSize,
-		idleTimeout: defaultPushIdleTimeout,
-		lockTTL:     buildlock.DefaultTTL,
+		maxPushSize:  defaultMaxPushSize,
+		maxPushDrain: defaultMaxPushDrain,
+		idleTimeout:  defaultPushIdleTimeout,
+		lockTTL:      buildlock.DefaultTTL,
 	}
 }
 
@@ -294,7 +304,7 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env := gitEnv{App: app.ID, AppName: app.Name, MaxBody: h.maxPushSize, IdleTimeout: h.idleTimeout}
+	env := gitEnv{App: app.ID, AppName: app.Name, MaxBody: h.maxPushSize, MaxDrain: h.maxPushDrain, IdleTimeout: h.idleTimeout}
 	// EDGE-09: the receive RPC holds the app's build lease from before the
 	// repo cache download until after the upload. A second push while it is
 	// held still runs receive-pack (git only shows hook output), but the
@@ -397,7 +407,7 @@ func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *a
 		}
 	}
 
-	success := g.handleFunc(gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize, IdleTimeout: h.idleTimeout}, g.rpc, repoPath, w, r)
+	success := g.handleFunc(gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize, MaxDrain: h.maxPushDrain, IdleTimeout: h.idleTimeout}, g.rpc, repoPath, w, r)
 	if success && g.rpc == "git-receive-pack" {
 		if err := h.storeRepo(repoPath, cacheKey); err != nil {
 			logError(w, "uploadRepo", err, "pipeline", pipeline)
@@ -495,32 +505,14 @@ func handleGetInfoRefs(env gitEnv, _ string, path string, w http.ResponseWriter,
 	return true
 }
 
-// pushTooLarge answers 413 naming the limit and the setting that raises it.
-// git prints the status ("RPC failed; HTTP 413") and stops the push.
-func pushTooLarge(w http.ResponseWriter, limit int64) {
-	msg := fmt.Sprintf("push exceeds the gitreceive limit of %s; an operator can raise it with `flynn -a gitreceive env:set MAX_PUSH_SIZE=<size>`",
-		uploadlimit.Format(limit))
-	http.Error(w, msg, http.StatusRequestEntityTooLarge)
-	if _, ok := w.(*httphelper.ResponseWriter); ok {
-		logError(w, "handlePostRPC", errors.New(msg))
-	}
-}
-
-// pushIdle answers 408 for an RPC body that sent nothing for timeout, and
-// closes the connection.
-func pushIdle(w http.ResponseWriter, timeout time.Duration) {
-	msg := fmt.Sprintf("%s (%s); an operator can change it with `flynn -a gitreceive env:set PUSH_IDLE_TIMEOUT=<duration>`", uploadlimit.ErrIdle, timeout)
-	w.Header().Set("Connection", "close")
-	http.Error(w, msg, http.StatusRequestTimeout)
-	if _, ok := w.(*httphelper.ResponseWriter); ok {
-		logError(w, "handlePostRPC", errors.New(msg))
-	}
-}
-
+// handlePostRPC runs one RPC. It returns true when git ran to its end and,
+// for a push, the request could have changed the repository.
 func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r *http.Request) bool {
+	receive := rpc == "git-receive-pack"
 	// EDGE-08: refuse a body over the limit before git sees any of it.
-	if env.MaxBody > 0 && r.ContentLength > env.MaxBody {
-		pushTooLarge(w, env.MaxBody)
+	declaredTooLarge := env.MaxBody > 0 && r.ContentLength > env.MaxBody
+	if declaredTooLarge && !receive {
+		refuse(w, env, nil, tooLargeRefusal(env.MaxBody), true, 0)
 		return false
 	}
 
@@ -536,7 +528,7 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 		body, err = gzip.NewReader(idle)
 		if err != nil {
 			if idle.TimedOut() {
-				pushIdle(w, env.IdleTimeout)
+				refuse(w, env, nil, idleRefusal(env.IdleTimeout), true, 0)
 				return false
 			}
 			fail500(w, "handlePostRPC", err)
@@ -545,6 +537,28 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 	}
 	limited := uploadlimit.NewReader(body, env.MaxBody)
 	body = limited
+
+	// EDGE-37: read the ref updates of a push first, so a refusal can be
+	// answered as a receive-pack result git prints (see refusal.go)
+	var cmds *pushCommands
+	if receive {
+		cmds, body = readPushCommands(limited)
+		if idle.TimedOut() {
+			refuse(w, env, cmds, idleRefusal(env.IdleTimeout), true, limited.N())
+			return false
+		}
+		if cmds.notGit {
+			w.Header().Set("Connection", "close")
+			http.Error(w, "not a git receive-pack request", http.StatusBadRequest)
+			return false
+		}
+		if declaredTooLarge {
+			// the whole request is in curl's buffer already, so git reads
+			// this answer without the pack being read
+			refuse(w, env, cmds, tooLargeRefusal(env.MaxBody), true, limited.N())
+			return false
+		}
+	}
 
 	// Prepare our Git subprocess
 	cmd, pipe := gitCommand(env, "git", subCommand(rpc), "--stateless-rpc", path)
@@ -580,14 +594,30 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 			// stop git before the pre-receive hook can run; the deferred
 			// lease release and temp repo removal follow
 			stop()
-			pushIdle(w, env.IdleTimeout)
+			refuse(w, env, cmds, idleRefusal(env.IdleTimeout), true, limited.N())
 			return false
 		}
 		if limited.Exceeded {
 			// stop git before it finishes a truncated pack or runs the
 			// pre-receive hook
 			stop()
-			pushTooLarge(w, env.MaxBody)
+			tooLarge := tooLargeRefusal(env.MaxBody)
+			if !cmds.canReport() {
+				refuse(w, env, cmds, tooLarge, true, limited.N())
+				return false
+			}
+			// git reads the answer only once it has sent the whole pack:
+			// discard the rest, up to MAX_PUSH_DRAIN, then answer
+			drained, ended := drain(limited.R, env.MaxDrain)
+			if !ended {
+				if idle.TimedOut() {
+					refuse(w, env, cmds, tooLarge, true, limited.N()+drained)
+				} else {
+					refuse(w, env, nil, tooLarge, true, limited.N()+drained)
+				}
+				return false
+			}
+			refuse(w, env, cmds, tooLarge, false, limited.N()+drained)
 			return false
 		}
 		stop()
@@ -611,7 +641,9 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 		return false
 	}
 
-	return true
+	// the probe git sends before a chunked pack changed nothing, so the
+	// repo cache is not stored again for it
+	return !cmds.isProbe()
 }
 
 func fail500(w http.ResponseWriter, context string, err error) {

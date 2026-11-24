@@ -977,8 +977,9 @@ func TestGitHandlerRejectsOversizePush(t *testing.T) {
 	if err == nil {
 		t.Fatalf("oversize push succeeded:\n%s", out)
 	}
-	if !strings.Contains(string(out), "413") {
-		t.Fatalf("oversize push did not report 413:\n%s", out)
+	// EDGE-37: git prints the limit and the setting, not a bare 413
+	if !strings.Contains(string(out), "MAX_PUSH_SIZE") || !strings.Contains(string(out), "[remote rejected]") {
+		t.Fatalf("oversize push did not report the limit:\n%s", out)
 	}
 	// git sends a tiny probe RPC before a large chunked body; that probe
 	// may upload the unchanged repo, but the refused pack never lands

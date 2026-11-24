@@ -50,11 +50,18 @@ func receivePackRunning(repo string) (running, ok bool) {
 }
 
 // TestPostRPCStalledBodyTimesOut (EDGE-36): a push whose pack stops arriving
-// is answered 408 within PUSH_IDLE_TIMEOUT and its connection closed; git
+// is answered within PUSH_IDLE_TIMEOUT and its connection closed; git
 // receive-pack is stopped, the pre-receive hook never runs, the repo cache
 // is not stored, the temp repo is removed and the app's build lease is
-// released, so the next push goes through.
+// released, so the next push goes through. A client that asked for
+// report-status gets a 200 receive-pack result rejecting the ref (EDGE-37),
+// one that did not gets 408.
 func TestPostRPCStalledBodyTimesOut(t *testing.T) {
+	t.Run("report-status", func(t *testing.T) { testPostRPCStalledBody(t, "report-status side-band-64k agent=git/2") })
+	t.Run("no report-status", func(t *testing.T) { testPostRPCStalledBody(t, "agent=git/2") })
+}
+
+func testPostRPCStalledBody(t *testing.T, caps string) {
 	requireHookTools(t)
 	stub := stubReceiver(t)
 	auth := authorizer.New([]string{"cluster-secret"}, nil, nil, 0)
@@ -86,7 +93,7 @@ func TestPostRPCStalledBodyTimesOut(t *testing.T) {
 	}
 	defer conn.Close()
 	zero := strings.Repeat("0", 40)
-	cmd := fmt.Sprintf("%s %s refs/heads/main\x00report-status side-band-64k agent=git/2\n", zero, strings.Repeat("1", 40))
+	cmd := fmt.Sprintf("%s %s refs/heads/main\x00%s\n", zero, strings.Repeat("1", 40), caps)
 	body := fmt.Sprintf("%04x%s0000PACK\x00\x00\x00\x02\x00\x00\x00\x01", len(cmd)+4, cmd)
 	authz := base64.StdEncoding.EncodeToString([]byte("user:cluster-secret"))
 	fmt.Fprintf(conn, "POST /myapp.git/git-receive-pack HTTP/1.1\r\nHost: gitreceive\r\nAuthorization: Basic %s\r\nContent-Type: application/x-git-receive-pack-request\r\nContent-Length: 100000\r\n\r\n%s", authz, body)
@@ -115,7 +122,11 @@ func TestPostRPCStalledBodyTimesOut(t *testing.T) {
 	}
 	msg, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != http.StatusRequestTimeout {
+	if strings.HasPrefix(caps, "report-status") {
+		if res.StatusCode != http.StatusOK || !strings.Contains(string(msg), "ng refs/heads/main no data for PUSH_IDLE_TIMEOUT") {
+			t.Fatalf("stalled push = %d %q, want 200 rejecting refs/heads/main", res.StatusCode, msg)
+		}
+	} else if res.StatusCode != http.StatusRequestTimeout {
 		t.Fatalf("stalled push = %d %q, want 408", res.StatusCode, msg)
 	}
 	if d := time.Since(start); d > 3*time.Second {
