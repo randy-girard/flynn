@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/randy-girard/flynn/logaggregator/buffer"
 	"github.com/randy-girard/flynn/logaggregator/client"
 	"github.com/randy-girard/flynn/logaggregator/snapshot"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
@@ -61,6 +62,9 @@ type snapshotTracker struct {
 }
 
 func (a *aggregatorAPI) GetCursors(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	// A host with no cursor here resends at most this much (EDGE-85).
+	w.Header().Set(logagg.BufferLinesHeader, strconv.Itoa(buffer.DefaultCapacity))
+	w.Header().Set(logagg.BufferTTLHeader, a.agg.ttl.String())
 	httphelper.JSON(w, 200, a.cursors.Get())
 }
 

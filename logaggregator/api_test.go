@@ -397,3 +397,32 @@ func TestLogAPIRequiresClusterKey(t *testing.T) {
 		t.Fatal("client without key must get an error")
 	}
 }
+
+// TestCursorsAdvertiseBufferLimits (EDGE-85): a host with no cursor resends
+// only what the aggregator can keep, so /cursors says how many lines per app
+// the ring holds and how long an idle buffer lives (LOG_BUFFER_TTL).
+func TestCursorsAdvertiseBufferLimits(t *testing.T) {
+	srv := NewServer(ServerConfig{SyslogAddr: ":0", ApiAddr: ":0", ServiceName: "t", APIKeys: []string{"k1"}, BufferTTL: 72 * time.Hour})
+	api := httptest.NewServer(srv.api)
+	defer api.Close()
+
+	c, _ := client.NewWithKey(api.URL, "k1")
+	_, limits, err := c.GetCursorsWithLimits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limits.Lines != 10000 || limits.TTL != 72*time.Hour {
+		t.Fatalf("limits=%+v, want 10000 lines and 72h", limits)
+	}
+
+	req, _ := http.NewRequest("GET", api.URL+"/cursors", nil)
+	req.SetBasicAuth("", "k1")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if l, ttl := res.Header.Get(logagg.BufferLinesHeader), res.Header.Get(logagg.BufferTTLHeader); l != "10000" || ttl != "72h0m0s" {
+		t.Fatalf("headers lines=%q ttl=%q", l, ttl)
+	}
+}

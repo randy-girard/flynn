@@ -4,7 +4,24 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// BufferLinesHeader and BufferTTLHeader are set on the aggregator's /cursors
+// response: how many lines per app id its ring keeps, and how long a buffer
+// with no new line lives (LOG_BUFFER_TTL, a Go duration). A host with no
+// cursor on that aggregator resends no more than that from its log files.
+const (
+	BufferLinesHeader = "Flynn-Log-Buffer-Lines"
+	BufferTTLHeader   = "Flynn-Log-Buffer-TTL"
+)
+
+// BufferLimits is what an aggregator advertises on /cursors. Zero fields
+// were not advertised (an older aggregator).
+type BufferLimits struct {
+	Lines int
+	TTL   time.Duration
+}
 
 type LogOpts struct {
 	Follow      bool

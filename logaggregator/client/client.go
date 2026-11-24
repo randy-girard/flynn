@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
@@ -112,6 +113,24 @@ type Message struct {
 func (c *Client) GetCursors() (map[string]utils.HostCursor, error) {
 	var res map[string]utils.HostCursor
 	return res, c.Get("/cursors", &res)
+}
+
+// GetCursorsWithLimits is GetCursors with the buffer limits the aggregator
+// advertises (zero when it does not).
+func (c *Client) GetCursorsWithLimits() (map[string]utils.HostCursor, logagg.BufferLimits, error) {
+	var cursors map[string]utils.HostCursor
+	res, err := c.RawReq("GET", "/cursors", nil, nil, &cursors)
+	if err != nil {
+		return nil, logagg.BufferLimits{}, err
+	}
+	var limits logagg.BufferLimits
+	if n, err := strconv.Atoi(res.Header.Get(logagg.BufferLinesHeader)); err == nil && n > 0 {
+		limits.Lines = n
+	}
+	if d, err := time.ParseDuration(res.Header.Get(logagg.BufferTTLHeader)); err == nil && d > 0 {
+		limits.TTL = d
+	}
+	return cursors, limits, nil
 }
 
 // GetSnapshotWithContext is GetSnapshot returning the whole response, so the
