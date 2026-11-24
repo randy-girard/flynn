@@ -19,6 +19,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
+	"github.com/randy-girard/flynn/pkg/updaterdeploy"
 )
 
 type modeFileInfo os.FileMode
@@ -207,6 +208,8 @@ type productionFixture struct {
 	sinks           []*ct.Sink
 	sinksErr        error
 	now             time.Time
+	sirenia         []updaterdeploy.SireniaFormationState
+	sireniaErr      error
 
 	api        *stubProductionAPI
 	hostCalls  int
@@ -343,10 +346,16 @@ func (f *productionFixture) checkConfig() productionCheckConfig {
 		jobs, jobsErr := f.jobs, f.jobsErr
 		jobsFn = func() ([]placementJob, error) { return jobs, jobsErr }
 	}
+	var sireniaFn func() ([]updaterdeploy.SireniaFormationState, error)
+	if f.sirenia != nil || f.sireniaErr != nil {
+		states, statesErr := f.sirenia, f.sireniaErr
+		sireniaFn = func() ([]updaterdeploy.SireniaFormationState, error) { return states, statesErr }
+	}
 	return productionCheckConfig{
-		Pool: f.pool,
-		API:  f.api,
-		Now:  nowFn,
+		SireniaFormations: sireniaFn,
+		Pool:              f.pool,
+		API:               f.api,
+		Now:               nowFn,
 		Hosts: func() ([]*cluster.Host, error) {
 			f.hostCalls++
 			return f.hosts, f.hostsErr
@@ -1887,4 +1896,41 @@ func TestProductionCheckBlobstoreAuth(t *testing.T) {
 			t.Fatalf("auth row without a release:\n%s", got)
 		}
 	}
+}
+
+// EDGE-73: a sirenia app whose current release runs no engines while an
+// older release runs them (the EDGE-68 system Postgres) fails the check; a
+// primary on another release while the current release also runs engines
+// warns; a healthy app is ok. Release ids are shortened.
+func TestProductionCheckSireniaFormation(t *testing.T) {
+	f := &productionFixture{sirenia: []updaterdeploy.SireniaFormationState{
+		{App: "postgres", ProcessType: "postgres", CurrentRelease: "e0165d85-9f67-4fa7-ac9f-2a42f90396ad", CurrentCount: 0, PrimaryRelease: "0a8a5e46-41a3-43b0-9419-e9778cc8fa96", PrimaryCount: 3},
+	}}
+	got, err := f.run(t)
+	assertFailed(t, err)
+	row := mustCheck(t, got, "fail", "sirenia-formation", "postgres current=e0165d85 postgres=0 engines=0a8a5e46 postgres=3")
+	if !strings.Contains(row.action, "flynn-host update") {
+		t.Fatalf("the action must say how to move the engines: %q", row.action)
+	}
+
+	f = &productionFixture{sirenia: []updaterdeploy.SireniaFormationState{
+		{App: "postgres", ProcessType: "postgres", CurrentRelease: "e0165d85", CurrentCount: 3, PrimaryRelease: "0a8a5e46", PrimaryCount: 3},
+	}}
+	got, err = f.run(t)
+	assertPassed(t, err)
+	mustCheck(t, got, "warn", "sirenia-formation", "postgres current=e0165d85 postgres=3 engines=0a8a5e46 postgres=3")
+
+	f = &productionFixture{sirenia: []updaterdeploy.SireniaFormationState{
+		{App: "postgres", ProcessType: "postgres", CurrentRelease: "aaaa", CurrentCount: 3, PrimaryRelease: "aaaa", PrimaryCount: 3},
+		{App: "mysql-plugin", ProcessType: "mariadb", CurrentRelease: "bbbb", CurrentCount: 3, PrimaryRelease: "bbbb", PrimaryCount: 3},
+	}}
+	got, err = f.run(t)
+	assertPassed(t, err)
+	mustCheck(t, got, "ok", "sirenia-formation", "apps=2")
+
+	f = &productionFixture{sireniaErr: errors.New("discoverd unavailable")}
+	got, err = f.run(t)
+	assertFailed(t, err)
+	mustCheck(t, got, "fail", "sirenia-formation", "error=discoverd unavailable")
+	assertProductionWidth(t, got)
 }

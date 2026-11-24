@@ -26,6 +26,7 @@ import (
 	"github.com/randy-girard/flynn/flannel/subnet"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/term"
+	"github.com/randy-girard/flynn/pkg/updaterdeploy"
 )
 
 // flannelDefaultNetwork is the flannel wrapper's NETWORK when that env var is
@@ -114,6 +115,14 @@ scope, or expires within 30 days adds a service-token warn. A healthy
 token, a missing plugin, or a missing token adds no row. The token is
 never printed. A warn does not exit 1.
 
+Sirenia formation: for postgres and each sirenia plugin app, the release
+the sirenia primary runs from (discoverd) is compared with the app's
+current release. A current release whose formation runs no engines while
+the primary's release runs them fails: run flynn-host update (or deploy the
+app) to move them. A primary on another release while the current release
+also runs engines warns. Both shapes also appear while a deploy of that app
+is running. Release ids are shortened to 8 characters.
+
 Overlay prints the live flannel NETWORK and subnet length. It does not
 hardcode a network. This line is informational.
 
@@ -168,6 +177,9 @@ type productionCheckConfig struct {
 	// Jobs samples running jobs for the placement line. Nil means there is
 	// nothing to sample. The check does not stop those jobs.
 	Jobs func() ([]placementJob, error)
+	// SireniaFormations reads where each sirenia app's engines run for the
+	// sirenia-formation line. Nil adds no line.
+	SireniaFormations func() ([]updaterdeploy.SireniaFormationState, error)
 }
 
 // hostedProductionBlock reports whether production:check would fail if the
@@ -214,6 +226,13 @@ func hostProductionCheckConfig(client *cluster.Client, pool string) productionCh
 		Stat:        os.Stat,
 		Jobs: func() ([]placementJob, error) {
 			return listPlacementJobs(client)
+		},
+		SireniaFormations: func() ([]updaterdeploy.SireniaFormationState, error) {
+			c, err := controllerClient()
+			if err != nil {
+				return nil, err
+			}
+			return updaterdeploy.SireniaFormationStates(c)
 		},
 	}
 }
@@ -390,10 +409,61 @@ func collectProductionRows(cfg productionCheckConfig) []productionRow {
 		now = cfg.Now()
 	}
 	addBackupLine(add, api, now)
+	if cfg.SireniaFormations != nil {
+		states, err := cfg.SireniaFormations()
+		addSireniaFormationLine(add, states, err)
+	}
 	addLogSinkLine(add, api, mode)
 	addOverlayLine(add, meta, metaErr)
 	addServiceTokenLine(add, api, now)
 	return rows
+}
+
+// addSireniaFormationLine checks that every sirenia app's engines run from
+// its current release (EDGE-73). A current release with no engines while
+// another release runs them fails: every deploy copies the current formation,
+// so before EDGE-73 a deploy left the engines where they were. Engines on
+// another release while the current release also runs some warns (it is
+// also the shape during a sirenia deploy).
+func addSireniaFormationLine(add func(productionRow), states []updaterdeploy.SireniaFormationState, err error) {
+	if err != nil {
+		add(productionRow{
+			status: "fail", check: "sirenia-formation", detail: "error=" + err.Error(),
+			action: "Fix the controller or discoverd, then rerun.",
+		})
+		return
+	}
+	short := func(id string) string {
+		if len(id) > 8 {
+			return id[:8]
+		}
+		return id
+	}
+	bad := false
+	for _, s := range states {
+		if !s.Mismatch() {
+			continue
+		}
+		bad = true
+		detail := fmt.Sprintf("%s current=%s %s=%d engines=%s %s=%d", s.App, short(s.CurrentRelease), s.ProcessType, s.CurrentCount, short(s.PrimaryRelease), s.ProcessType, s.PrimaryCount)
+		if s.Stuck() {
+			add(productionRow{
+				status: "fail", check: "sirenia-formation", detail: detail,
+				action: "The current release runs no engines. Unless a deploy of the app is running, run flynn-host update (or deploy the app) to move them to a new release. Do not scale the current release by hand.",
+			})
+			continue
+		}
+		add(productionRow{
+			status: "warn", check: "sirenia-formation", detail: detail,
+			action: "The primary is not on the current release. Unless a deploy of the app is running, run flynn-host update (or deploy the app) to move the engines to one release.",
+		})
+	}
+	if !bad {
+		add(productionRow{
+			status: "ok", check: "sirenia-formation", detail: fmt.Sprintf("apps=%d", len(states)),
+			action: "Every sirenia app's primary runs from its current release.",
+		})
+	}
 }
 
 func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release, err error) {

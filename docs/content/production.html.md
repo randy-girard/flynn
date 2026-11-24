@@ -28,7 +28,8 @@ turns the status colors off.
 
 `--zpool-name` defaults to `flynn-default`. The command reads tenancy,
 workload placement, the blobstore release, runtime profiles, discoverd host
-tags, `GET /sinks`, flannel service metadata, and this host's pool. It does
+tags, `GET /sinks`, flannel service metadata, the formations and discoverd
+sirenia state of each sirenia app, and this host's pool. It does
 not migrate the blobstore, set `flynn-max-processes` or
 `flynn-max-persistent-singletons`, write `workload_placement` or
 `flynn-role`, create or move volumes, detach a vdev, or dial a log sink.
@@ -51,6 +52,7 @@ not migrate the blobstore, set `flynn-max-processes` or
 | `kafka-availability` | Same rule as `mongodb-availability`, from `GET /cluster/kafka-availability`. Set it with `flynn-host kafka:availability` or Cluster → Settings. |
 | `clickhouse-availability` | Same rule as `mongodb-availability`, from `GET /cluster/clickhouse-availability`. Set it with `flynn-host clickhouse:availability` or Cluster → Settings. |
 | `backup` | No Postgres primary and no MongoDB, Kafka, or ClickHouse resource: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A Postgres primary or a MongoDB, Kafka, or ClickHouse resource whose last dump is missing or strictly older than 24h plus 1h is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources`, `GET /providers/mongodb/resources`, `GET /providers/kafka/resources`, and `GET /providers/clickhouse/resources`. A 404 on a provider means that engine has no resources. Any other list error fails the line. It reads `GET /tenant-backups` only when at least one counted resource exists. It does not dump. |
+| `sirenia-formation` | For the system Postgres and every sirenia plugin app, compares the release the sirenia primary runs from (its `FLYNN_RELEASE_ID` in discoverd) with the app's current release. `fail` when the current release's formation runs no engines and the primary's release runs them. Older releases of Flynn copied that zero on every deploy and left the engines where they were. Run `flynn-host update` (or deploy the app), which moves them to a new release. Do not scale the current release up by hand, because that doubles the engines. `warn` when the primary is on another release and the current release also runs engines. `ok` prints the number of sirenia apps. Both shapes also appear while a deploy of that app is running. Release ids are shortened to 8 characters. A controller or discoverd error is `fail`. |
 | `log-sink` | `GET /sinks` once. It does not call `log-sink:list` on a host and it does not dial. Hosted is `fail` and self-hosted is `warn` unless the list covers system and app logs. A qualifying sink is `kind=syslog`, empty app, `syslog+tls` with a host, `insecure` false, format empty or `rfc6587`, and an empty prefix. Scope `all` (an empty scope is `all`) is enough. So is one `system` sink and one `apps` sink. `syslog://`, `insecure`, `newline`, `prefixed_newline`, a prefix, a per-app sink, and `kind=logaggregator` do not count. A list error, an unknown tenancy mode, or a failed tenancy read is `fail` in either mode. That is not a self-hosted warning. The same mux, disk files, and drop counter run in both modes. `tenancy_mode` only changes this line's severity. |
 | `overlay` | Informational. Prints the live flannel network and subnet length. Change it with `flynn-host overlay:set`. |
 
