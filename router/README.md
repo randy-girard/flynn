@@ -47,13 +47,20 @@ TCP routes may store a hostname and a TLS mode:
 The router pre-binds 3000–3500. New TCP routes are allocated from 10000–29999
 and listen on demand. `flynn addons:expose` uses that window. The host firewall
 opens the allocated port, not the whole window. Existing routes in 3000–3500
-keep working on the pre-bound listeners.
+keep working on the pre-bound sockets. A pre-bound socket is bound but does
+not listen until a route takes it, so a port in 3000–3500 without a route
+refuses connections instead of accepting them for nobody.
 
-Updating a TCP route (new certificate, service, or `leader` flag) and the full
-resync after the controller event stream drops reuse the route's existing
-socket. Each route has exactly one listener; the old route stops accepting and
-releases its service as soon as the new one serves, and a deleted route's port
-stops accepting (ports in 3000–3500 go back to the pre-bound pool).
+Each port has at most one listening socket, and exactly one route accepts on
+it. Updating a TCP route (new certificate, service, or `leader` flag) and the
+full resync after the controller event stream drops reuse the route's existing
+socket. The same holds when the route id on a port changes: a route deleted
+and re-created on its port while the event stream was down, or a new route's
+set seen before the old one's remove. The new route takes over the socket, the
+old route stops accepting and releases its service as soon as the new one
+serves, and the old id's remove is then a no-op. A deleted route's port is
+refused from then on: a port in 10000–29999 is closed, and a port in
+3000–3500 goes back to the pre-bound pool as a socket that does not listen.
 
 Updating an HTTP route (an edit, a certificate renewal, or the full resync)
 replaces it in place. The router drops the old route's service reference, so

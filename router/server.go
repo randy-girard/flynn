@@ -78,6 +78,9 @@ func (s *Router) Close() {
 
 var listenFunc = keepalive.ReusableListen
 
+// bindFunc reserves a pre-bound TCP route port without listening on it.
+var bindFunc = keepalive.ReusableBind
+
 func main() {
 	defer shutdown.Exit()
 	log := logger.New("fn", "main")

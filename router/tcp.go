@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/randy-girard/flynn/pkg/connutil"
+	"github.com/randy-girard/flynn/pkg/keepalive"
 	"github.com/randy-girard/flynn/pkg/tlsconfig"
 	"github.com/randy-girard/flynn/router/proxy"
 	router "github.com/randy-girard/flynn/router/types"
@@ -30,7 +31,14 @@ type TCPListener struct {
 	startPort     int
 	endPort       int
 	reservedPorts []int
-	listeners     map[int]net.Listener
+
+	// pool holds the pre-bound ports (startPort to endPort) that no route
+	// owns. The sockets are bound but not listening, so the port stays
+	// reserved and the kernel refuses connections to it. A route on a pool
+	// port listens on that socket; when the route goes, a fresh bound socket
+	// takes the port back. Each port is either in the pool or owned by
+	// exactly one route in ports, never both.
+	pool map[int]*keepalive.BoundSocket
 
 	mtx      sync.RWMutex
 	services map[string]*service
@@ -39,8 +47,9 @@ type TCPListener struct {
 	closed   bool
 
 	// testing hooks
-	preSync  func()
-	postSync func(<-chan struct{})
+	preSync    func()
+	postSync   func(<-chan struct{})
+	retryDelay time.Duration // wait before a resync; 0 means 2s
 }
 
 func (l *TCPListener) Start() error {
@@ -62,17 +71,17 @@ func (l *TCPListener) Start() error {
 	l.services = make(map[string]*service)
 	l.routes = make(map[string]*tcpRoute)
 	l.ports = make(map[int]*tcpRoute)
-	l.listeners = make(map[int]net.Listener)
+	l.pool = make(map[int]*keepalive.BoundSocket)
 
 	if l.startPort != 0 && l.endPort != 0 {
 		for i := l.startPort; i <= l.endPort; i++ {
 			addr := fmt.Sprintf("%s:%d", l.IP, i)
-			listener, err := listenFunc("tcp4", addr)
+			sock, err := bindFunc("tcp4", addr)
 			if err != nil {
 				l.Close()
 				return listenErr{addr, err}
 			}
-			l.listeners[i] = listener
+			l.pool[i] = sock
 		}
 	}
 
@@ -108,7 +117,11 @@ func (l *TCPListener) runSync(ctx context.Context, errc chan error) {
 		}
 		log.Printf("router: tcp sync error: %s", err)
 
-		time.Sleep(2 * time.Second)
+		delay := l.retryDelay
+		if delay == 0 {
+			delay = 2 * time.Second
+		}
+		time.Sleep(delay)
 
 		if l.preSync != nil {
 			l.preSync()
@@ -140,10 +153,10 @@ func (l *TCPListener) Close() error {
 	}
 	l.stopSync()
 	for _, s := range l.routes {
-		s.Close()
+		s.closeListener(false)
 	}
-	for _, listener := range l.listeners {
-		listener.Close()
+	for _, sock := range l.pool {
+		sock.Close()
 	}
 	l.closed = true
 	return nil
@@ -170,32 +183,6 @@ func (h *tcpSyncHandler) Set(data *router.Route) error {
 		addr:     h.l.IP + ":" + strconv.Itoa(route.Port),
 		parent:   h.l,
 	}
-
-	service, err := bindListenerService(&h.l.mtx, &h.l.closed, h.l.services, h.l.wm, h.l.discoverd, r.Service, r.DrainBackends)
-	if err != nil {
-		return err
-	}
-	if service == nil {
-		return nil
-	}
-
-	h.l.mtx.Lock()
-	defer h.l.mtx.Unlock()
-	if h.l.closed {
-		return nil
-	}
-	r.service = service
-	var bf proxy.BackendListFunc
-	if r.Leader {
-		bf = backendFunc(r.Service, service.sc.Leader)
-	} else {
-		bf = backendFunc(r.Service, service.sc.Instances)
-	}
-	r.rp = proxy.NewReverseProxy(proxy.ReverseProxyConfig{
-		BackendListFunc: bf,
-		RequestTracker:  service,
-		Logger:          logger,
-	})
 	if cert := r.Certificate; cert != nil && cert.Cert != "" && cert.Key != "" && router.TerminatesTLS(r.TLSMode) {
 		kp, err := tls.X509KeyPair([]byte(cert.Cert), []byte(cert.Key))
 		if err != nil {
@@ -208,47 +195,73 @@ func (h *tcpSyncHandler) Set(data *router.Route) error {
 		r.Certificate = nil
 	}
 
-	// A route that is already serving (an update, or every route again after
-	// a resync) must hand its socket to the new route. Binding a fresh one
-	// would succeed under SO_REUSEPORT and leave the old route accepting a
-	// share of the connections with its old service and certificate.
-	existing := h.l.routes[data.ID]
-	samePort := existing != nil && existing.Port == r.Port
-	fromPool, oldClosed := false, false
-	if samePort {
-		ln, err := existing.dupListener()
+	var service *service
+	for {
+		// cache.New waits for discoverd EventKindCurrent; do that without
+		// the listener mutex
+		svc, err := bindListenerService(&h.l.mtx, &h.l.closed, h.l.services, h.l.wm, h.l.discoverd, r.Service, r.DrainBackends)
 		if err != nil {
-			// fall back to a fresh bind once the old socket is gone
-			log.Printf("router: tcp route %s: reusing listener on port %d: %s", data.ID, r.Port, err)
-			existing.l.Close()
-			oldClosed = true
-		} else {
-			r.l = ln
+			return err
 		}
-	} else if listener, ok := h.l.listeners[r.Port]; ok {
-		r.l = listener
-		fromPool = true
-		delete(h.l.listeners, r.Port)
+		if svc == nil {
+			return nil
+		}
+		h.l.mtx.Lock()
+		if h.l.closed {
+			h.l.mtx.Unlock()
+			return nil
+		}
+		if !svc.closed {
+			service = svc
+			break
+		}
+		// the last route using it went while the lock was not held
+		h.l.mtx.Unlock()
 	}
-	started := make(chan error)
-	go r.Serve(started)
-	if err := <-started; err != nil {
-		if fromPool {
-			h.l.listeners[r.Port] = r.l
-		} else if samePort && r.l != nil {
-			r.l.Close()
+	defer h.l.mtx.Unlock()
+	service.refs++
+	r.service = service
+	var bf proxy.BackendListFunc
+	if r.Leader {
+		bf = backendFunc(r.Service, service.sc.Leader)
+	} else {
+		bf = backendFunc(r.Service, service.sc.Instances)
+	}
+	r.rp = proxy.NewReverseProxy(proxy.ReverseProxyConfig{
+		BackendListFunc: bf,
+		RequestTracker:  service,
+		Logger:          logger,
+	})
+
+	// The route that serves this port now hands its socket to the new
+	// route: the same id (an update, or every route again after a resync),
+	// or another id (the route was deleted and re-created on the port while
+	// the event stream was down, or the new id's set arrived before the old
+	// id's remove). Binding a fresh socket would succeed under SO_REUSEPORT
+	// and leave the old socket taking a share of the connections.
+	existing := h.l.routes[data.ID]
+	holder := h.l.ports[r.Port]
+	ln, err := h.l.takePortLocked(r, holder)
+	if holder != nil && holder != existing {
+		// stopped accepting in takePortLocked, success or not
+		h.l.dropRouteLocked(holder)
+	}
+	if err != nil {
+		if existing != nil && existing == holder {
+			h.l.dropRouteLocked(existing)
 		}
+		h.l.releaseService(service)
 		return err
 	}
-	service.refs++
+	r.rawL = ln
+	r.l = ln
+	if r.tlsConfig != nil {
+		r.l = tls.NewListener(ln, r.tlsConfig)
+	}
 	if existing != nil {
-		if samePort {
-			// the new route owns the socket; stop the old accept loop only
-			if !oldClosed {
-				existing.l.Close()
-			}
-		} else {
-			existing.Close()
+		if existing != holder {
+			// the route moved to another port
+			existing.closeListener(true)
 			if h.l.ports[existing.Port] == existing {
 				delete(h.l.ports, existing.Port)
 			}
@@ -257,9 +270,53 @@ func (h *tcpSyncHandler) Set(data *router.Route) error {
 	}
 	h.l.routes[data.ID] = r
 	h.l.ports[r.Port] = r
+	go r.Serve(r.l)
 
 	go h.l.wm.Send(&router.Event{Event: router.EventTypeRouteSet, ID: data.ID, Route: r.ToRoute()})
 	return nil
+}
+
+// takePortLocked returns a listener on r's port: a dup of the socket of the
+// route that holds the port (which stops accepting), the port's pre-bound
+// socket, or a fresh one. The caller holds l.mtx.
+func (l *TCPListener) takePortLocked(r *tcpRoute, holder *tcpRoute) (net.Listener, error) {
+	if holder != nil {
+		ln, err := holder.dupListener()
+		// the holder stops accepting; with a dup the socket and its queued
+		// connections stay with r
+		holder.l.Close()
+		if err == nil {
+			return ln, nil
+		}
+		log.Printf("router: tcp route %s: reusing listener on port %d: %s", r.ID, r.Port, err)
+	}
+	if sock, ok := l.pool[r.Port]; ok {
+		delete(l.pool, r.Port)
+		ln, err := sock.Listen()
+		if err != nil {
+			return nil, listenErr{r.addr, err}
+		}
+		return ln, nil
+	}
+	ln, err := listenFunc("tcp4", r.addr)
+	if err != nil {
+		return nil, listenErr{r.addr, err}
+	}
+	return ln, nil
+}
+
+// dropRouteLocked forgets a route whose socket another route took over (or
+// that lost it). Its own remove, if one follows, is then a no-op. The caller
+// holds l.mtx.
+func (l *TCPListener) dropRouteLocked(r *tcpRoute) {
+	if l.routes[r.ID] == r {
+		delete(l.routes, r.ID)
+	}
+	if l.ports[r.Port] == r {
+		delete(l.ports, r.Port)
+	}
+	l.releaseService(r.service)
+	go l.wm.Send(&router.Event{Event: router.EventTypeRouteRemove, ID: r.ID, Route: r.ToRoute()})
 }
 
 func (h *tcpSyncHandler) Remove(id string) error {
@@ -272,11 +329,13 @@ func (h *tcpSyncHandler) Remove(id string) error {
 	if !ok {
 		return ErrNotFound
 	}
-	r.Close()
+	r.closeListener(true)
 	h.l.releaseService(r.service)
 
 	delete(h.l.routes, id)
-	delete(h.l.ports, r.Port)
+	if h.l.ports[r.Port] == r {
+		delete(h.l.ports, r.Port)
+	}
 	go h.l.wm.Send(&router.Event{Event: router.EventTypeRouteRemove, ID: id, Route: r.ToRoute()})
 	return nil
 }
@@ -292,26 +351,9 @@ type tcpRoute struct {
 	tlsConfig *tls.Config
 }
 
-func (r *tcpRoute) Serve(started chan<- error) {
-	var err error
-	if r.l == nil {
-		r.l, err = listenFunc("tcp4", r.addr)
-	}
-	if err == nil {
-		r.rawL = r.l
-		if r.tlsConfig != nil {
-			r.l = tls.NewListener(r.l, r.tlsConfig)
-		}
-	}
-	if err != nil {
-		err = listenErr{r.addr, err}
-	}
-	started <- err
-	if err != nil {
-		return
-	}
+func (r *tcpRoute) Serve(l net.Listener) {
 	for {
-		conn, err := r.l.Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			break
 		}
@@ -353,19 +395,34 @@ func (r *tcpRoute) dupListener() (net.Listener, error) {
 	return net.FileListener(fd)
 }
 
-func (r *tcpRoute) Close() {
+// closeListener stops the route's listener. With toPool, a port in the
+// pre-bound range goes back to the pool as a bound socket that does not
+// listen, so connections to it are refused rather than queued for nobody.
+// The new socket is bound before the old one closes, so the port is held
+// throughout. The caller holds the parent's mtx.
+func (r *tcpRoute) closeListener(toPool bool) {
 	if r.l == nil {
 		return
 	}
-	if r.Port >= r.parent.startPort && r.Port <= r.parent.endPort {
-		ln, err := r.dupListener()
-		if err != nil {
-			log.Printf("router: returning tcp port %d to the pool: %s", r.Port, err)
-		} else {
-			r.parent.listeners[r.Port] = ln
-		}
+	p := r.parent
+	if !toPool || r.Port < p.startPort || r.Port > p.endPort || p.startPort == 0 {
+		r.l.Close()
+		return
 	}
+	sock, err := bindFunc("tcp4", r.addr)
 	r.l.Close()
+	if err != nil {
+		// the listening socket held the port; try again now that it is gone
+		sock, err = bindFunc("tcp4", r.addr)
+	}
+	if err != nil {
+		log.Printf("router: returning tcp port %d to the pool: %s", r.Port, err)
+		return
+	}
+	if old := p.pool[r.Port]; old != nil {
+		old.Close()
+	}
+	p.pool[r.Port] = sock
 }
 
 func (r *tcpRoute) ServeConn(conn net.Conn) {

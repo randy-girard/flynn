@@ -74,9 +74,10 @@ func (s *Syncer) Sync(ctx context.Context, h SyncHandler, startc chan<- struct{}
 		}
 	}
 	// Remove only ids missing from the complete union, and only after List
-	// and the watch both succeeded.
+	// and the watch both succeeded. A Set above may already have dropped an
+	// id (a TCP route that took over the port of a deleted route).
 	for id := range toRemove {
-		if err := h.Remove(id); err != nil {
+		if err := h.Remove(id); err != nil && err != ErrNotFound {
 			return err
 		}
 	}
