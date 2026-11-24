@@ -40,6 +40,9 @@ const (
 	// defaultSnapshotDrain is how long a stopping instance keeps writing the
 	// snapshots new instances asked it for.
 	defaultSnapshotDrain = 10 * time.Second
+	// defaultSnapshotLinger is how long a stopping instance stays up after
+	// the last snapshot it wrote, for the bytes still in flight.
+	defaultSnapshotLinger = 3 * time.Second
 )
 
 // snapshotCountTrailer is the HTTP trailer in which a snapshot response says
@@ -212,13 +215,30 @@ func (ir *idleReader) timedOut() bool {
 	return ir.idle
 }
 
+func (t *snapshotTracker) done() {
+	t.mtx.Lock()
+	t.last = time.Now()
+	t.mtx.Unlock()
+	t.wg.Done()
+}
+
+func (t *snapshotTracker) lastDone() time.Time {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+	return t.last
+}
+
 // errSnapshotDrain is returned when snapshot responses are still being
 // written when the drain time is up.
 var errSnapshotDrain = errors.New("snapshot responses still being written")
 
 // drain waits up to timeout for the snapshot responses being written, so new
-// instances that asked before this one stopped get all of it.
-func (t *snapshotTracker) drain(timeout time.Duration) error {
+// instances that asked before this one stopped get all of it. A written
+// response may still be in the socket buffers, and the job's network goes
+// away with the process (the reader then sees a stall, not an end), so
+// drain also waits until linger has passed since the last one finished.
+func (t *snapshotTracker) drain(timeout, linger time.Duration) error {
+	deadline := time.After(timeout)
 	done := make(chan struct{})
 	go func() {
 		t.wg.Wait()
@@ -226,8 +246,18 @@ func (t *snapshotTracker) drain(timeout time.Duration) error {
 	}()
 	select {
 	case <-done:
-		return nil
-	case <-time.After(timeout):
+	case <-deadline:
 		return errSnapshotDrain
 	}
+	last := t.lastDone()
+	if last.IsZero() {
+		return nil
+	}
+	if wait := time.Until(last.Add(linger)); wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-deadline:
+		}
+	}
+	return nil
 }

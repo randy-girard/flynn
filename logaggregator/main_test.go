@@ -36,12 +36,15 @@ func (s *LogAggregatorTestSuite) SetUpTest(c *C) {
 const testAPIKey = "test-cluster-key"
 
 func testServer(c *C) *Server {
-	return NewServer(ServerConfig{
+	srv := NewServer(ServerConfig{
 		SyslogAddr:  ":0",
 		ApiAddr:     ":0",
 		ServiceName: "test-logaggregator",
 		APIKeys:     []string{testAPIKey},
 	})
+	// tests that cover the linger set it
+	srv.snapshotLinger = 0
+	return srv
 }
 
 func testClient(c *C, srv *Server) *client.Client {

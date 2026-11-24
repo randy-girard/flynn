@@ -50,6 +50,11 @@ type aggregatorAPI struct {
 // stopping instance can let them finish (Server.Shutdown).
 type snapshotTracker struct {
 	wg sync.WaitGroup
+
+	mtx sync.Mutex
+	// last is when the last snapshot response finished.
+	last time.Time
+
 	// hook, when set (tests), runs after the snapshot is taken and before
 	// it is written.
 	hook func()
@@ -128,7 +133,7 @@ func (a *aggregatorAPI) GetLog(ctx context.Context, w http.ResponseWriter, req *
 
 func (a *aggregatorAPI) GetSnapshot(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	a.snaps.wg.Add(1)
-	defer a.snaps.wg.Done()
+	defer a.snaps.done()
 	w.Header().Set("Content-Type", "application/vnd.flynn.logaggregator-snapshot")
 	// the count goes in a trailer once every message is written, so a
 	// reader can tell a whole snapshot from one that ended early

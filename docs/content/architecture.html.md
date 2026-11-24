@@ -494,7 +494,8 @@ cursors are only taken from a snapshot read to the end; after a partial or
 failed load each host resends the lines it still has on disk, and the ring
 drops the duplicates. A stopping aggregator waits up to 10 seconds for the
 snapshots it is still sending, because a deploy stops the old jobs as soon
-as the new ones are up. Each host also keeps about 200MB of
+as the new ones are up, and then stays up 3 seconds after the last one so
+the bytes still in its socket buffers arrive before its network goes away. Each host also keeps about 200MB of
 log files per app. A cluster that needs to keep logs adds a syslog sink
 with `flynn-host log-sink:add`. Hosted and self-hosted clusters use that
 same path.

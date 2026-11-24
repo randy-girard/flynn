@@ -38,6 +38,9 @@ type Server struct {
 	// snapshotDrain bounds how long Shutdown lets snapshot responses that
 	// are being written finish.
 	snapshotDrain time.Duration
+	// snapshotLinger is how long Shutdown keeps the process up after the
+	// last snapshot was written, so its bytes still in flight arrive.
+	snapshotLinger time.Duration
 
 	testMessageHook chan struct{}
 	// syslogSplit frames syslog connections; tests replace it.
@@ -66,15 +69,16 @@ func NewServer(conf ServerConfig) *Server {
 	c := NewHostCursors()
 	snaps := &snapshotTracker{}
 	return &Server{
-		Aggregator:    a,
-		Cursors:       c,
-		conf:          conf,
-		api:           apiHandler(a, c, conf.APIKeys, snaps),
-		snapshots:     snaps,
-		snapshotDrain: defaultSnapshotDrain,
-		shutdown:      make(chan struct{}),
-		syslogDone:    make(chan struct{}),
-		syslogSplit:   rfc6587.Split,
+		Aggregator:     a,
+		Cursors:        c,
+		conf:           conf,
+		api:            apiHandler(a, c, conf.APIKeys, snaps),
+		snapshots:      snaps,
+		snapshotDrain:  defaultSnapshotDrain,
+		snapshotLinger: defaultSnapshotLinger,
+		shutdown:       make(chan struct{}),
+		syslogDone:     make(chan struct{}),
+		syslogSplit:    rfc6587.Split,
 	}
 }
 
@@ -100,7 +104,7 @@ func (s *Server) Shutdown() {
 	}
 	// a deploy stops the old jobs as soon as the new ones are up, which is
 	// while they read this instance's snapshot: let those reads finish
-	if err := s.snapshots.drain(s.snapshotDrain); err != nil {
+	if err := s.snapshots.drain(s.snapshotDrain, s.snapshotLinger); err != nil {
 		log15.Error("stopping with snapshot reads unfinished", "waited", s.snapshotDrain, "err", err)
 	}
 

@@ -396,3 +396,30 @@ func (s *LogAggregatorTestSuite) TestLoadSnapshotCutShortAppliesNoCursors(c *C) 
 	s.waitForLines(c, 4)
 	c.Assert(s.srv.Cursors.Get(), HasLen, 1)
 }
+
+// The old leader's process exit tears down its network before the last
+// bytes of a snapshot it just wrote reach the reader (seen live: the reader
+// got every message but not the end, and timed out). Shutdown keeps the
+// process up for snapshotLinger after the last snapshot was written.
+func (s *LogAggregatorTestSuite) TestShutdownLingersAfterRecentSnapshot(c *C) {
+	srv := testServer(c)
+	srv.snapshotLinger = 400 * time.Millisecond
+	c.Assert(srv.Start(), IsNil)
+	l := testLoader(testClient(c, srv).URL)
+	c.Assert(s.srv.loadSnapshotFromPeers(l).Complete, Equals, true)
+
+	start := time.Now()
+	srv.Shutdown()
+	took := time.Since(start)
+	c.Assert(took >= 300*time.Millisecond, Equals, true, Commentf("took %s", took))
+	c.Assert(took < 3*time.Second, Equals, true, Commentf("took %s", took))
+}
+
+func (s *LogAggregatorTestSuite) TestShutdownWithoutRecentSnapshotDoesNotLinger(c *C) {
+	srv := testServer(c)
+	srv.snapshotLinger = 2 * time.Second
+	c.Assert(srv.Start(), IsNil)
+	start := time.Now()
+	srv.Shutdown()
+	c.Assert(time.Since(start) < time.Second, Equals, true)
+}
