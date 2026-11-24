@@ -7,9 +7,10 @@ import (
 )
 
 func TestSystemAppsUpgradeOrder(t *testing.T) {
-	// discoverd and blobstore must land before controller/databases so
-	// post-upgrade deploys have discovery and image storage available.
-	wantPrefix := []string{"discoverd", "blobstore", "taffy", "router", "gitreceive", "tarreceive", "controller"}
+	// discoverd and blobstore must land before the controller so
+	// post-upgrade deploys have discovery and image storage available; the
+	// controller lands before the apps that call its API (EDGE-30).
+	wantPrefix := []string{"discoverd", "blobstore", "controller", "taffy", "router", "gitreceive", "tarreceive"}
 	if len(SystemApps) < len(wantPrefix) {
 		t.Fatalf("SystemApps too short: %d", len(SystemApps))
 	}
@@ -40,6 +41,47 @@ func TestSystemAppsUpgradeOrder(t *testing.T) {
 		if !byName[imageOnly].ImageOnly {
 			t.Fatalf("%s should be ImageOnly", imageOnly)
 		}
+	}
+}
+
+// EDGE-30: the router used to update before the controller. The router API
+// required the cluster key since EDGE-04, and the scheduler still running was
+// the old one, which sent none: it got 401 and reconnected every 100 ms until
+// the controller deploy replaced it, and jobs waited the backend-up and drain
+// fallbacks meanwhile. A new router could likewise call a controller endpoint
+// only the new controller serves. The controller runs every later deploy (the
+// deployer and scheduler) and serves the API these apps call, so it updates
+// first and they update after it; each still has to work with the previous
+// release of the other because an update can stop between two apps.
+func TestControllerUpdatesBeforeRouterAPIConsumers(t *testing.T) {
+	pos := make(map[string]int, len(SystemApps))
+	for i, app := range SystemApps {
+		pos[app.Name] = i
+	}
+	before := func(first, then, why string) {
+		t.Helper()
+		f, ok1 := pos[first]
+		s, ok2 := pos[then]
+		if !ok1 || !ok2 {
+			t.Fatalf("missing %s or %s in SystemApps", first, then)
+		}
+		if f >= s {
+			t.Errorf("%s (at %d) must update before %s (at %d): %s", first, f, then, s, why)
+		}
+	}
+	if SystemApps[0].Name != "discoverd" {
+		t.Errorf("discoverd must update first, got %s", SystemApps[0].Name)
+	}
+	before("blobstore", "controller", "every deploy stores and reads image artifacts in the blobstore")
+	for _, app := range []string{"router", "gitreceive", "tarreceive", "taffy", "logaggregator", "status"} {
+		before("controller", app, app+" calls the controller API, and the new controller's scheduler and deployer roll it")
+	}
+	before("controller", "postgres", "the controller's sirenia deployer moves the postgres peers")
+	for _, app := range SystemApps {
+		if app.ImageOnly || app.Name == "status" {
+			continue
+		}
+		before(app.Name, "status", "status checks every other app")
 	}
 }
 

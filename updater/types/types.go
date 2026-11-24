@@ -18,6 +18,11 @@ type SystemApp struct {
 
 type UpdateReleaseFn func(r *ct.Release)
 
+// SystemApps is the order `flynn-host update` deploys the system apps in.
+// An app updates after the apps it needs to run (discoverd, the blobstore)
+// and after the controller, whose API it calls; postgres follows the
+// controller because the controller's sirenia deployer moves it, and status,
+// which checks the rest, comes last.
 var SystemApps = []SystemApp{
 	{
 		Name: "discoverd",
@@ -25,11 +30,16 @@ var SystemApps = []SystemApp{
 		MinVersion: "v20151129.0",
 	},
 	{Name: "blobstore"},
+	// The controller before the apps that call its API (EDGE-30): it runs
+	// every later deploy (deployer, scheduler) and serves the router's route
+	// sync, gitreceive's build lease and taffy's deploys. Each app must
+	// still work with the previous release of the other, because an update
+	// can stop between two apps.
+	{Name: "controller"},
 	{Name: "taffy"},
 	{Name: "router"},
 	{Name: "gitreceive"},
 	{Name: "tarreceive"},
-	{Name: "controller"},
 	{Name: "logaggregator"},
 	{
 		Name: "postgres",

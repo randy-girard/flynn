@@ -350,6 +350,17 @@ scaled and updated using the same APIs that are used to manage every other app.
 This allows Flynn to be entirely self-bootstrapping and removes a huge amount of
 complexity involved in deploying and managing the platform.
 
+`flynn-host update` deploys the system apps in dependency order: discoverd
+(swapped host by host), the blobstore, the controller, then taffy, the router,
+gitreceive, tarreceive and logaggregator, which call the controller API, then
+Postgres, then status. The rule is that an app other apps depend on updates
+first. The controller goes before the apps that call it because it serves their
+API and its deployer and scheduler run every later deploy. Postgres goes after
+it because the controller's sirenia deployer moves the Postgres peers. Each app
+still has to work with the previous release of the others, because an update
+can stop between two apps. The router's route sync, for example, also reads the
+route list from a controller older than paging.
+
 ## Router
 
 The router allows external clients to communicate with services running within
