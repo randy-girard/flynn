@@ -498,8 +498,19 @@ as the new ones are up, and then stays up 3 seconds after the last one so
 the bytes still in its socket buffers arrive before its network goes away.
 
 On each connection a host asks the aggregator for the newest line it has
-from that host (its cursor) and resends, from its log files, every line
-after it; an aggregator with no cursor for the host gets every file. Live
+from that host (its cursor) and resends, from its log files, the lines
+after it. The `/cursors` response also says how many lines per app the
+ring keeps (`Flynn-Log-Buffer-Lines`) and the aggregator's `LOG_BUFFER_TTL`
+(`Flynn-Log-Buffer-TTL`), and the host resends no more than the ring can
+use: each app's files (the current file, lumberjack's backup and
+logrotate's uncompressed `.log.1` copy) are read from the end, and only the
+newest 10,000 lines of the app by time are sent, so an aggregator with no
+cursor for the host no longer gets every byte of every file. Apps whose
+files were last written before `LOG_BUFFER_TTL`, and apps the controller no
+longer lists (asked once per resend; files written in the minute before the
+list are still sent), are skipped, so a long-deleted app does not get its
+ring back. An aggregator that does not advertise a TTL gets apps of any age,
+and when the controller cannot be asked no app is skipped as deleted. Live
 lines go out at once while the files are resent: a resend line is written
 only when no live line is waiting, so `flynn log` keeps up during a resend
 (a live line used to wait, sometimes for minutes, until the resend reached
@@ -515,7 +526,10 @@ timestamp order and drops duplicates. The resend state is in memory only,
 so a host restarted in the middle of a resend does not resume it.
 
 Each host also keeps about 200MB of
-log files per app. A cluster that needs to keep logs adds a syslog sink
+log files per app (lumberjack rotates `<app-id>.log` at 100MiB with one
+backup), and the installer's logrotate rule copies and truncates every
+`/var/log/flynn/*.log` daily, keeping 14 compressed copies. The host never
+removes the files of a deleted app. A cluster that needs to keep logs adds a syslog sink
 with `flynn-host log-sink:add`. Hosted and self-hosted clusters use that
 same path.
 

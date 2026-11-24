@@ -334,6 +334,23 @@ func runDaemon(args *docopt.Args) {
 			cli.ClusterControllerKey,
 		)
 	})
+	// A logaggregator with no cursor is not resent the files of apps the
+	// controller no longer has (EDGE-85).
+	sman.SetAppLister(func() ([]string, error) {
+		client, err := cli.ClusterController()
+		if err != nil {
+			return nil, err
+		}
+		apps, err := client.AppList()
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(apps))
+		for _, a := range apps {
+			ids = append(ids, a.ID)
+		}
+		return ids, nil
+	})
 
 	log.Info("initializing job backend", "type", backendName)
 	var backend Backend

@@ -32,6 +32,20 @@ type aggSink struct {
 	delay    func(l aggLine) time.Duration
 	shutdown chan struct{}
 	once     sync.Once
+
+	// limits and known are what a logaggregator sink reports (EDGE-85):
+	// the zero limits resend everything, a nil known skips no app.
+	limits   resendLimits
+	known    map[string]bool
+	knownErr error
+}
+
+func (s *aggSink) resendLimits() resendLimits { return s.limits }
+func (s *aggSink) knownApps() (map[string]bool, error) {
+	if s.knownErr != nil {
+		return nil, s.knownErr
+	}
+	return s.known, nil
 }
 
 type aggLine struct {

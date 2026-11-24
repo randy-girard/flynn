@@ -14,6 +14,23 @@ import (
 // keys of the lines it wrote in this window and skips only those.
 var resendSlack = 10 * time.Second
 
+// resendLimits bound what a sink is resent from the log files (EDGE-85). A
+// logaggregator keeps the newest Lines lines of each app id (its ring) and
+// drops a buffer with no line for MaxAge, so more is thrown away. Zero is no
+// limit.
+type resendLimits struct {
+	Lines  int
+	MaxAge time.Duration
+}
+
+// resendLimiter is a sink that keeps only part of the history (a
+// logaggregator). knownApps lists the app ids that still exist; lines of any
+// other id would recreate a deleted app's ring.
+type resendLimiter interface {
+	resendLimits() resendLimits
+	knownApps() (map[string]bool, error)
+}
+
 // pendingRange is part of one app's history a sink still lacks: the lines with
 // a cursor after from (nil: from the first line) up to and including to.
 type pendingRange struct {
@@ -67,6 +84,7 @@ type resendState struct {
 
 	started time.Time
 	lines   uint64
+	bytes   uint64
 }
 
 func newResendState() *resendState {
@@ -100,6 +118,7 @@ func (r *resendState) connected(apps []string, cursor *utils.HostCursor, upTo ut
 	if !resumed {
 		r.started = time.Now()
 		r.lines = 0
+		r.bytes = 0
 	}
 	r.sinkCursor = cursor
 	r.addLocked(apps, cursor, upTo)
@@ -113,6 +132,7 @@ func (r *resendState) add(apps []string, from *utils.HostCursor, to utils.HostCu
 	if len(r.pending) == 0 {
 		r.started = time.Now()
 		r.lines = 0
+		r.bytes = 0
 	}
 	r.addLocked(apps, from, to)
 }
@@ -222,6 +242,20 @@ func (r *resendState) wroteResent(app string, c utils.HostCursor) {
 	if r.lines%4096 == 0 {
 		r.pruneLocked()
 	}
+}
+
+// addBytes counts the bytes of a resent line the sink took.
+func (r *resendState) addBytes(n int) {
+	r.mtx.Lock()
+	r.bytes += uint64(n)
+	r.mtx.Unlock()
+}
+
+// bytesSent is the bytes resent since the resend started.
+func (r *resendState) bytesSent() uint64 {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+	return r.bytes
 }
 
 // pruneLocked drops sent keys no pending range covers.

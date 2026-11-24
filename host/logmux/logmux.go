@@ -3,6 +3,8 @@ package logmux
 import (
 	"bufio"
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
@@ -290,6 +292,7 @@ func (m *Mux) addSink(sink Sink) {
 type resendItem struct {
 	msg     message
 	app     string
+	size    int
 	passEnd bool
 	gen     uint64
 	ack     chan struct{}
@@ -321,6 +324,13 @@ func (m *Mux) sendToSink(sink Sink, resend *resendState, l log15.Logger) (failed
 	} else {
 		l.Info("no cursor for host")
 	}
+	// A logaggregator keeps only part of each app's history; it is resent
+	// no more than that (EDGE-85).
+	limiter, _ := sink.(resendLimiter)
+	if limiter != nil {
+		lim := limiter.resendLimits()
+		l.Info("resend limits", "lines", lim.Lines, "max_age", lim.MaxAge)
+	}
 
 	// Buffer the live firehose so a slow sink write does not drop the
 	// first lines. When this fills, broadcast drops and counts the line,
@@ -346,7 +356,7 @@ func (m *Mux) sendToSink(sink Sink, resend *resendState, l log15.Logger) (failed
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
-		m.readResend(resend, resent, done, l)
+		m.readResend(resend, limiter, resent, done, l)
 	}()
 	defer func() {
 		close(done)
@@ -395,7 +405,7 @@ func (m *Mux) sendToSink(sink Sink, resend *resendState, l log15.Logger) (failed
 			}
 		case item.passEnd:
 			if finished, n, took := resend.passDone(item.gen); finished {
-				l.Info("resend of log files finished", "lines", n, "duration", took)
+				l.Info("resend of log files finished", "lines", n, "bytes", resend.bytesSent(), "duration", took)
 			}
 			close(item.ack)
 		default:
@@ -404,6 +414,7 @@ func (m *Mux) sendToSink(sink Sink, resend *resendState, l log15.Logger) (failed
 				return true
 			}
 			resend.wroteResent(item.app, *item.msg.HostCursor)
+			resend.addBytes(item.size)
 		}
 	}
 }
@@ -415,7 +426,7 @@ func (m *Mux) cursorNow() utils.HostCursor {
 
 // logApps lists the app ids that have log files.
 func (m *Mux) logApps() ([]string, error) {
-	files, err := m.logFiles("")
+	files, err := m.resendLogFiles()
 	if err != nil {
 		return nil, err
 	}
@@ -426,10 +437,48 @@ func (m *Mux) logApps() ([]string, error) {
 	return apps, nil
 }
 
+// knownAppsTimeout bounds the controller app list a pass waits for, and
+// knownAppsMaxAge is how long one list serves later passes.
+var (
+	knownAppsTimeout = 10 * time.Second
+	knownAppsMaxAge  = time.Minute
+)
+
+// knownAppsGrace: an app missing from the controller's list is skipped only
+// if its files were last written this long before the list was fetched, so
+// an app created since (or one deleted a moment ago, whose late lines the
+// aggregator refuses itself) is not lost.
+const knownAppsGrace = time.Minute
+
+// passPlan is what one pass over the files may skip.
+type passPlan struct {
+	limits  resendLimits
+	now     time.Time
+	known   map[string]bool // nil: not known, skip no app as deleted
+	knownAt time.Time
+}
+
+// skip reports why an app whose newest file was written at newest is not
+// read ("" to read it).
+func (p *passPlan) skip(app string, newest time.Time) string {
+	if p.limits.MaxAge > 0 && newest.Before(p.now.Add(-p.limits.MaxAge)) {
+		return "expired"
+	}
+	if p.known != nil && !p.known[app] && newest.Before(p.knownAt.Add(-knownAppsGrace)) {
+		return "deleted"
+	}
+	return ""
+}
+
 // readResend sends the sink writer the lines of the log files that resend
 // still wants, a pass at a time, until done is closed. A new pass starts when
 // lines are added (a reconnect, or live lines dropped from the firehose).
-func (m *Mux) readResend(resend *resendState, out chan<- resendItem, done <-chan struct{}, l log15.Logger) {
+// With a limiter (a logaggregator sink) each app is read from the end of its
+// files and only as far back as the aggregator keeps, and apps the
+// aggregator would not keep are skipped.
+func (m *Mux) readResend(resend *resendState, limiter resendLimiter, out chan<- resendItem, done <-chan struct{}, l log15.Logger) {
+	var known map[string]bool
+	var knownAt time.Time
 	for {
 		select {
 		case <-resend.wake:
@@ -438,21 +487,61 @@ func (m *Mux) readResend(resend *resendState, out chan<- resendItem, done <-chan
 		gen, apps := resend.snapshot()
 		if len(apps) > 0 {
 			m.waitDisk(resendDiskWait, done)
-			files, err := m.logFiles("")
+			plan := passPlan{now: time.Now()}
+			if limiter != nil {
+				plan.limits = limiter.resendLimits()
+				if known == nil || time.Since(knownAt) > knownAppsMaxAge {
+					at := time.Now()
+					k, err := fetchKnownApps(limiter, knownAppsTimeout, done)
+					if err != nil {
+						l.Info("app list unavailable, no app is skipped as deleted", "error", err)
+						known = nil
+					} else {
+						known, knownAt = k, at
+					}
+				}
+				plan.known, plan.knownAt = known, knownAt
+			}
+			files, err := m.resendLogFiles()
 			if err != nil {
 				l.Error("failed to get local log files", "error", err)
+			}
+			if limiter == nil {
+				// A syslog sink gets what it always got: the .log files.
+				for app, names := range files {
+					files[app] = currentLogFiles(names)
+				}
 			}
 			ids := make([]string, 0, len(apps))
 			for app := range apps {
 				ids = append(ids, app)
 			}
 			sort.Strings(ids)
+			var read, expired, deleted int
+			full := false // a range from the first line: a cursorless resend
 			for _, app := range ids {
-				for _, name := range files[app] {
-					if !m.resendFile(resend, app, name, apps[app], out, done, l) {
-						return
-					}
+				if apps[app] == nil {
+					full = true
 				}
+				fs := statLogFiles(files[app])
+				if len(fs) == 0 {
+					continue
+				}
+				switch plan.skip(app, fs[len(fs)-1].mtime) {
+				case "expired":
+					expired++
+					continue
+				case "deleted":
+					deleted++
+					continue
+				}
+				read++
+				if !m.resendApp(resend, app, fs, apps[app], plan.limits, out, done, l) {
+					return
+				}
+			}
+			if limiter != nil && (full || expired+deleted > 0) {
+				l.Info("resend pass", "apps", len(ids), "read", read, "skipped_expired", expired, "skipped_deleted", deleted, "known_apps", len(known))
 			}
 			ack := make(chan struct{})
 			select {
@@ -474,12 +563,258 @@ func (m *Mux) readResend(resend *resendState, out chan<- resendItem, done <-chan
 	}
 }
 
+// fetchKnownApps asks the limiter for the controller's app ids, waiting at
+// most timeout.
+func fetchKnownApps(limiter resendLimiter, timeout time.Duration, done <-chan struct{}) (map[string]bool, error) {
+	type result struct {
+		known map[string]bool
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		k, err := limiter.knownApps()
+		ch <- result{k, err}
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case r := <-ch:
+		return r.known, r.err
+	case <-t.C:
+		return nil, fmt.Errorf("no app list after %s", timeout)
+	case <-done:
+		return nil, errors.New("resend stopped")
+	}
+}
+
+// logFileInfo is one log file of an app.
+type logFileInfo struct {
+	name  string
+	mtime time.Time
+}
+
+// statLogFiles returns the files that exist, oldest write first. A file is
+// never written after its last line's time, so mtime orders them and bounds
+// their lines.
+func statLogFiles(names []string) []logFileInfo {
+	res := make([]logFileInfo, 0, len(names))
+	for _, name := range names {
+		fi, err := os.Stat(name)
+		if err != nil || fi.IsDir() {
+			continue
+		}
+		res = append(res, logFileInfo{name, fi.ModTime()})
+	}
+	sort.SliceStable(res, func(i, j int) bool { return res[i].mtime.Before(res[j].mtime) })
+	return res
+}
+
+// resendLogFileName matches the files the resend reads for an app: the
+// current file, lumberjack's backups (<id>-<time>.log) and logrotate's
+// uncompressed copy of either (.log.1). After logrotate's daily copytruncate
+// the current file holds only the lines since, so the aggregator's ring is
+// refilled from the copy as well. Compressed copies are not read.
+var resendLogFileName = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(-[^/]*)?\.log(\.1)?$`)
+
+// resendLogFiles returns, per app id, the log files a resend reads.
+func (m *Mux) resendLogFiles() (map[string][]string, error) {
+	files, err := ioutil.ReadDir(m.logDir)
+	if err != nil {
+		return nil, err
+	}
+	res := make(map[string][]string)
+	for _, f := range files {
+		n := f.Name()
+		if f.IsDir() || !resendLogFileName.MatchString(n) {
+			continue
+		}
+		res[n[:36]] = append(res[n[:36]], filepath.Join(m.logDir, n))
+	}
+	return res, nil
+}
+
+// currentLogFiles drops logrotate's copies from names.
+func currentLogFiles(names []string) []string {
+	res := names[:0]
+	for _, n := range names {
+		if strings.HasSuffix(n, ".log") {
+			res = append(res, n)
+		}
+	}
+	return res
+}
+
+// resendApp sends the wanted lines of one app's files (oldest first). With
+// no line limit and no range start every line is read from the start, as
+// for a syslog sink with no cursor. Otherwise the files are read from the
+// end, back to the oldest line the limit or the range start can still want.
+// It returns false once done is closed.
+func (m *Mux) resendApp(resend *resendState, app string, files []logFileInfo, from *utils.HostCursor, limits resendLimits, out chan<- resendItem, done <-chan struct{}, l log15.Logger) bool {
+	if limits.Lines <= 0 && from == nil {
+		for _, f := range files {
+			if !m.resendFile(resend, app, f.name, nil, out, done, l) {
+				return false
+			}
+		}
+		return true
+	}
+	return m.resendTail(resend, app, files, from, limits.Lines, out, done, l)
+}
+
+// tailLine is a line found going backward: its file, offset and time.
+type tailLine struct {
+	file int
+	off  int64
+	at   time.Time
+}
+
+// resendTail sends, of the lines of files after from (nil: any), the limit
+// newest by time (limit <= 0: all), oldest first. Lines of one app sit out
+// of time order in its files by less than resendSlack, so the backward read
+// stops once a line is that much older than the oldest line still kept.
+func (m *Mux) resendTail(resend *resendState, app string, files []logFileInfo, from *utils.HostCursor, limit int, out chan<- resendItem, done <-chan struct{}, l log15.Logger) bool {
+	keep := newest{n: limit}
+	var lines []tailLine
+	var floor time.Time
+	if from != nil {
+		floor = from.Time.Add(-resendSlack)
+	}
+	n := 0
+	for i := len(files) - 1; i >= 0; i-- {
+		fi := files[i]
+		if from != nil && fi.mtime.Before(from.Time) {
+			continue // nothing in it is after from
+		}
+		if keep.full() && fi.mtime.Before(keep.oldest().Add(-resendSlack)) {
+			continue // nothing in it is new enough
+		}
+		ll := l.New("log", fi.name)
+		f, err := openResendFile(fi.name)
+		if err != nil {
+			ll.Error("failed to open log file", "error", err)
+			continue
+		}
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			ll.Error("failed to stat log file", "error", err)
+			continue
+		}
+		br := newBackFrames(f, st.Size())
+		for {
+			off, msgBytes, err := br.prev()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				ll.Error("failed to read log file backward, older lines are not resent", "error", err, "offset", br.end)
+				break
+			}
+			if n++; n%4096 == 0 {
+				select {
+				case <-done:
+					f.Close()
+					return false
+				default:
+				}
+			}
+			_, cursor, err := utils.ParseMessage(msgBytes)
+			if err != nil {
+				continue
+			}
+			at := cursor.Time
+			if from != nil && at.Before(floor) {
+				break
+			}
+			if keep.full() && at.Before(keep.oldest().Add(-resendSlack)) {
+				break
+			}
+			keep.offer(at)
+			lines = append(lines, tailLine{i, off, at})
+		}
+		f.Close()
+	}
+	cutoff := keep.oldest()
+	// lines is newest file first, backward in each: send it reversed.
+	for j := len(lines) - 1; j >= 0; {
+		i := lines[j].file
+		var offs []int64
+		for ; j >= 0 && lines[j].file == i; j-- {
+			if !lines[j].at.Before(cutoff) {
+				offs = append(offs, lines[j].off)
+			}
+		}
+		if len(offs) > 0 && !m.resendOffsets(resend, app, files[i].name, offs, out, done, l) {
+			return false
+		}
+	}
+	return true
+}
+
+// resendOffsets sends the wanted lines of one file that start at offs
+// (ascending), reading forward from the first.
+func (m *Mux) resendOffsets(resend *resendState, app, name string, offs []int64, out chan<- resendItem, done <-chan struct{}, l log15.Logger) bool {
+	l = l.New("log", name)
+	f, err := openResendFile(name)
+	if err != nil {
+		l.Error("failed to open log file", "error", err)
+		return true
+	}
+	defer f.Close()
+	pos := offs[0]
+	var tokOff int64
+	split := func(data []byte, atEOF bool) (int, []byte, error) {
+		adv, tok, err := rfc6587.SplitWithNewlines(data, atEOF)
+		if tok != nil {
+			tokOff = pos
+			pos += int64(adv)
+		}
+		return adv, tok, err
+	}
+	sc := bufio.NewScanner(io.NewSectionReader(f, offs[0], 1<<62))
+	sc.Buffer(make([]byte, 0, tailChunk), maxFrameLen+1)
+	sc.Split(split)
+	k := 0
+	for k < len(offs) && sc.Scan() {
+		if tokOff < offs[k] {
+			continue
+		}
+		for k < len(offs) && offs[k] < tokOff {
+			k++ // not a frame start going forward: skip it
+		}
+		if k == len(offs) || offs[k] != tokOff {
+			continue
+		}
+		k++
+		msgBytes := sc.Bytes()
+		msgCopy := make([]byte, len(msgBytes)-1)
+		copy(msgCopy, msgBytes)
+		msg, cursor, err := utils.ParseMessage(msgCopy)
+		if err != nil {
+			continue
+		}
+		if !resend.wants(app, *cursor) {
+			continue
+		}
+		size := len(msgCopy) + len(strconv.Itoa(len(msgCopy))) + 2
+		select {
+		case out <- resendItem{msg: message{cursor, msg}, app: app, size: size}:
+		case <-done:
+			return false
+		}
+	}
+	if err := sc.Err(); err != nil {
+		l.Error("failed to scan message", "error", err)
+	}
+	return true
+}
+
 // resendFile sends the wanted lines of one log file. A file last written
 // before from holds nothing wanted and is not read. It returns false once
 // done is closed.
 func (m *Mux) resendFile(resend *resendState, app, name string, from *utils.HostCursor, out chan<- resendItem, done <-chan struct{}, l log15.Logger) bool {
 	l = l.New("log", name)
-	f, err := os.Open(name)
+	f, err := openResendFile(name)
 	if err != nil {
 		l.Error("failed to open log file", "error", err)
 		return true
@@ -490,7 +825,7 @@ func (m *Mux) resendFile(resend *resendState, app, name string, from *utils.Host
 			return true
 		}
 	}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(io.NewSectionReader(f, 0, 1<<62))
 	sc.Split(rfc6587.SplitWithNewlines)
 	n := 0
 	for sc.Scan() {
@@ -513,8 +848,9 @@ func (m *Mux) resendFile(resend *resendState, app, name string, from *utils.Host
 		if !resend.wants(app, *cursor) {
 			continue
 		}
+		size := len(msgCopy) + len(strconv.Itoa(len(msgCopy))) + 2
 		select {
-		case out <- resendItem{msg: message{cursor, msg}, app: app}:
+		case out <- resendItem{msg: message{cursor, msg}, app: app, size: size}:
 		case <-done:
 			return false
 		}
@@ -524,6 +860,16 @@ func (m *Mux) resendFile(resend *resendState, app, name string, from *utils.Host
 	}
 	return true
 }
+
+// resendFile is a log file the resend reads. Tests count its reads.
+type resendFile interface {
+	io.ReaderAt
+	io.Reader
+	io.Closer
+	Stat() (os.FileInfo, error)
+}
+
+var openResendFile = func(name string) (resendFile, error) { return os.Open(name) }
 
 // waitDisk waits, at most d, until the lines queued for disk so far are
 // written.

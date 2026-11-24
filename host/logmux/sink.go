@@ -22,6 +22,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/logaggregator/buffer"
 	"github.com/randy-girard/flynn/logaggregator/client"
 	"github.com/randy-girard/flynn/logaggregator/utils"
 	"github.com/randy-girard/flynn/pkg/dialer"
@@ -46,6 +47,7 @@ type SinkManager struct {
 	// has its own lock so a slow lookup never holds up sink changes.
 	keyMtx        sync.Mutex
 	aggregatorKey func() string
+	appLister     func() ([]string, error)
 
 	dbPath string
 	db     *bolt.DB
@@ -387,6 +389,10 @@ type LogAggregatorSink struct {
 	conn             net.Conn
 	aggregatorClient *client.Client
 
+	// limits is what the aggregator advertised on the last GetCursor.
+	limitsMtx sync.Mutex
+	limits    resendLimits
+
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
 }
@@ -402,6 +408,14 @@ func (sm *SinkManager) SetAggregatorKey(f func() string) {
 	sm.keyMtx.Lock()
 	defer sm.keyMtx.Unlock()
 	sm.aggregatorKey = f
+}
+
+// SetAppLister sets how logaggregator sinks list the app ids the controller
+// knows (EDGE-85).
+func (sm *SinkManager) SetAppLister(f func() ([]string, error)) {
+	sm.keyMtx.Lock()
+	defer sm.keyMtx.Unlock()
+	sm.appLister = f
 }
 
 func (sm *SinkManager) aggregatorAPIKey() string {
@@ -469,7 +483,17 @@ func (s *LogAggregatorSink) Close() {
 }
 
 func (s *LogAggregatorSink) GetCursor(hostID string) (*utils.HostCursor, error) {
-	cursors, err := s.aggregatorClient.GetCursors()
+	cursors, bl, err := s.aggregatorClient.GetCursorsWithLimits()
+	// An aggregator that does not say keeps the standard ring and may keep
+	// lines of any age (one from before LOG_BUFFER_TTL kept them forever).
+	limits := resendLimits{Lines: buffer.DefaultCapacity}
+	if bl.Lines > 0 {
+		limits.Lines = bl.Lines
+	}
+	limits.MaxAge = bl.TTL
+	s.limitsMtx.Lock()
+	s.limits = limits
+	s.limitsMtx.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -478,6 +502,38 @@ func (s *LogAggregatorSink) GetCursor(hostID string) (*utils.HostCursor, error) 
 		aggCursor = &c
 	}
 	return aggCursor, nil
+}
+
+// resendLimits is how much of each app's history the aggregator keeps, as it
+// said on the last GetCursor (EDGE-85). The resend sends no more.
+func (s *LogAggregatorSink) resendLimits() resendLimits {
+	s.limitsMtx.Lock()
+	defer s.limitsMtx.Unlock()
+	return s.limits
+}
+
+// knownApps returns the app ids the controller has. Lines of any other app
+// id would recreate the ring of a deleted app on the aggregator. An empty
+// list is an error: it would skip every app.
+func (s *LogAggregatorSink) knownApps() (map[string]bool, error) {
+	s.sm.keyMtx.Lock()
+	f := s.sm.appLister
+	s.sm.keyMtx.Unlock()
+	if f == nil {
+		return nil, errors.New("no app lister")
+	}
+	ids, err := f()
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("the controller listed no apps")
+	}
+	known := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		known[id] = true
+	}
+	return known, nil
 }
 
 func (s *LogAggregatorSink) Write(m message) error {
