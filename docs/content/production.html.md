@@ -875,8 +875,9 @@ the shared `/tarreceive/layers/` store, which no quota counts.
 
 Deleting a release deletes its image layers unless another artifact still
 names them. A layer that nothing names, because its push failed after the
-upload (for example `image entrypoint ... not found`) or its artifact never
-made it into a release, is left behind. The layer GC deletes such a layer
+upload (for example the manifest upload or the release failed; a missing
+entrypoint is refused before the upload) or its artifact never made it into a
+release, is left behind. The layer GC deletes such a layer
 (its squashfs and its config) once no live artifact of any app names it, it
 is older than the grace period, and no upload of it is running. tarreceive
 stores a reused layer's config again, which starts its grace period over, and

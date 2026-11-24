@@ -1,11 +1,8 @@
 package dockerimage
 
 import (
-	"path/filepath"
 	"strconv"
 	"strings"
-
-	"os"
 )
 
 // ListenPort returns the TCP port the container listens on. It prefers
@@ -63,11 +60,17 @@ func ResolveArgs(root string, entrypoint, cmd []string) []string {
 	return args
 }
 
+// findExecutableInRoot looks a bare command name up in the standard
+// directories of the image rootfs at root (not the image's PATH) and returns
+// its path inside the image, or "" when none has it. A symlink on the way is
+// resolved inside the image (EDGE-39: Alpine's /bin/sleep -> /bin/busybox);
+// the path returned is the one searched, not the link's target, since a
+// multi-call binary such as busybox picks its applet from argv[0]. Anything
+// but a directory counts, as before.
 func findExecutableInRoot(root, name string) string {
 	for _, dir := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
-		path := filepath.Join(root, dir[1:], name)
-		if st, err := os.Stat(path); err == nil && !st.IsDir() {
-			return filepath.Join(dir, name)
+		if _, st, err := resolveInRoot(root, dir+"/"+name); err == nil && !st.IsDir() {
+			return dir + "/" + name
 		}
 	}
 	return ""

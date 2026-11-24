@@ -31,6 +31,28 @@ The release process type is the image `ENTRYPOINT` plus `CMD` (the same argv
 used to start the container). The dashboard Resources tab shows that command
 for each process.
 
+When that command starts with a bare name (`CMD ["sleep", "3600"]`), the
+CLI looks it up in the image's `/usr/local/sbin`, `/usr/local/bin`,
+`/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`, in that order (the image's own
+`PATH` is not read), and the process runs that full path, for example
+`/bin/sleep`. Symlinks in the image are followed as they are inside the
+container: an absolute target is relative to the image root, so Alpine and
+BusyBox images (`/bin/sleep -> /bin/busybox`) and merged-usr images
+(`/bin -> usr/bin`) work. The path stays the link's own, so a multi-call
+binary such as BusyBox still sees the applet name. A name that none of those
+directories has, a dangling link, a link loop or a directory refuses the push
+before anything is uploaded:
+
+```
+image entrypoint "nginx" not found in merged rootfs; verify the Docker image includes its runtime
+```
+
+The lookup never leaves the image: a link to `/etc/passwd` names the image's
+own `/etc/passwd`, not the file on the machine that pushes, and `..` past the
+root stays at the image root, as in the container. More than 40 links in one
+lookup count as a loop. An absolute command (`/bin/sh`) is passed on
+unchecked.
+
 The CLI flattens the image into one uncompressed tar. tarreceive refuses one
 over `MAX_LAYER_SIZE` (default 32 GiB) with `layer exceeds the tarreceive
 limit` before the upload starts, and one its temp disk cannot hold (twice the

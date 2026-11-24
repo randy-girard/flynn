@@ -58,6 +58,13 @@ func BuildFromSaveDir(tarClient *tarclient.Client, saveDir string) (*BuildResult
 		f.Close()
 	}
 
+	// check the entrypoint before anything is uploaded, so a refused push
+	// leaves no layer behind
+	args := ResolveArgs(mergedDir, config.Config.Entrypoint, config.Config.Cmd)
+	if len(args) > 0 && !strings.Contains(args[0], "/") {
+		return nil, fmt.Errorf("image entrypoint %q not found in merged rootfs; verify the Docker image includes its runtime", args[0])
+	}
+
 	mergedTarPath := filepath.Join(saveDir, "merged.tar")
 	cmd := exec.Command("tar", "-cf", mergedTarPath, "-C", mergedDir, ".")
 	cmd.Stderr = os.Stderr
@@ -88,13 +95,6 @@ func BuildFromSaveDir(tarClient *tarclient.Client, saveDir string) (*BuildResult
 		}
 	} else if err != nil {
 		return nil, err
-	}
-
-	args := ResolveArgs(mergedDir, config.Config.Entrypoint, config.Config.Cmd)
-	if len(args) > 0 && !strings.Contains(args[0], "/") {
-		if findExecutableInRoot(mergedDir, args[0]) == "" {
-			return nil, fmt.Errorf("image entrypoint %q not found in merged rootfs; verify the Docker image includes its runtime", args[0])
-		}
 	}
 
 	entrypoint := &ct.ImageEntrypoint{
