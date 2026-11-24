@@ -23,8 +23,11 @@ type DeployJob struct {
 	newRelease   *ct.Release
 	oldFormation *ct.Formation
 	newFormation *ct.Formation
-	timeout      time.Duration
-	stop         chan struct{}
+	// sireniaEngine is the formation of a release other than the old one
+	// that runs the sirenia engines (EDGE-73); set by locateSireniaEngines.
+	sireniaEngine *ct.Formation
+	timeout       time.Duration
+	stop          chan struct{}
 }
 
 func (d *DeployJob) Perform() error {
@@ -92,6 +95,8 @@ func (d *DeployJob) Perform() error {
 	if processesEqual(d.newFormation.Processes, d.Processes) {
 		if d.Strategy == "sirenia" && d.sireniaOldReleaseActive() {
 			log.Info("sirenia new formation matches target but old release still active, continuing deploy")
+		} else if d.Strategy == "sirenia" && d.sireniaEnginesOutsideNewRelease() {
+			log.Info("sirenia new formation matches target but another release runs the engines, continuing deploy")
 		} else if d.oldReleaseStillActive() {
 			// one-by-one omni (controller scheduler) starts the new
 			// formation first. A scale timeout can leave both releases
@@ -435,6 +440,25 @@ func (d *DeployJob) sireniaProcessType() string {
 		return d.oldRelease.Env["SIRENIA_PROCESS"]
 	}
 	return ""
+}
+
+// sireniaEnginesOutsideNewRelease reports whether a formation other than the
+// new release's runs sirenia engines.
+func (d *DeployJob) sireniaEnginesOutsideNewRelease() bool {
+	processType := d.sireniaProcessType()
+	if processType == "" {
+		return false
+	}
+	forms, err := d.client.FormationList(d.AppID)
+	if err != nil {
+		return false
+	}
+	for _, f := range forms {
+		if f != nil && f.ReleaseID != d.NewReleaseID && f.Processes[processType] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *DeployJob) sireniaOldReleaseActive() bool {

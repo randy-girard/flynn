@@ -308,8 +308,20 @@ func TestDeploySireniaKillsStoppedPeersOnFailure(t *testing.T) {
 	if !strings.Contains(fn, "killStoppedSireniaPeers(d.client, d.AppID, stoppedJobs, log)") {
 		t.Fatal("a failed sirenia deploy must kill old jobs it sent /stop, else rollback leaves a stopped peer counted in the formation")
 	}
-	record := strings.Index(fn, "stoppedJobs = append(stoppedJobs")
-	stop := strings.Index(fn, "peer.Stop()")
+	if !strings.Contains(fn, "sireniaRollHA(d, processType, proc, &stoppedJobs, log)") {
+		t.Fatal("the HA roll must record stopped jobs in deploySirenia's list")
+	}
+	const haMarker = "func (d *DeployJob) deploySireniaHA("
+	haStart := strings.Index(string(src), haMarker)
+	if haStart < 0 {
+		t.Fatal("deploySireniaHA missing")
+	}
+	ha := string(src[haStart:])
+	if end := strings.Index(ha, "\nfunc "); end > 0 {
+		ha = ha[:end]
+	}
+	record := strings.Index(ha, "*stoppedJobs = append(*stoppedJobs")
+	stop := strings.Index(ha, "peer.Stop()")
 	if record < 0 || stop < 0 || record > stop {
 		t.Fatal("stopInstance must record the job before sending /stop (a timed-out stop can still take effect)")
 	}

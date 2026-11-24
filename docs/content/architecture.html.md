@@ -244,6 +244,33 @@ An app whose current release is scaled to zero while an older release runs
 it keeps running that older release through a deploy; scale the current
 release up first if you want the deploy to take over.
 
+Sirenia apps (the system Postgres and the MySQL and MongoDB plugin apps) work
+differently, because their engines hold the data. A sirenia deploy rolls each
+engine the sirenia primary's cluster runs onto the new release, one at a time,
+and only then scales the replaced formation down. The engines can run from a
+release that is not the app's current release: a sirenia deploy that moved
+them and then failed leaves the primary on its target release. The deploy
+finds that release from the primary's `FLYNN_RELEASE_ID` in discoverd and
+moves its engines too. If the current release asks for no engines, the deploy
+takes the count from that release instead of copying zero. It then zeroes
+that release's engine count, together with the old release's, once the new
+primary accepts writes. The engine count never drops below what was running.
+If engines run from another release that the primary is not on, and the
+current release asks for none, the deploy fails instead of finishing without
+moving them.
+
+The updater, the sirenia deploy and the host's cluster repair also check
+formations. The updater's orphan repair (`flynn-host update`) zeroes stray
+engine formations only when the primary runs from the current release and that
+formation runs engines. It never reduces the current release or the primary's
+release. When they differ, it logs `sirenia engines run from a release that
+is not the app's current release` and leaves every formation alone. The cluster
+repair (`flynn-host fix` and the host monitor after a node is lost) does not
+scale a sirenia app's current release up while another release runs its
+engines. Doing that once doubled the system Postgres engines.
+`flynn-host production:check` reports the shape in its `sirenia-formation`
+row.
+
 Every service, including the controller, is an app in the controller and is
 scaled and updated using the same APIs that are used to manage every other app.
 This allows Flynn to be entirely self-bootstrapping and removes a huge amount of
