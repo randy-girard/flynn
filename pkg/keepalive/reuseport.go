@@ -17,44 +17,89 @@ var backlogOnce = &sync.Once{}
 // ReusableListen returns a TCP listener with SO_REUSEPORT and keepalives
 // enabled.
 func ReusableListen(proto, addr string) (net.Listener, error) {
-	backlogOnce.Do(func() {
-		backlog = maxListenerBacklog()
-	})
+	b, err := ReusableBind(proto, addr)
+	if err != nil {
+		return nil, err
+	}
+	return b.Listen()
+}
 
+// BoundSocket is a TCP socket with SO_REUSEPORT and keepalives set that is
+// bound to its address but not listening. It holds the port, and the kernel
+// refuses connections to it (Linux answers a SYN with RST) until Listen.
+type BoundSocket struct {
+	fd    int
+	proto string
+	addr  string
+}
+
+// ReusableBind binds a socket like ReusableListen without listening on it.
+func ReusableBind(proto, addr string) (*BoundSocket, error) {
 	saddr, typ, err := sockaddr(proto, addr)
 	if err != nil {
 		return nil, err
 	}
 
+	syscall.ForkLock.RLock()
 	fd, err := syscall.Socket(typ, syscall.SOCK_STREAM, syscall.IPPROTO_TCP)
+	if err == nil {
+		syscall.CloseOnExec(fd)
+	}
+	syscall.ForkLock.RUnlock()
 	if err != nil {
-		return nil, err
+		return nil, os.NewSyscallError("socket", err)
 	}
 
 	if err := setSockopt(fd); err != nil {
+		syscall.Close(fd)
 		return nil, err
 	}
 
 	if err := syscall.Bind(fd, saddr); err != nil {
-		return nil, err
+		syscall.Close(fd)
+		return nil, os.NewSyscallError("bind", err)
+	}
+
+	return &BoundSocket{fd: fd, proto: proto, addr: addr}, nil
+}
+
+// Listen starts listening on the socket and returns it as a net.Listener.
+// The BoundSocket is used up either way: on success the listener owns the
+// socket, on failure it is closed.
+func (b *BoundSocket) Listen() (net.Listener, error) {
+	backlogOnce.Do(func() {
+		backlog = maxListenerBacklog()
+	})
+
+	fd := b.fd
+	b.fd = -1
+	if fd < 0 {
+		return nil, errors.New("reuseport: socket already used")
 	}
 
 	if err := syscall.Listen(fd, backlog); err != nil {
-		return nil, err
+		syscall.Close(fd)
+		return nil, os.NewSyscallError("listen", err)
 	}
 
-	f := os.NewFile(uintptr(fd), proto+":"+addr)
+	f := os.NewFile(uintptr(fd), b.proto+":"+b.addr)
 	l, err := net.FileListener(f)
+	f.Close()
 	if err != nil {
 		return nil, err
 	}
 
-	if err := f.Close(); err != nil {
-		l.Close()
-		return nil, err
-	}
-
 	return l, nil
+}
+
+// Close releases the port. It does nothing after Listen.
+func (b *BoundSocket) Close() error {
+	if b.fd < 0 {
+		return nil
+	}
+	err := syscall.Close(b.fd)
+	b.fd = -1
+	return err
 }
 
 func sockaddr(proto, addr string) (syscall.Sockaddr, int, error) {
