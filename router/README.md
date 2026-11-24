@@ -86,6 +86,28 @@ path routes reachable, and `/` returns 404 until a root route is set. Once the l
 gone and its requests have finished, the app's concurrency counter is
 deleted too.
 
+### Timeouts
+
+Backend connections notice a backend whose host vanished without a RST (a
+power-off or network loss) in bounded time. An idle pooled connection is
+dropped by TCP keepalive (5 s idle, 3 probes 5 s apart, about 20 s). A request
+without a body fails when what it sent stays unacknowledged for 5 s
+(`TCP_USER_TIMEOUT`); a `GET`, `HEAD`, `OPTIONS` or `TRACE` that fails on a
+pooled connection before any response byte is then tried on another backend.
+While a request body, a TCP route or an upgraded (WebSocket) connection is in
+flight the limit is 2 minutes instead. Linux counts the time a backend's
+receive window stays closed against this limit even when the backend answers
+every probe, so it is also how long a live backend may stop reading: an upload
+to tarreceive waiting for a slot, a blobstore PUT waiting on its store, or a
+`git push` while git indexes the pack is not cut off. A backend that reads
+nothing for longer, or vanishes mid-upload, gets a plain 503 after about
+2 minutes (a request with a body is never sent to another backend). The
+router's controller connections use the same keepalive and no user timeout
+(described above). A backend has 10 minutes to send its response headers. On the
+client side the router waits up to 1 minute for request headers and keeps an
+idle keep-alive connection for 5 minutes; it sets no user timeout or write
+timeout there, so a client that downloads slowly is not cut off.
+
 ### Benefits over HAProxy/nginx
 
 The primary benefits are that it uses service discovery natively and supports
