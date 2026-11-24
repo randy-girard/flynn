@@ -38,6 +38,17 @@ again while the router runs: `flynn -a router env:set ERROR_503_PAGE_URL=...`
 deploys a new router release, one host at a time, and each new router
 fetches the page when it starts.
 
+The router gets its routes from the controller. For each of HTTP and TCP it
+opens the controller's route event stream, lists every route, sets the listed
+ones and removes those it has that are not listed (a route deleted before the
+list). Events that arrive during the list are folded into it, and later
+events are applied as they come. Applying an event twice, or removing a route
+the router does not have, changes nothing. When the event stream drops, the
+sync ends with `router: sync error` and runs again from the start after
+2 seconds: open the stream, list, remove. The stream is never resumed, so a
+change made while it was down is not lost, even when the stream had not seen
+an event yet.
+
 TCP routes may store a hostname and a TLS mode:
 
 * `tls_mode=""` — plaintext proxy

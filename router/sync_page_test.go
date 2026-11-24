@@ -226,3 +226,31 @@ func TestInitialSyncDoesNotRemoveWhenWatchClosesDuringList(t *testing.T) {
 		t.Fatalf("removed %v after the watch closed", h.removes)
 	}
 }
+
+// EDGE-94: HTTPListener.runSync and TCPListener.runSync stop syncing for good
+// when Sync returns nil. A watch that ends without an error (a stream closed
+// cleanly by the controller) must still be an error, so the router lists
+// again.
+func TestSyncReturnsErrorWhenWatchEndsWithoutError(t *testing.T) {
+	store := &scriptedStore{routes: []*router.Route{{ID: "a", Type: "http", Domain: "a.example", Path: "/"}}}
+	h := newTreeHandler()
+	start := make(chan struct{})
+	done := make(chan error, 1)
+	go func() { done <- NewSyncer(store, "http").Sync(context.Background(), h, start) }()
+	select {
+	case <-start:
+	case err := <-done:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("sync did not finish the snapshot")
+	}
+	close(store.ch)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Sync returned nil after the watch ended, so the router would never sync again")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Sync did not return after the watch ended")
+	}
+}

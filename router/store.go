@@ -57,6 +57,12 @@ func (c *ControllerStore) List() ([]*router.Route, error) {
 	return c.client.RouteList()
 }
 
+// Watch streams route changes. The stream ends with an error when its
+// connection to the controller drops, instead of resuming: the Syncer then
+// lists every route again and removes the ones that are gone, so a change
+// made while the stream was down is never lost (EDGE-94: a stream resumed
+// before its first event asked for the events after id 0, the controller
+// replays nothing for 0, and a deleted route stayed on one node).
 func (c *ControllerStore) Watch(ch chan *router.Event) (stream.Stream, error) {
 	events := make(chan *ct.Event)
 	eventStream, err := c.client.StreamEvents(ct.StreamEventsOptions{
@@ -64,6 +70,7 @@ func (c *ControllerStore) Watch(ch chan *router.Event) (stream.Stream, error) {
 			ct.EventTypeRoute,
 			ct.EventTypeRouteDeletion,
 		},
+		EndOnDisconnect: true,
 	}, events)
 	if err != nil {
 		return nil, err

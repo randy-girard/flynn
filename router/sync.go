@@ -15,6 +15,11 @@ import (
 // snapshot is still being read. Remove must not run on that partial view.
 var errRouteWatchClosed = errors.New("router: route watch closed during initial sync")
 
+// errRouteWatchEnded is returned when the watch ends without an error after
+// the initial sync. The caller syncs again only on an error, so a clean end
+// must be one too.
+var errRouteWatchEnded = errors.New("router: route watch ended")
+
 var ErrNotFound = errors.New("router: route not found")
 
 type SyncHandler interface {
@@ -92,6 +97,9 @@ func (s *Syncer) Sync(ctx context.Context, h SyncHandler, startc chan<- struct{}
 			return nil
 		}
 		if event == nil {
+			if err == nil {
+				err = errRouteWatchEnded
+			}
 			return err
 		}
 		if event.Route == nil || event.Route.Type != s.routeType {

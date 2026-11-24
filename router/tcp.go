@@ -85,8 +85,8 @@ func (l *TCPListener) Start() error {
 		}
 	}
 
-	// TODO(benburkert): the sync API cannot handle routes deleted while the
-	// listen/notify connection is disconnected
+	// A dropped controller event stream ends the sync; runSync lists again
+	// and removes the routes deleted while it was down.
 	if err := l.startSync(ctx); err != nil {
 		l.Close()
 		return err

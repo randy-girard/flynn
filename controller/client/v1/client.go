@@ -1030,6 +1030,9 @@ func (c *Client) StreamEvents(opts ct.StreamEventsOptions, output chan *ct.Event
 		q.Set("count", strconv.Itoa(opts.Count))
 	}
 	path.RawQuery = q.Encode()
+	if opts.EndOnDisconnect {
+		return c.ResumingStreamWithOptions("GET", path.String(), output, httpclient.StreamOptions{EndOnDisconnect: true})
+	}
 	return c.ResumingStream("GET", path.String(), output)
 }
 

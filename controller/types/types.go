@@ -1308,6 +1308,11 @@ type StreamEventsOptions struct {
 	ObjectID    string
 	Past        bool
 	Count       int
+
+	// EndOnDisconnect ends the stream with an error when its connection
+	// drops, instead of resuming. Client side only: a caller that keeps
+	// state from a list (the router's routes) lists again after any gap.
+	EndOnDisconnect bool
 }
 
 type AppGarbageCollection struct {
