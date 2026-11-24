@@ -336,7 +336,7 @@ func (r *ReleaseRepo) Delete(app *ct.App, release *ct.Release) error {
 					// before we delete it
 					var count int64
 					id, _ := json.Marshal(layer.ID)
-					if err := tx.QueryRow("artifact_layer_count", id).Scan(&count); err != nil {
+					if err := tx.QueryRow("artifact_layer_count", id, artifact.LayerURLTemplate).Scan(&count); err != nil {
 						tx.Rollback()
 						return err
 					}
@@ -346,8 +346,8 @@ func (r *ReleaseRepo) Delete(app *ct.App, release *ct.Release) error {
 					fileURIs = append(fileURIs, artifact.LayerURL(layer))
 
 					// delete the tarreceive layer config
-					if layerID, ok := layer.Meta["tar.layer_id"]; ok {
-						fileURIs = append(fileURIs, tarreceive.ConfigURL(layerID))
+					if _, ok := layer.Meta["tar.layer_id"]; ok {
+						fileURIs = append(fileURIs, tarreceive.ConfigURLForLayerURL(artifact.LayerURL(layer)))
 					}
 				}
 			}
@@ -446,7 +446,7 @@ func (r *ReleaseRepo) ReapBlobs(app *ct.App, release *ct.Release) error {
 				for _, layer := range rootfs.Layers {
 					var n int64
 					id, _ := json.Marshal(layer.ID)
-					if err := tx.QueryRow("artifact_layer_count", id).Scan(&n); err != nil {
+					if err := tx.QueryRow("artifact_layer_count", id, artifact.LayerURLTemplate).Scan(&n); err != nil {
 						tx.Rollback()
 						return err
 					}
@@ -454,8 +454,8 @@ func (r *ReleaseRepo) ReapBlobs(app *ct.App, release *ct.Release) error {
 						continue
 					}
 					fileURIs = append(fileURIs, artifact.LayerURL(layer))
-					if layerID, ok := layer.Meta["tar.layer_id"]; ok {
-						fileURIs = append(fileURIs, tarreceive.ConfigURL(layerID))
+					if _, ok := layer.Meta["tar.layer_id"]; ok {
+						fileURIs = append(fileURIs, tarreceive.ConfigURLForLayerURL(artifact.LayerURL(layer)))
 					}
 				}
 			}

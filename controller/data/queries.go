@@ -435,11 +435,14 @@ INSERT INTO artifacts (artifact_id, type, uri, meta, manifest, hashes, size, lay
 UPDATE artifacts SET deleted_at = now() WHERE artifact_id = $1 AND deleted_at IS NULL`
 	artifactReleaseCountQuery = `
 SELECT COUNT(*) FROM release_artifacts WHERE artifact_id = $1 AND deleted_at IS NULL`
+	// artifactLayerCountQuery counts the live artifacts that name layer id
+	// $1 under layer template $2, i.e. the same stored object (EDGE-35: two
+	// apps can hold the same layer id under their own prefixes).
 	artifactLayerCountQuery = `
 SELECT COUNT(*) FROM (
   SELECT jsonb_array_elements(jsonb_array_elements(manifest->'rootfs')->'layers')->'id' AS layer_id
   FROM artifacts
-  WHERE deleted_at IS NULL
+  WHERE deleted_at IS NULL AND COALESCE(layer_url_template, '') = $2
 ) AS l WHERE l.layer_id = $1`
 	deploymentInsertQuery = `
 INSERT INTO deployments (deployment_id, app_id, old_release_id, new_release_id, type, strategy, processes, tags, deploy_timeout, deploy_batch_size, started_at)
