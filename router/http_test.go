@@ -22,6 +22,7 @@ import (
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/discoverd/testutil"
 	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/keepalive"
 	"github.com/randy-girard/flynn/router/proxy"
 	"github.com/randy-girard/flynn/router/testutils"
 	router "github.com/randy-girard/flynn/router/types"
@@ -1225,7 +1226,7 @@ func (s *S) TestClosedBackendRetriesAnotherBackend(c *C) {
 	l := s.newHTTPListener(c)
 	defer l.Close()
 
-	srv1 := httptest.NewServer(httpTestHandler("1"))
+	srv1 := newReusePortServer(c, httpTestHandler("1"))
 	srv2 := httptest.NewServer(httpTestHandler("2"))
 	defer srv2.Close()
 
@@ -1237,8 +1238,9 @@ func (s *S) TestClosedBackendRetriesAnotherBackend(c *C) {
 	discoverdRegisterHTTPService(c, l, "example-com", srv1.Listener.Addr().String())
 	cookies := assertGet(c, "http://"+l.Addrs[0], "example.com", "1")
 
-	// close srv1, register srv2
-	srv1.Close()
+	// close srv1, keeping its port refused, and register srv2
+	release := closeHoldingPort(c, srv1)
+	defer release()
 	discoverdRegisterHTTPService(c, l, "example-com", srv2.Listener.Addr().String())
 
 	type ts struct {
@@ -1282,6 +1284,47 @@ func (s *S) TestClosedBackendRetriesAnotherBackend(c *C) {
 	for _, test := range tests {
 		runTest(test)
 	}
+}
+
+// newReusePortServer starts an httptest server whose socket has
+// SO_REUSEPORT, so closeHoldingPort can keep its port after it stops.
+func newReusePortServer(c *C, h http.Handler) *httptest.Server {
+	srv := httptest.NewUnstartedServer(h)
+	srv.Listener.Close()
+	ln, err := keepalive.ReusableListen("tcp4", "127.0.0.1:0")
+	c.Assert(err, IsNil)
+	srv.Listener = ln
+	srv.Start()
+	return srv
+}
+
+// closeHoldingPort stops srv but keeps its port with a socket that is bound
+// and never listens, so a dial to it is refused (Linux answers the SYN with
+// RST) and no other test or process can take the port and accept or answer
+// in its place (EDGE-64). The returned function frees the port.
+func closeHoldingPort(c *C, srv *httptest.Server) func() {
+	hold, err := keepalive.ReusableBind("tcp4", srv.Listener.Addr().String())
+	c.Assert(err, IsNil)
+	srv.Close()
+	return func() { hold.Close() }
+}
+
+func (s *S) TestClosedBackendPortStaysRefused(c *C) {
+	srv := newReusePortServer(c, httpTestHandler("1"))
+	addr := srv.Listener.Addr().String()
+	release := closeHoldingPort(c, srv)
+	defer release()
+
+	squatter, err := net.Listen("tcp", addr)
+	if err == nil {
+		squatter.Close()
+	}
+	c.Assert(err, NotNil, Commentf("another listener took the closed backend's port %s", addr))
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err == nil {
+		conn.Close()
+	}
+	c.Assert(err, NotNil, Commentf("dial to the closed backend %s succeeded", addr))
 }
 
 // A backend whose host disappears leaves the router holding an idle
