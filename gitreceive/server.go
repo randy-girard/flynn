@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -88,11 +89,30 @@ func main() {
 	h := newGitHandler(cc, auth)
 	h.locks = cc
 	h.signer = receiveSigner()
-	if h.maxPushSize, err = uploadlimit.FromEnv("MAX_PUSH_SIZE", defaultMaxPushSize); err != nil {
-		log.Fatalln("error parsing MAX_PUSH_SIZE:", err)
+	if err := h.configure(); err != nil {
+		log.Fatalln(err)
 	}
-	log.Printf("push limit: MAX_PUSH_SIZE=%d (0 is unlimited)", h.maxPushSize)
-	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), httphelper.ContextInjector("gitreceive", httphelper.NewRequestLogger(h))))
+	log.Printf("push limits: MAX_PUSH_SIZE=%d (0 is unlimited) PUSH_IDLE_TIMEOUT=%s (0s is off)", h.maxPushSize, h.idleTimeout)
+	srv := &http.Server{Addr: ":" + os.Getenv("PORT"), Handler: wrapHandler(h)}
+	uploadlimit.ApplyServerTimeouts(srv)
+	log.Fatal(srv.ListenAndServe())
+}
+
+// configure reads the push settings from the environment.
+func (h *gitHandler) configure() error {
+	var err error
+	if h.maxPushSize, err = uploadlimit.FromEnv("MAX_PUSH_SIZE", defaultMaxPushSize); err != nil {
+		return fmt.Errorf("error parsing MAX_PUSH_SIZE: %s", err)
+	}
+	if h.idleTimeout, err = uploadlimit.DurationFromEnv("PUSH_IDLE_TIMEOUT", defaultPushIdleTimeout); err != nil {
+		return err
+	}
+	return nil
+}
+
+// wrapHandler is the middleware every gitreceive request goes through.
+func wrapHandler(h http.Handler) http.Handler {
+	return httphelper.ContextInjector("gitreceive", httphelper.NewRequestLogger(h))
 }
 
 // receiveSigner loads the key that mints per-app receive tokens. A missing
@@ -132,6 +152,9 @@ type gitHandler struct {
 	uploadRetryDelay time.Duration
 	// maxPushSize caps the request body of a git RPC; 0 is no limit.
 	maxPushSize int64
+	// idleTimeout cuts off a git RPC body that sends nothing for this long
+	// (EDGE-36); 0 is off.
+	idleTimeout time.Duration
 	// locks holds the app's build lease for a push (EDGE-09); nil pushes
 	// unlocked. lockTTL is the lease length, renewed while the push runs.
 	locks   buildlock.Store
@@ -142,6 +165,10 @@ type gitHandler struct {
 // says otherwise (EDGE-08). GitHub refuses pushes over 2 GiB; 8 GiB leaves
 // room for repositories with large committed assets.
 const defaultMaxPushSize = 8 << 30
+
+// defaultPushIdleTimeout is how long a push may send nothing before it is
+// cut off (EDGE-36), unless PUSH_IDLE_TIMEOUT says otherwise.
+const defaultPushIdleTimeout = uploadlimit.DefaultIdleTimeout
 
 type gitService struct {
 	method     string
@@ -157,6 +184,9 @@ type gitEnv struct {
 	ReceiveToken string
 	// MaxBody caps the RPC request body; 0 is no limit.
 	MaxBody int64
+	// IdleTimeout cuts off an RPC request body that sends nothing for this
+	// long (EDGE-36); 0 is off.
+	IdleTimeout time.Duration
 	// LockHolder is the build lease this push holds (EDGE-09), passed to
 	// flynn-receiver so it does not try to take it again.
 	LockHolder string
@@ -188,6 +218,7 @@ func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandle
 		upload:     uploadRepo,
 
 		maxPushSize: defaultMaxPushSize,
+		idleTimeout: defaultPushIdleTimeout,
 		lockTTL:     buildlock.DefaultTTL,
 	}
 }
@@ -263,7 +294,7 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env := gitEnv{App: app.ID, AppName: app.Name, MaxBody: h.maxPushSize}
+	env := gitEnv{App: app.ID, AppName: app.Name, MaxBody: h.maxPushSize, IdleTimeout: h.idleTimeout}
 	// EDGE-09: the receive RPC holds the app's build lease from before the
 	// repo cache download until after the upload. A second push while it is
 	// held still runs receive-pack (git only shows hook output), but the
@@ -366,7 +397,7 @@ func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *a
 		}
 	}
 
-	success := g.handleFunc(gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize}, g.rpc, repoPath, w, r)
+	success := g.handleFunc(gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize, IdleTimeout: h.idleTimeout}, g.rpc, repoPath, w, r)
 	if success && g.rpc == "git-receive-pack" {
 		if err := h.storeRepo(repoPath, cacheKey); err != nil {
 			logError(w, "uploadRepo", err, "pipeline", pipeline)
@@ -475,6 +506,17 @@ func pushTooLarge(w http.ResponseWriter, limit int64) {
 	}
 }
 
+// pushIdle answers 408 for an RPC body that sent nothing for timeout, and
+// closes the connection.
+func pushIdle(w http.ResponseWriter, timeout time.Duration) {
+	msg := fmt.Sprintf("%s (%s); an operator can change it with `flynn -a gitreceive env:set PUSH_IDLE_TIMEOUT=<duration>`", uploadlimit.ErrIdle, timeout)
+	w.Header().Set("Connection", "close")
+	http.Error(w, msg, http.StatusRequestTimeout)
+	if _, ok := w.(*httphelper.ResponseWriter); ok {
+		logError(w, "handlePostRPC", errors.New(msg))
+	}
+}
+
 func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r *http.Request) bool {
 	// EDGE-08: refuse a body over the limit before git sees any of it.
 	if env.MaxBody > 0 && r.ContentLength > env.MaxBody {
@@ -482,13 +524,21 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 		return false
 	}
 
+	// EDGE-36: a body that sends nothing for PUSH_IDLE_TIMEOUT is cut off
+	idle := uploadlimit.NewIdleBody(w, r.Body, env.IdleTimeout)
+	defer idle.Done()
+
 	// The client request body may have been gzipped. The limit counts the
 	// bytes git reads, so a small gzip body cannot expand past it.
-	var body io.Reader = r.Body
+	var body io.Reader = idle
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		var err error
-		body, err = gzip.NewReader(r.Body)
+		body, err = gzip.NewReader(idle)
 		if err != nil {
+			if idle.TimedOut() {
+				pushIdle(w, env.IdleTimeout)
+				return false
+			}
 			fail500(w, "handlePostRPC", err)
 			return false
 		}
@@ -508,20 +558,39 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 		fail500(w, "handlePostRPC", err)
 		return false
 	}
-	go func(done <-chan bool) {
-		<-done
-		cleanUpProcessGroup(cmd) // Ensure brute force subprocess clean-up
+	// stop kills and reaps git on a path that does not Wait for it. It runs
+	// once: two concurrent Waits on one Cmd race.
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(func() { cleanUpProcessGroup(cmd) }) }
+	// a client that goes away kills git (brute force subprocess clean-up);
+	// whichever path the handler takes then reaps it
+	handlerDone := make(chan struct{})
+	defer close(handlerDone)
+	go func(closed <-chan bool) {
+		select {
+		case <-closed:
+			killProcessGroup(cmd)
+		case <-handlerDone:
+		}
 	}(w.(http.CloseNotifier).CloseNotify())
 
 	// Write the client request body to Git's standard input
 	if _, err := io.Copy(stdin, body); err != nil {
+		if idle.TimedOut() {
+			// stop git before the pre-receive hook can run; the deferred
+			// lease release and temp repo removal follow
+			stop()
+			pushIdle(w, env.IdleTimeout)
+			return false
+		}
 		if limited.Exceeded {
 			// stop git before it finishes a truncated pack or runs the
 			// pre-receive hook
-			cleanUpProcessGroup(cmd)
+			stop()
 			pushTooLarge(w, env.MaxBody)
 			return false
 		}
+		stop()
 		fail500(w, "handlePostRPC write to subprocess", err)
 		return false
 	}
@@ -531,10 +600,13 @@ func handlePostRPC(env gitEnv, rpc string, path string, w http.ResponseWriter, r
 	w.Header().Add("Cache-Control", "no-cache")
 	w.WriteHeader(200) // Don't bother with HTTP 500 from this point on, just return
 	if _, err := io.Copy(newWriteFlusher(w), pipe); err != nil {
+		stop()
 		logError(w, "handlePostRPC read from subprocess", err)
 		return false
 	}
-	if err := cmd.Wait(); err != nil {
+	err = cmd.Wait()
+	stopOnce.Do(func() {}) // git has exited; nothing left to stop
+	if err != nil {
 		logError(w, "handlePostRPC wait for subprocess", err)
 		return false
 	}
@@ -599,15 +671,17 @@ func cleanUpProcessGroup(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}
-
-	process := cmd.Process
-	if process != nil && process.Pid > 0 {
-		// Send SIGTERM to the process group of cmd
-		syscall.Kill(-process.Pid, syscall.SIGTERM)
-	}
+	killProcessGroup(cmd)
 
 	// reap our child process
 	go cmd.Wait()
+}
+
+// killProcessGroup sends SIGTERM to the process group of cmd.
+func killProcessGroup(cmd *exec.Cmd) {
+	if process := cmd.Process; process != nil && process.Pid > 0 {
+		syscall.Kill(-process.Pid, syscall.SIGTERM)
+	}
 }
 
 // Git HTTP line protocol functions
