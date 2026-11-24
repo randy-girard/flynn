@@ -84,6 +84,13 @@ func (r *EventRepo) ListEvents(appIDs, objectTypes, objectIDs []string, beforeID
 	return events, rows.Err()
 }
 
+// LastID returns the id of the newest stored event, or 0 if there is none.
+func (r *EventRepo) LastID() (int64, error) {
+	var id int64
+	err := r.db.QueryRow("SELECT COALESCE(MAX(event_id), 0) FROM events").Scan(&id)
+	return id, err
+}
+
 func (r *EventRepo) GetEvent(id int64) (*ct.Event, error) {
 	row := r.db.QueryRow("event_select", id)
 	return scanEvent(row)

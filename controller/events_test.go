@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,6 +16,8 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/sse"
+	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/net/context"
 )
 
@@ -604,4 +608,80 @@ func (s *S) TestStreamEventsReturnsWhenClientGoneWithLiveEventPending(c *C) {
 	case <-time.After(time.Second):
 		c.Fatal("streamEvents did not return within 1s of the client going away with an event pending")
 	}
+}
+
+// EDGE-94: a client whose stream drops before its first event used to resume
+// with Last-Event-Id 0, and nothing is replayed for 0, so every change made
+// while it was disconnected was lost (a router kept a deleted route). The
+// stream now sends the id it starts after; resuming from that id replays the
+// changes made in the gap. A stream that replays from the beginning
+// (past=true) has no start id.
+func (s *S) TestStreamEventsStartIDLetsAClientResume(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "events-start-id"})
+	route := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: "start-id.example.com", Service: "foo"}).ToRoute())
+
+	open := func(lastID, query string) (*http.Response, *sse.Decoder) {
+		req, err := http.NewRequest("GET", s.srv.URL+"/events?object_types=route,route_deletion&app_id="+app.ID+query, nil)
+		c.Assert(err, IsNil)
+		req.SetBasicAuth("", authKey)
+		req.Header.Set("Accept", "text/event-stream")
+		if lastID != "" {
+			req.Header.Set("Last-Event-Id", lastID)
+		}
+		res, err := http.DefaultClient.Do(req)
+		c.Assert(err, IsNil)
+		c.Assert(res.StatusCode, Equals, 200)
+		return res, sse.NewDecoder(bufio.NewReader(res.Body))
+	}
+	next := func(dec *sse.Decoder) *ct.Event {
+		got := make(chan *ct.Event, 1)
+		go func() {
+			var e ct.Event
+			if err := dec.Decode(&e); err != nil {
+				got <- nil
+				return
+			}
+			got <- &e
+		}()
+		select {
+		case e := <-got:
+			c.Assert(e, NotNil)
+			return e
+		case <-time.After(10 * time.Second):
+			c.Fatal("timed out waiting for event")
+		}
+		return nil
+	}
+
+	var maxID int64
+	c.Assert(s.hc.db.QueryRow("SELECT max(event_id) FROM events").Scan(&maxID), IsNil)
+	res, dec := open("", "")
+	start := res.Header.Get(sse.LastEventIDHeader)
+	c.Assert(start, Equals, strconv.FormatInt(maxID, 10))
+	// the start id is taken after the stream subscribed: a change made as
+	// soon as the client has the response arrives on the stream
+	live := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: "start-id-live.example.com", Service: "foo"}).ToRoute())
+	e := next(dec)
+	c.Assert(e.ObjectType, Equals, ct.EventTypeRoute)
+	c.Assert(e.ObjectID, Equals, live.ID)
+	res.Body.Close()
+
+	// a client that saw no event resumes from the start id and gets every
+	// change made while it was away, including that live one
+	c.Assert(s.c.DeleteRoute(app.ID, route.FormattedID()), IsNil)
+	added := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: "start-id-added.example.com", Service: "foo"}).ToRoute())
+	res, dec = open(start, "")
+	c.Assert(res.Header.Get(sse.LastEventIDHeader), Equals, start)
+	c.Assert(next(dec).ObjectID, Equals, live.ID)
+	e = next(dec)
+	c.Assert(e.ObjectType, Equals, ct.EventTypeRouteDeletion)
+	c.Assert(e.ObjectID, Equals, route.ID)
+	e = next(dec)
+	c.Assert(e.ObjectType, Equals, ct.EventTypeRoute)
+	c.Assert(e.ObjectID, Equals, added.ID)
+	res.Body.Close()
+
+	res, _ = open("", "&past=true")
+	c.Assert(res.Header.Get(sse.LastEventIDHeader), Equals, "")
+	res.Body.Close()
 }

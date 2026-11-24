@@ -207,6 +207,33 @@ func streamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request,
 	hide := hideInternal(ctx, app) || (app == nil && hideInternalToken(ctx))
 	l, _ := ctxhelper.LoggerFromContext(ctx)
 	log := l.New("fn", "streamEvents", "object_types", objectTypes, "object_ids", objectIDs)
+
+	// Subscribe before the response headers go out: a client that opens the
+	// stream and then lists (the router) must get every change made after
+	// it has the headers.
+	sub, err := eventListener.Subscribe(appIDs, objectTypes, objectIDs)
+	if err != nil {
+		return err
+	}
+	defer sub.Close()
+
+	// Tell the client which id the stream starts after (EDGE-94). Events
+	// with a larger id come on this stream; the replay below covers those
+	// up to now and the subscription the rest. A client that sees no event
+	// before the stream drops resumes from this id instead of 0, for which
+	// nothing is replayed. A stream that replays from the beginning has no
+	// start id.
+	switch {
+	case lastID > 0:
+		w.Header().Set(sse.LastEventIDHeader, strconv.FormatInt(lastID, 10))
+	case past != "true":
+		startID, err := repo.LastID()
+		if err != nil {
+			return err
+		}
+		w.Header().Set(sse.LastEventIDHeader, strconv.FormatInt(startID, 10))
+	}
+
 	ch := make(chan *ct.Event)
 	s := sse.NewStream(w, ch, log)
 	s.Serve()
@@ -217,12 +244,6 @@ func streamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request,
 			s.CloseWithError(err)
 		}
 	}()
-
-	sub, err := eventListener.Subscribe(appIDs, objectTypes, objectIDs)
-	if err != nil {
-		return err
-	}
-	defer sub.Close()
 
 	var currID int64
 	if past == "true" || lastID > 0 {

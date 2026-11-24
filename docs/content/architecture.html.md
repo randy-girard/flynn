@@ -30,6 +30,16 @@ over HTTP. Since most developers are already familiar with HTTP and almost every
 language already has great HTTP support, taking advantage of Flynn's APIs is
 easier than yet another RPC protocol.
 
+The controller's `/events` stream numbers its events. A client that loses the
+connection reconnects with the last id it received as `Last-Event-Id`, and the
+controller replays the matching events after that id before going live. The
+response header `X-Last-Event-Id` gives the id the stream starts after, so a
+client that has not received an event yet resumes from there instead of from
+0, for which nothing is replayed. A stream asked with `past=true` starts from
+the beginning and has no start id. A client that keeps state built from a list
+must not depend on the resume alone: the router lists its routes again after
+every reconnect and removes the ones that are gone (see Router below).
+
 This fork targets **Ubuntu 24.04 LTS amd64** as the host operating system.
 Flynn has no hard kernel dependency on a specific distribution, but supporting
 several distros is time-consuming and irrelevant to the platform, so a single
@@ -390,6 +400,14 @@ outside the router pre-bind (3000–3500) listen when the route exists. See
 (for example a new certificate) or a router resync takes over the route's
 existing socket, so old settings stop serving at once and a deleted route's
 port stops accepting.
+
+Each router opens the controller's route event stream, then lists every route
+and applies the list: routes it has that are not listed are removed. Changes
+made while it lists arrive on the stream. When the stream drops (a controller
+restart or deploy, a node reboot), the router does not resume it. It logs
+`sync error`, waits 2 seconds, and repeats the open, list and remove. A route
+changed or deleted while the stream was down is applied at that point, and a
+route deleted on the controller stops being served on every node.
 
 An instance of the router runs on every host so client traffic can land on any
 node. The router uses host networking and binds ports 80 and 443, so
