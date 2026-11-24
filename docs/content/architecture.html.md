@@ -221,12 +221,28 @@ per-host pins an omni roll puts on the old formation. It then deletes the new
 release's formation. It deletes it even when the restore was written but did
 not finish within the rollback's 10-second wait. If the restore could not be
 written at all, the new formation stays, so the app is not left with nothing
-running. In that case, the next successful deploy of the app scales it to
-zero. On each successful deploy the worker scales to zero any formation that
-still runs processes for a release a failed deployment of that app targeted.
-Releases that a deployment completed, and formations scaled by hand with
-`flynn scale -r`, are left alone. For the controller app, this means a failed
-deploy does not leave a second omni `scheduler` on every host.
+running. In that case, the next successful deploy of the app can scale it to
+zero. After a deploy succeeds and its release is current, the worker looks
+for formations that still run processes for a release a failed deployment of
+that app targeted. It scales one to zero only if the cleanup cannot take
+capacity away from the app:
+
+- the app is not deployed with the `sirenia` strategy and no release
+  involved has a process type with volumes (the system Postgres and other
+  datastores are never cleaned up this way);
+- the release was never the app's current release (the old release of any
+  deployment), no deployment completed it, and it is not one of this
+  deploy's releases;
+- for every process type the leftover runs, the now-current release's
+  formation has a non-zero count and at least that many jobs up, and for an
+  omni type a job up on every host the leftover runs one on.
+
+Anything else is left running and the worker logs why. Formations scaled by
+hand with `flynn scale -r` are not touched. For the controller app, this
+means a failed deploy does not leave a second omni `scheduler` on every host.
+An app whose current release is scaled to zero while an older release runs
+it keeps running that older release through a deploy; scale the current
+release up first if you want the deploy to take over.
 
 Every service, including the controller, is an app in the controller and is
 scaled and updated using the same APIs that are used to manage every other app.

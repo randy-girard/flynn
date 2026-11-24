@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -240,21 +241,46 @@ func rollbackTags(original *ct.Formation) map[string]map[string]string {
 // that a failed deployment of this app targeted and that still run
 // processes (EDGE-63: a rollback that stopped early left the controller's
 // failed release with scheduler=1 on every host through later deploys).
-// Releases that a deployment completed, and the releases of this deployment,
-// are left alone, as are non-current formations scaled by hand
-// (`flynn scale -r`). Errors are logged; the deploy itself has succeeded.
+//
+// It must never take capacity away from the app (EDGE-72: a leftover
+// release can be the formation that actually runs the app; zeroing one
+// stopped every system Postgres engine). A formation is zeroed only when
+// all of these hold:
+//
+//   - the deploy is not a sirenia deploy and no release involved has a
+//     process type with volumes: data formations are never scaled here;
+//   - its release was never the app's current release (the old release of
+//     any deployment) and no deployment completed it, and it is not one of
+//     this deploy's releases;
+//   - for every process type it runs, the release this deploy just made
+//     current has a non-zero count and at least that many jobs up right now
+//     (for an omni type: an up job on every host the leftover runs one on).
+//
+// Anything else is left alone and logged. It runs only after Perform
+// succeeded and the new release is current. Errors are logged; the deploy
+// itself has succeeded.
 func (c *context) zeroFailedDeploymentFormations(l log15.Logger, deployment *ct.Deployment) {
 	log := l.New("fn", "zeroFailedDeploymentFormations")
+	if deployment.Strategy == "sirenia" {
+		log.Info("not cleaning up failed-deployment formations of a sirenia app", "strategy", deployment.Strategy)
+		return
+	}
 	deployments, err := c.client.DeploymentList(deployment.AppID)
 	if err != nil {
 		log.Error("error listing deployments", "err", err)
 		return
 	}
-	completed := make(map[string]bool)
+	keep := map[string]bool{deployment.NewReleaseID: true, deployment.OldReleaseID: true}
 	for _, d := range deployments {
-		if d != nil && d.Status == "complete" {
-			completed[d.NewReleaseID] = true
+		if d == nil {
+			continue
 		}
+		if d.Status == "complete" {
+			keep[d.NewReleaseID] = true
+		}
+		// A release a deployment started from was the app's current
+		// release; the app may still run on it.
+		keep[d.OldReleaseID] = true
 	}
 	seen := make(map[string]bool)
 	var targets []string
@@ -263,13 +289,41 @@ func (c *context) zeroFailedDeploymentFormations(l log15.Logger, deployment *ct.
 			continue
 		}
 		rid := d.NewReleaseID
-		if rid == "" || rid == deployment.NewReleaseID || rid == deployment.OldReleaseID || completed[rid] || seen[rid] {
+		if rid == "" || keep[rid] || seen[rid] {
 			continue
 		}
 		seen[rid] = true
 		targets = append(targets, rid)
 	}
+	if len(targets) == 0 {
+		return
+	}
 	sort.Strings(targets)
+
+	newRelease, err := c.client.GetRelease(deployment.NewReleaseID)
+	if err != nil {
+		log.Error("error getting the new release, leaving failed-deployment formations alone", "release.id", deployment.NewReleaseID, "err", err)
+		return
+	}
+	if hasVolumes(newRelease) {
+		log.Info("not cleaning up failed-deployment formations of an app with volumes", "release.id", deployment.NewReleaseID)
+		return
+	}
+	current, err := c.client.GetFormation(deployment.AppID, deployment.NewReleaseID)
+	if err == controller.ErrNotFound {
+		// A deploy of an app scaled to zero creates no new formation.
+		current, err = &ct.Formation{AppID: deployment.AppID, ReleaseID: deployment.NewReleaseID}, nil
+	}
+	if err != nil {
+		log.Error("error getting the new formation, leaving failed-deployment formations alone", "release.id", deployment.NewReleaseID, "err", err)
+		return
+	}
+	jobs, err := c.client.JobList(deployment.AppID)
+	if err != nil {
+		log.Error("error listing jobs, leaving failed-deployment formations alone", "err", err)
+		return
+	}
+
 	for _, rid := range targets {
 		form, err := c.client.GetFormation(deployment.AppID, rid)
 		if err == controller.ErrNotFound {
@@ -289,11 +343,82 @@ func (c *context) zeroFailedDeploymentFormations(l log15.Logger, deployment *ct.
 		if !running {
 			continue
 		}
-		log.Warn("scaling down a formation left by a failed deployment", "release.id", rid, "processes", form.Processes)
+		if rel, err := c.client.GetRelease(rid); err != nil || hasVolumes(rel) {
+			log.Warn("leaving a failed deployment's formation alone: its release has volumes or could not be read", "release.id", rid, "processes", form.Processes, "err", err)
+			continue
+		}
+		if reason := leftoverNotCovered(form, current, newRelease, jobs); reason != "" {
+			log.Warn("leaving a failed deployment's formation alone: the current release does not cover it", "release.id", rid, "processes", form.Processes, "current.processes", current.Processes, "reason", reason)
+			continue
+		}
+		log.Warn("scaling down a formation left by a failed deployment", "release.id", rid, "processes", form.Processes, "current.release.id", deployment.NewReleaseID, "current.processes", current.Processes)
 		if err := c.client.ScaleAppRelease(deployment.AppID, rid, ct.ScaleOptions{Processes: zero, NoWait: true}); err != nil {
 			log.Error("error scaling down a failed deployment's formation", "release.id", rid, "err", err)
 		}
 	}
+}
+
+// leftoverNotCovered says why zeroing leftover could leave a process type
+// of the app with fewer jobs than the current release's formation asks for,
+// or "" when the current release already runs every type leftover runs.
+func leftoverNotCovered(leftover, current *ct.Formation, currentRelease *ct.Release, jobs []*ct.Job) string {
+	up := make(map[string]int)
+	upHosts := make(map[string]map[string]bool)
+	leftHosts := make(map[string]map[string]bool)
+	for _, j := range jobs {
+		if j == nil || j.State != ct.JobStateUp {
+			continue
+		}
+		switch j.ReleaseID {
+		case current.ReleaseID:
+			up[j.Type]++
+			if upHosts[j.Type] == nil {
+				upHosts[j.Type] = make(map[string]bool)
+			}
+			upHosts[j.Type][j.HostID] = true
+		case leftover.ReleaseID:
+			if leftHosts[j.Type] == nil {
+				leftHosts[j.Type] = make(map[string]bool)
+			}
+			leftHosts[j.Type][j.HostID] = true
+		}
+	}
+	types := make([]string, 0, len(leftover.Processes))
+	for typ, n := range leftover.Processes {
+		if n > 0 {
+			types = append(types, typ)
+		}
+	}
+	sort.Strings(types)
+	for _, typ := range types {
+		want := current.Processes[typ]
+		if want <= 0 {
+			return fmt.Sprintf("the current release runs no %s", typ)
+		}
+		if up[typ] < want {
+			return fmt.Sprintf("the current release has %d of %d %s jobs up", up[typ], want, typ)
+		}
+		if currentRelease.Processes[typ].Omni {
+			for h := range leftHosts[typ] {
+				if !upHosts[typ][h] {
+					return fmt.Sprintf("the current release has no %s job up on host %s", typ, h)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func hasVolumes(r *ct.Release) bool {
+	if r == nil {
+		return false
+	}
+	for _, p := range r.Processes {
+		if len(p.Volumes) > 0 || p.DeprecatedData {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *context) setDeploymentDone(id string) error {
