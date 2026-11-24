@@ -41,9 +41,29 @@ var (
 
 // backendDeadPeerTimeout bounds how long a backend connection survives after
 // the backend's host disappears without sending a RST (VM crash, network
-// loss). Without it a request on such a connection hangs until the client
-// gives up instead of failing over to another backend.
+// loss) while a request without a body is in flight. Without it a request on
+// such a connection hangs until the client gives up instead of failing over
+// to another backend. Idle connections are covered by the keepalive above.
 const backendDeadPeerTimeout = 5 * time.Second
+
+// backendStreamDeadPeerTimeout replaces backendDeadPeerTimeout while a
+// request body, a TCP route or an upgraded connection is in flight. Linux
+// applies TCP_USER_TIMEOUT to a receive window that stays closed even when
+// the backend answers every zero-window probe, so this is also how long a
+// live backend may stop reading (tarreceive waiting for an upload slot, a
+// blobstore PUT waiting on its store, git indexing a pack). With 5 s such
+// uploads failed with a plain 503 (EDGE-100). It is longer than the backends'
+// own waits (tarreceive's 30 s slot wait, the 60 s upload idle timeout).
+var backendStreamDeadPeerTimeout = 2 * time.Minute
+
+// backendUserTimeout is the TCP_USER_TIMEOUT for a backend connection that
+// carries req.
+func backendUserTimeout(req *http.Request) time.Duration {
+	if req.ContentLength != 0 || len(req.TransferEncoding) > 0 {
+		return backendStreamDeadPeerTimeout
+	}
+	return backendDeadPeerTimeout
+}
 
 // maxBackendAttempts is the maximum number of backends to attempt to proxy
 // a given request to
@@ -223,7 +243,7 @@ func (t *transport) RoundTrip(req *http.Request, l log15.Logger) (*http.Response
 
 	// trace the request timings (do not use the trace before the request
 	// has been RoundTripped)
-	req, trace := traceRequest(req)
+	req, trace := traceRequest(req, backendUserTimeout(req), l)
 
 	rt := req.Context().Value(ctxKeyRequestTracker).(RequestTracker)
 	stickyBackend := t.getStickyBackend(req)
@@ -306,6 +326,10 @@ func dialTCP(ctx context.Context, l log15.Logger, backends []*router.Backend) (n
 		}
 		conn, err := dialer.Dial("tcp", backend.Addr)
 		if err == nil {
+			// a stream: either side may stop reading for a while
+			if err := setConnUserTimeout(conn, backendStreamDeadPeerTimeout); err != nil {
+				l.Error("error setting backend TCP user timeout", "job.id", backend.JobID, "addr", backend.Addr, "err", err)
+			}
 			return conn, backend, nil
 		}
 		l.Error("retriable dial error", "job.id", backend.JobID, "addr", backend.Addr, "err", err, "attempt", i)
@@ -450,8 +474,9 @@ func (r *RequestTrace) reusedWithoutResponse() bool {
 }
 
 // traceRequest sets up request tracing and returns the modified
-// request.
-func traceRequest(req *http.Request) (*http.Request, *RequestTrace) {
+// request. It also sets userTimeout as the TCP_USER_TIMEOUT of every backend
+// connection the request gets, new or pooled, before the request is written.
+func traceRequest(req *http.Request, userTimeout time.Duration, l log15.Logger) (*http.Request, *RequestTrace) {
 	trace := &RequestTrace{}
 	ct := &httptrace.ClientTrace{
 		GetConn: func(hostPort string) {
@@ -463,6 +488,9 @@ func traceRequest(req *http.Request) (*http.Request, *RequestTrace) {
 			trace.ConnectStart = time.Now()
 		},
 		GotConn: func(info httptrace.GotConnInfo) {
+			if err := setConnUserTimeout(info.Conn, userTimeout); err != nil {
+				l.Error("error setting backend TCP user timeout", "err", err)
+			}
 			trace.mtx.Lock()
 			defer trace.mtx.Unlock()
 			if trace.final {
