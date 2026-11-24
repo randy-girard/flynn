@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,13 +52,18 @@ type Mux struct {
 	jobStarts map[string]chan struct{}
 
 	subscribersMtx sync.RWMutex
-	subscribers    map[string]map[chan message]struct{}
+	subscribers    map[string]map[chan message]*sinkSub
 
 	appLogsMtx sync.Mutex
 	appLogs    map[string]*appLog
 	// diskWG counts in-flight log file writers. Tests wait for it before
 	// removing the temp log directory; production callers do not.
 	diskWG sync.WaitGroup
+
+	// diskQueued and diskWritten count lines put on, and taken off, the
+	// disk queues (written or failed), so a resend can wait for the files
+	// to catch up.
+	diskQueued, diskWritten uint64
 
 	// diskWriter, if set, replaces lumberjack so tests can stall disk I/O.
 	diskWriter func(path string) io.WriteCloser
@@ -72,7 +78,7 @@ func New(hostID, logDir string, logger log15.Logger) *Mux {
 		logger:      logger,
 		jobWaits:    make(map[string]*sync.WaitGroup),
 		jobStarts:   make(map[string]chan struct{}),
-		subscribers: make(map[string]map[chan message]struct{}),
+		subscribers: make(map[string]map[chan message]*sinkSub),
 		appLogs:     make(map[string]*appLog),
 	}
 }
@@ -90,15 +96,58 @@ func (c *Config) procID() []byte {
 	return []byte(c.JobID)
 }
 
+// sinkSub records, for one firehose subscriber (a sink), the lines that did
+// not fit in its channel, so the sink can resend them from the log files.
+type sinkSub struct {
+	mtx sync.Mutex
+	// queued is the newest line put in the channel.
+	queued *utils.HostCursor
+	// dropped is set by a drop; dropFrom is then the newest line queued
+	// before the first drop since the last take.
+	dropped  bool
+	dropFrom *utils.HostCursor
+}
+
+func (s *sinkSub) sent(c *utils.HostCursor) {
+	s.mtx.Lock()
+	s.queued = c
+	s.mtx.Unlock()
+}
+
+func (s *sinkSub) drop() {
+	s.mtx.Lock()
+	if !s.dropped {
+		s.dropped = true
+		s.dropFrom = s.queued
+	}
+	s.mtx.Unlock()
+}
+
+// take reports whether lines were dropped since the last take, and the newest
+// line queued before the first of them (nil if none was).
+func (s *sinkSub) take() (bool, *utils.HostCursor) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	d, from := s.dropped, s.dropFrom
+	s.dropped, s.dropFrom = false, nil
+	return d, from
+}
+
 func (m *Mux) subscribe(app string, ch chan message) func() {
+	unsubscribe, _ := m.subscribeSink(app, ch)
+	return unsubscribe
+}
+
+func (m *Mux) subscribeSink(app string, ch chan message) (func(), *sinkSub) {
 	m.subscribersMtx.Lock()
 	defer m.subscribersMtx.Unlock()
 	subs, ok := m.subscribers[app]
 	if !ok {
-		subs = make(map[chan message]struct{})
+		subs = make(map[chan message]*sinkSub)
 		m.subscribers[app] = subs
 	}
-	subs[ch] = struct{}{}
+	sub := &sinkSub{}
+	subs[ch] = sub
 	return func() {
 		go func() {
 			// drain channel to prevent deadlock
@@ -108,7 +157,7 @@ func (m *Mux) subscribe(app string, ch chan message) func() {
 		m.subscribersMtx.Lock()
 		defer m.subscribersMtx.Unlock()
 		delete(m.subscribers[app], ch)
-	}
+	}, sub
 }
 
 // broadcastTimeout is the one deadline shared by every per-app follower in a
@@ -153,11 +202,14 @@ func (m *Mux) broadcast(app string, msg message) {
 	r := rand.New(rand.NewSource(time.Now().Unix()))
 	// Firehose subscribers are sinks. A full buffer drops the line. Waiting
 	// here holds the job stdout reader, and one timeout per sink stacks.
-	for ch := range m.subscribers[firehoseApp] {
+	// The sink is told, and resends the dropped lines from the log file.
+	for ch, sub := range m.subscribers[firehoseApp] {
 		select {
 		case ch <- msg:
+			sub.sent(msg.HostCursor)
 		default:
 			m.addDrop()
+			sub.drop()
 			if r.Intn(9) == 0 {
 				l.Error("dropping log line due to full sink buffer")
 			}
@@ -198,10 +250,18 @@ func (m *Mux) broadcast(app string, msg message) {
 	}
 }
 
+// resendDiskWait bounds how long a pass over the log files waits for lines
+// already queued for disk to be written, so a line logged just before the
+// sink subscribed is in the file when the pass reads it.
+var resendDiskWait = 2 * time.Second
+
 func (m *Mux) addSink(sink Sink) {
 	l := m.logger.New("fn", "addSink", "name", sink.Name())
 	shutdownCh := sink.ShutdownCh()
 	reconnectDelay := 0 * time.Second
+	// What the sink still lacks from the log files. It outlives a
+	// connection so a resend cut by a write error resumes where it stopped.
+	resend := newResendState()
 
 	for {
 		select {
@@ -209,152 +269,272 @@ func (m *Mux) addSink(sink Sink) {
 			sink.Close()
 			return
 		case <-time.After(reconnectDelay):
-			func() {
-				l.Info("connecting to sink")
-				err := sink.Connect()
-				if err != nil {
-					l.Error("error connecting to sink", "err", err)
-					reconnectDelay = sinkReconnectDelay
-					return
-				}
-				l.Info("connected to sink")
-				sinkCursor, err := sink.GetCursor(m.hostID)
-				if err != nil {
-					l.Error("failed to get cursor from sink")
-				}
+			failed := m.sendToSink(sink, resend, l)
+			select {
+			case <-shutdownCh:
+				sink.Close()
+				return
+			default:
+			}
+			if failed {
+				reconnectDelay = sinkReconnectDelay
+			} else {
+				reconnectDelay = 0
+			}
+		}
+	}
+}
 
-				if sinkCursor != nil {
-					l.Info("got cursor", "cursor.timestamp", sinkCursor.Time, "cursor.seq", sinkCursor.Seq)
-				} else {
-					l.Info("no cursor for host")
-				}
+// resendItem is a line from a log file for the sink writer, or, with passEnd
+// set, the end of one pass over the files (acked once handled).
+type resendItem struct {
+	msg     message
+	app     string
+	passEnd bool
+	gen     uint64
+	ack     chan struct{}
+}
 
-				appLogs, err := m.logFiles("")
-				if err != nil {
-					l.Error("failed to get local log files", "error", err)
-					return
-				}
+// sendToSink connects the sink and sends it the live firehose and, from the
+// log files, what it lacks, until a write fails (it returns true: reconnect
+// after the delay) or the sink is shut down.
+//
+// Live lines go first. A resend from the files (a sink with no cursor gets
+// every file) runs beside them: one line at a time when no live line waits.
+// Live lines used to be held (dropped, to come later from the file) until
+// their app's files were resent, which could be minutes.
+func (m *Mux) sendToSink(sink Sink, resend *resendState, l log15.Logger) (failed bool) {
+	shutdownCh := sink.ShutdownCh()
+	l.Info("connecting to sink")
+	if err := sink.Connect(); err != nil {
+		l.Error("error connecting to sink", "err", err)
+		return true
+	}
+	defer sink.Close()
+	l.Info("connected to sink")
+	sinkCursor, err := sink.GetCursor(m.hostID)
+	if err != nil {
+		l.Error("failed to get cursor from sink", "err", err)
+	}
+	if sinkCursor != nil {
+		l.Info("got cursor", "cursor.timestamp", sinkCursor.Time, "cursor.seq", sinkCursor.Seq)
+	} else {
+		l.Info("no cursor for host")
+	}
 
-				bufferedMessages := make(chan message)
-				// Buffer the live firehose so a slow sink write does not drop
-				// the first lines. When this fills, broadcast drops and counts
-				// the line instead of blocking Follow.
-				firehose := make(chan message, 256)
-				done := make(chan struct{})
-				var writeFailed bool
+	// Buffer the live firehose so a slow sink write does not drop the
+	// first lines. When this fills, broadcast drops and counts the line,
+	// and the sink resends it from the file.
+	firehose := make(chan message, 256)
+	unsubscribe, sub := m.subscribeSink(firehoseApp, firehose)
+	defer unsubscribe()
+	// Every line up to here is in the files (or on its way to them); every
+	// later one comes through the firehose.
+	upTo := m.cursorNow()
 
-				// subscribe to all messages
-				unsubscribe := m.subscribe(firehoseApp, firehose)
+	apps, err := m.logApps()
+	if err != nil {
+		l.Error("failed to get local log files", "error", err)
+		return true
+	}
+	if resend.connected(apps, sinkCursor, upTo) {
+		l.Info("resuming resend of log files")
+	}
 
-				bufferCursors := make(map[string]utils.HostCursor)
-				var bufferCursorsMtx sync.Mutex
+	resent := make(chan resendItem)
+	done := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		m.readResend(resend, resent, done, l)
+	}()
+	defer func() {
+		close(done)
+		<-readerDone
+	}()
 
-				// Start goroutine to write messages to the sink
-				go func() {
-					l := m.logger.New("fn", "sendToSink")
-					defer unsubscribe()
-					defer sink.Close()
-					defer close(done)
-					bm := bufferedMessages // make a copy so we can nil it later
-					for {
-						var m message
-						var ok bool
-						select {
-						case <-shutdownCh:
-							sink.Close()
-							return
-						// first drain the list of buffered messages
-						case m, ok = <-bm:
-							if !ok {
-								bm = nil
-								continue
-							}
-						// then consume from the firehose
-						case m, ok = <-firehose:
-							if !ok {
-								return
-							}
+	lastLive := upTo
+	for {
+		var item resendItem
+		live := false
+		select {
+		case item.msg = <-firehose:
+			live = true
+		default:
+			select {
+			case <-shutdownCh:
+				return false
+			case item.msg = <-firehose:
+				live = true
+			case item = <-resent:
+			}
+		}
 
-							// if app in list of app logs and cursor from reading files, skip
-							appID := string(m.Message.AppName)
-							if _, ok := appLogs[appID]; ok {
-								bufferCursorsMtx.Lock()
-								c, ok := bufferCursors[appID]
-								bufferCursorsMtx.Unlock()
-								if !ok || c.After(*m.HostCursor) {
-									continue
-								}
-							}
-						}
-						// Send message to sink
-						if err := sink.Write(m); err != nil {
-							writeFailed = true
-							l.Error("failed to write message to sink", "error", err)
-							return
-						}
+		// Lines that did not fit in the firehose are resent from the
+		// files. This is checked before a live line is written so a
+		// line queued after the drop counts as sent.
+		if dropped, from := sub.take(); dropped {
+			if from == nil {
+				c := lastLive
+				from = &c
+			}
+			if apps, err := m.logApps(); err == nil {
+				resend.add(apps, from, m.cursorNow())
+			}
+		}
+
+		switch {
+		case live:
+			if err := sink.Write(item.msg); err != nil {
+				l.Error("failed to write message to sink", "error", err)
+				return true
+			}
+			resend.wroteLive(string(item.msg.Message.AppName), *item.msg.HostCursor)
+			if item.msg.HostCursor.After(lastLive) {
+				lastLive = *item.msg.HostCursor
+			}
+		case item.passEnd:
+			if finished, n, took := resend.passDone(item.gen); finished {
+				l.Info("resend of log files finished", "lines", n, "duration", took)
+			}
+			close(item.ack)
+		default:
+			if err := sink.Write(item.msg); err != nil {
+				l.Error("failed to write message to sink", "error", err, "resend", true)
+				return true
+			}
+			resend.wroteResent(item.app, *item.msg.HostCursor)
+		}
+	}
+}
+
+// cursorNow is a cursor no older than any line logged so far.
+func (m *Mux) cursorNow() utils.HostCursor {
+	return utils.HostCursor{Time: time.Now(), Seq: uint64(atomic.LoadUint32(&m.msgSeq))}
+}
+
+// logApps lists the app ids that have log files.
+func (m *Mux) logApps() ([]string, error) {
+	files, err := m.logFiles("")
+	if err != nil {
+		return nil, err
+	}
+	apps := make([]string, 0, len(files))
+	for app := range files {
+		apps = append(apps, app)
+	}
+	return apps, nil
+}
+
+// readResend sends the sink writer the lines of the log files that resend
+// still wants, a pass at a time, until done is closed. A new pass starts when
+// lines are added (a reconnect, or live lines dropped from the firehose).
+func (m *Mux) readResend(resend *resendState, out chan<- resendItem, done <-chan struct{}, l log15.Logger) {
+	for {
+		select {
+		case <-resend.wake:
+		default:
+		}
+		gen, apps := resend.snapshot()
+		if len(apps) > 0 {
+			m.waitDisk(resendDiskWait, done)
+			files, err := m.logFiles("")
+			if err != nil {
+				l.Error("failed to get local log files", "error", err)
+			}
+			ids := make([]string, 0, len(apps))
+			for app := range apps {
+				ids = append(ids, app)
+			}
+			sort.Strings(ids)
+			for _, app := range ids {
+				for _, name := range files[app] {
+					if !m.resendFile(resend, app, name, apps[app], out, done, l) {
+						return
 					}
-				}()
+				}
+			}
+			ack := make(chan struct{})
+			select {
+			case out <- resendItem{passEnd: true, gen: gen, ack: ack}:
+			case <-done:
+				return
+			}
+			select {
+			case <-ack:
+			case <-done:
+				return
+			}
+		}
+		select {
+		case <-resend.wake:
+		case <-done:
+			return
+		}
+	}
+}
 
-				// Read in all messages from log files
-				for appID, logs := range appLogs {
-					for i, name := range logs {
-						func() {
-							l := l.New("log", name)
-							f, err := os.Open(name)
-							if err != nil {
-								l.Error("failed to open log file", "error", err)
-								return
-							}
-							defer f.Close()
-							sc := bufio.NewScanner(f)
-							sc.Split(rfc6587.SplitWithNewlines)
-							var cursor *utils.HostCursor
-							cursorSaved := false
-						scan:
-							for sc.Scan() {
-								msgBytes := sc.Bytes()
-								// slice in msgBytes could get modified on next Scan(), need to copy it
-								msgCopy := make([]byte, len(msgBytes)-1)
-								copy(msgCopy, msgBytes)
-								var msg *rfc5424.Message
-								msg, cursor, err = utils.ParseMessage(msgCopy)
-								if err != nil {
-									l.Error("failed to parse message", "msg", string(msgCopy), "error", err)
-									continue
-								}
-								if sinkCursor != nil && !cursor.After(*sinkCursor) {
-									continue
-								}
-								select {
-								case bufferedMessages <- message{cursor, msg}:
-								case <-done:
-									return
-								}
-							}
-							if err := sc.Err(); err != nil {
-								l.Error("failed to scan message", "error", err)
-								return
-							}
-							if cursor != nil && !cursorSaved && i == len(appLogs[appID])-1 {
-								// last file, send cursor to processing goroutine
-								bufferCursorsMtx.Lock()
-								bufferCursors[appID] = *cursor
-								bufferCursorsMtx.Unlock()
-								cursorSaved = true
-								// read to end of file again
-								goto scan
-							}
-						}()
-					}
-				}
-				// Close the bufferedMessages channel once we have sent all on disk messages to processing goroutine
-				close(bufferedMessages)
-				// Block here until processing goroutine stops
-				<-done
-				if writeFailed {
-					reconnectDelay = sinkReconnectDelay
-				}
-			}()
+// resendFile sends the wanted lines of one log file. A file last written
+// before from holds nothing wanted and is not read. It returns false once
+// done is closed.
+func (m *Mux) resendFile(resend *resendState, app, name string, from *utils.HostCursor, out chan<- resendItem, done <-chan struct{}, l log15.Logger) bool {
+	l = l.New("log", name)
+	f, err := os.Open(name)
+	if err != nil {
+		l.Error("failed to open log file", "error", err)
+		return true
+	}
+	defer f.Close()
+	if from != nil {
+		if fi, err := f.Stat(); err == nil && fi.ModTime().Before(from.Time) {
+			return true
+		}
+	}
+	sc := bufio.NewScanner(f)
+	sc.Split(rfc6587.SplitWithNewlines)
+	n := 0
+	for sc.Scan() {
+		if n++; n%4096 == 0 {
+			select {
+			case <-done:
+				return false
+			default:
+			}
+		}
+		msgBytes := sc.Bytes()
+		// slice in msgBytes could get modified on next Scan(), need to copy it
+		msgCopy := make([]byte, len(msgBytes)-1)
+		copy(msgCopy, msgBytes)
+		msg, cursor, err := utils.ParseMessage(msgCopy)
+		if err != nil {
+			l.Error("failed to parse message", "msg", string(msgCopy), "error", err)
+			continue
+		}
+		if !resend.wants(app, *cursor) {
+			continue
+		}
+		select {
+		case out <- resendItem{msg: message{cursor, msg}, app: app}:
+		case <-done:
+			return false
+		}
+	}
+	if err := sc.Err(); err != nil {
+		l.Error("failed to scan message", "error", err)
+	}
+	return true
+}
+
+// waitDisk waits, at most d, until the lines queued for disk so far are
+// written.
+func (m *Mux) waitDisk(d time.Duration, done <-chan struct{}) {
+	target := atomic.LoadUint64(&m.diskQueued)
+	deadline := time.Now().Add(d)
+	for atomic.LoadUint64(&m.diskWritten) < target && time.Now().Before(deadline) {
+		select {
+		case <-done:
+			return
+		case <-time.After(5 * time.Millisecond):
 		}
 	}
 }
@@ -860,6 +1040,7 @@ func (l *appLog) writeDisk() {
 		if _, err := l.w.Write(b); err != nil {
 			l.m.logger.Error("error writing job log", "app.id", l.appID, "err", err)
 		}
+		atomic.AddUint64(&l.m.diskWritten, 1)
 	}
 }
 
@@ -869,6 +1050,7 @@ func (l *appLog) Write(msg message) {
 	copy(cp, payload)
 	select {
 	case l.diskCh <- cp:
+		atomic.AddUint64(&l.m.diskQueued, 1)
 	default:
 		l.m.addDrop()
 		if rand.Intn(50) == 0 {

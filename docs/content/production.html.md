@@ -1192,7 +1192,10 @@ sudo flynn-host log-sink:add syslog syslog+tls://logs.example:6514/
 flynn -a myapp log-sink:add syslog syslog+tls://logs.example:6514/
 ```
 
-A slow sink drops lines. It does not stall the process. `GET /host/status`
+A slow sink drops lines. It does not stall the process. A line dropped from
+the sink buffer is resent later from the host's log file for that app, so it
+arrives late and out of order rather than not at all (unless the on-disk
+queue dropped it too). `GET /host/status`
 includes `log_drops` for that host process: sink-buffer drops plus on-disk
 queue drops. Follower timeouts are not included. The count resets when
 `flynn-host` restarts. Do not tail the aggregator's `GET /log`,

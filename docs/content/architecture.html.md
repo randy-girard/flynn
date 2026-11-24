@@ -495,7 +495,26 @@ failed load each host resends the lines it still has on disk, and the ring
 drops the duplicates. A stopping aggregator waits up to 10 seconds for the
 snapshots it is still sending, because a deploy stops the old jobs as soon
 as the new ones are up, and then stays up 3 seconds after the last one so
-the bytes still in its socket buffers arrive before its network goes away. Each host also keeps about 200MB of
+the bytes still in its socket buffers arrive before its network goes away.
+
+On each connection a host asks the aggregator for the newest line it has
+from that host (its cursor) and resends, from its log files, every line
+after it; an aggregator with no cursor for the host gets every file. Live
+lines go out at once while the files are resent: a resend line is written
+only when no live line is waiting, so `flynn log` keeps up during a resend
+(a live line used to wait, sometimes for minutes, until the resend reached
+its app). Because live lines move the aggregator's cursor past lines not yet
+resent, the host keeps what that sink still lacks for as long as the sink
+exists, and after a reconnect it goes on from where the resend stopped
+instead of from that cursor. A write that passes its 1 second deadline goes
+on under longer ones (2, 4, then 8 seconds) before the host gives up and
+reconnects 10 seconds later. Live lines that do not fit in the 256-line
+buffer of a slow sink are counted as drops and then resent from the log
+files. Lines can reach an aggregator out of order; the ring is kept in
+timestamp order and drops duplicates. The resend state is in memory only,
+so a host restarted in the middle of a resend does not resume it.
+
+Each host also keeps about 200MB of
 log files per app. A cluster that needs to keep logs adds a syslog sink
 with `flynn-host log-sink:add`. Hosted and self-hosted clusters use that
 same path.

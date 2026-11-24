@@ -449,7 +449,7 @@ Grep with `flynn log | grep '^metrics '`. Process start/stop/scale lines
 use the same system stream. A redeploy logs the new process starting (with its
 command) as well as the old process scaling down. They are emitted asynchronously
 by the host and are best-effort. A full syslog sink buffer drops the line
-instead of stalling the process. Stalled `flynn log -f` followers share one
+instead of stalling the process; the host resends it later from its log file. Stalled `flynn log -f` followers share one
 one-second budget, so several of them cannot add a second each. A saturated
 follower may miss lines while other clients and the on-disk log still receive
 them. `GET /host/status` field `log_drops` counts sink-buffer and on-disk

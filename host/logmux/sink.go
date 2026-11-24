@@ -485,8 +485,37 @@ func (s *LogAggregatorSink) Write(m message) error {
 	if !ct.AcceptSinkLog("", s.appID, appID, system) {
 		return nil
 	}
-	s.conn.SetWriteDeadline(time.Now().Add(time.Second))
-	_, err := s.conn.Write(rfc6587.Bytes(m.Message))
+	return writeFrame(s.conn, rfc6587.Bytes(m.Message), s.shutdownCh)
+}
+
+// sinkWriteTimeouts are the write deadlines for one line. After a timeout
+// the rest of the line is written under the next one, so a sink that stalls
+// for a few seconds (an aggregator busy taking a resend from every host)
+// does not cost a reconnect. The last timeout fails the write.
+var sinkWriteTimeouts = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+
+// writeFrame writes b to conn, going on after a write timeout with the next
+// deadline in sinkWriteTimeouts, until stop is closed.
+func writeFrame(conn net.Conn, b []byte, stop <-chan struct{}) error {
+	var err error
+	for _, d := range sinkWriteTimeouts {
+		conn.SetWriteDeadline(time.Now().Add(d))
+		var n int
+		n, err = conn.Write(b)
+		b = b[n:]
+		if err == nil {
+			return nil
+		}
+		var ne net.Error
+		if !errors.As(err, &ne) || !ne.Timeout() {
+			return err
+		}
+		select {
+		case <-stop:
+			return err
+		default:
+		}
+	}
 	return err
 }
 
@@ -732,16 +761,18 @@ func (s *SyslogSink) Write(m message) error {
 	case ct.SyslogFormatPrefixedNewline:
 		data = bytes.Join([][]byte{prefix, {' '}, msg.Bytes(), {'\n'}}, nil)
 	}
-	s.conn.SetWriteDeadline(time.Now().Add(time.Second))
-	_, err := s.conn.Write(data)
-	if err != nil {
+	if err := writeFrame(s.conn, data, s.shutdownCh); err != nil {
 		return err
 	}
 
-	// Cursor needs to be mutex protected to prevent race when persisting to disk
+	// Cursor needs to be mutex protected to prevent race when persisting to
+	// disk. It is the newest line written: a resend interleaves older lines
+	// with live ones.
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	s.cursor = m.HostCursor
+	if s.cursor == nil || m.HostCursor.After(*s.cursor) {
+		s.cursor = m.HostCursor
+	}
 	return nil
 }
 
