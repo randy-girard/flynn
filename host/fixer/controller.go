@@ -99,11 +99,14 @@ func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startSched
 			controllerFormation = formation
 		}
 		for typ := range release.Processes {
-			var want int
-			if app == "postgres" && typ == "postgres" && len(f.hosts) > 1 && formation.Processes[typ] < 3 {
-				want = 3
-			} else if formation.Processes[typ] < 1 {
-				want = 1
+			sireniaType := app == "postgres" && typ == "postgres"
+			min := 1
+			if sireniaType && len(f.hosts) > 1 {
+				min = 3
+			}
+			want, other := fixFormationWant(formation, f.appFormations(client, app, sireniaType), typ, sireniaType, min)
+			if other != "" {
+				f.l.Warn("not scaling up the current release: another release runs the sirenia engines; a deploy of the app moves them", "app", app, "process", typ, "release.id", release.ID, "engines.release.id", other)
 			}
 			if want > 0 {
 				f.l.Info("found broken formation", "app", app, "process", typ)
@@ -143,15 +146,14 @@ func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startSched
 				return fmt.Errorf("error getting %s formation: %s", app.Name, err)
 			}
 			for typ := range release.Processes {
-				want := 0
-				if sireniaDataProcessType(app.Name) == typ {
-					if len(f.hosts) > 1 && formation.Processes[typ] < 3 {
-						want = 3
-					} else if formation.Processes[typ] < 1 {
-						want = 1
-					}
-				} else if formation.Processes[typ] < 1 {
-					want = 1
+				sireniaType := sireniaDataProcessType(app.Name) == typ
+				min := 1
+				if sireniaType && len(f.hosts) > 1 {
+					min = 3
+				}
+				want, other := fixFormationWant(formation, f.appFormations(client, app.ID, sireniaType), typ, sireniaType, min)
+				if other != "" {
+					f.l.Warn("not scaling up the current release: another release runs the sirenia engines; a deploy of the app moves them", "app", app.Name, "process", typ, "release.id", release.ID, "engines.release.id", other)
 				}
 				if want > 0 {
 					f.l.Info("found broken formation", "app", app.Name, "process", typ)
@@ -375,4 +377,38 @@ func (f *ClusterFixer) KillSchedulers() error {
 		}
 	}
 	return nil
+}
+
+// fixFormationWant returns the count to write for typ on the current
+// release's formation, or 0 to leave it. A sirenia data type below min is
+// not broken when another release's formation runs its engines (EDGE-68:
+// the engines ran from an older release while the current release asked
+// for none, and writing min on the current release doubled them). other is
+// that release.
+func fixFormationWant(current *ct.Formation, formations []*ct.Formation, typ string, sireniaType bool, min int) (want int, other string) {
+	if current.Processes[typ] >= min {
+		return 0, ""
+	}
+	if sireniaType {
+		for _, f := range formations {
+			if f != nil && f.ReleaseID != current.ReleaseID && f.Processes[typ] > 0 {
+				return 0, f.ReleaseID
+			}
+		}
+	}
+	return min, ""
+}
+
+// appFormations lists the app's formations for a sirenia type. On error it
+// returns nil, so the fixer falls back to the current release alone.
+func (f *ClusterFixer) appFormations(client controller.Client, app string, sireniaType bool) []*ct.Formation {
+	if !sireniaType {
+		return nil
+	}
+	formations, err := client.FormationList(app)
+	if err != nil {
+		f.l.Error("error listing formations", "app", app, "err", err)
+		return nil
+	}
+	return formations
 }
