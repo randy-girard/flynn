@@ -188,3 +188,94 @@ func TestJobListActiveStopsOnShortPage(t *testing.T) {
 		t.Fatalf("jobs=%v calls=%d cursor=%s", jobs, calls, cursor)
 	}
 }
+
+// EDGE-30: a controller from before list paging ignores count and the cursor
+// and returns the whole list every time. With exactly one page of rows the
+// second request gets the same rows back; that is the complete list, not a
+// repeat. Hosts (firewall sync) update before the controller, and a router
+// could meet such a controller if an update stops between the two.
+func oldControllerServer(t *testing.T, path string, body func() interface{}) (*httptest.Server, *int) {
+	t.Helper()
+	calls := new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != path {
+			http.NotFound(w, r)
+			return
+		}
+		*calls++
+		_ = json.NewEncoder(w).Encode(body())
+	}))
+	t.Cleanup(srv.Close)
+	return srv, calls
+}
+
+func TestRouteListOldControllerWithExactlyOnePage(t *testing.T) {
+	stamp := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	srv, calls := oldControllerServer(t, "/routes", func() interface{} {
+		page := make([]*router.Route, 1000)
+		for i := range page {
+			page[i] = &router.Route{ID: fmt.Sprintf("r%04d", i), Type: "http", CreatedAt: stamp.Add(-time.Duration(i) * time.Second)}
+		}
+		return page
+	})
+	c, err := NewClient(srv.URL, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := c.RouteList()
+	if err != nil {
+		t.Fatalf("RouteList against a controller without paging: %v", err)
+	}
+	if len(routes) != 1000 || routes[0].ID != "r0000" || routes[999].ID != "r0999" || *calls != 2 {
+		t.Fatalf("len=%d calls=%d", len(routes), *calls)
+	}
+}
+
+func TestJobListActiveOldControllerWithExactlyOnePage(t *testing.T) {
+	stamp := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	srv, calls := oldControllerServer(t, "/active-jobs", func() interface{} {
+		page := make([]*ct.Job, 1000)
+		for i := range page {
+			ts := stamp.Add(-time.Duration(i) * time.Second)
+			page[i] = &ct.Job{UUID: fmt.Sprintf("j%04d", i), State: ct.JobStateUp, CreatedAt: &ts}
+		}
+		return page
+	})
+	c, err := NewClient(srv.URL, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := c.JobListActive()
+	if err != nil {
+		t.Fatalf("JobListActive against a controller without paging: %v", err)
+	}
+	if len(jobs) != 1000 || *calls != 2 {
+		t.Fatalf("len=%d calls=%d", len(jobs), *calls)
+	}
+}
+
+// A later page that repeats only part of the first is still an error.
+func TestRouteListErrorsWhenSecondPageRepeatsPartOfFirst(t *testing.T) {
+	stamp := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		n := 1000
+		if calls > 1 {
+			n = 10
+		}
+		page := make([]*router.Route, n)
+		for i := range page {
+			page[i] = &router.Route{ID: fmt.Sprintf("r%04d", i), Type: "http", CreatedAt: stamp}
+		}
+		_ = json.NewEncoder(w).Encode(page)
+	}))
+	defer srv.Close()
+	c, err := NewClient(srv.URL, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RouteList(); err == nil || !strings.Contains(err.Error(), "repeated") {
+		t.Fatalf("err = %v, want repeated", err)
+	}
+}

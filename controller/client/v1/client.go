@@ -536,6 +536,13 @@ func (c *Client) RouteList() ([]*router.Route, error) {
 			}
 			return out, nil
 		}
+		if before != "" && sameIDs(len(out), len(page), func(i int) (string, string) {
+			return routeListID(out[i]), routeListID(page[i])
+		}) {
+			// A controller from before paging ignores count and the cursor and
+			// sent the whole list again: the first page was all of it.
+			return out, nil
+		}
 		for _, route := range page {
 			if route == nil || route.ID == "" {
 				continue
@@ -1186,6 +1193,12 @@ func (c *Client) JobListActive() ([]*ct.Job, error) {
 			}
 			return out, nil
 		}
+		if before != "" && sameIDs(len(out), len(page), func(i int) (string, string) {
+			return jobListID(out[i]), jobListID(page[i])
+		}) {
+			// See RouteList: an unpaged controller sent the same full list.
+			return out, nil
+		}
 		for _, job := range page {
 			if job == nil || job.UUID == "" {
 				continue
@@ -1209,6 +1222,36 @@ func (c *Client) JobListActive() ([]*ct.Job, error) {
 		}
 		before, beforeID = nextBefore, last.UUID
 	}
+}
+
+// sameIDs reports whether a later page holds exactly the rows already read,
+// in the same order: an unpaged controller answering every request with the
+// whole list, which then had exactly one page of rows.
+func sameIDs(have, page int, ids func(i int) (string, string)) bool {
+	if have != page || page == 0 {
+		return false
+	}
+	for i := 0; i < page; i++ {
+		a, b := ids(i)
+		if a == "" || a != b {
+			return false
+		}
+	}
+	return true
+}
+
+func routeListID(r *router.Route) string {
+	if r == nil || r.ID == "" {
+		return ""
+	}
+	return r.Type + "/" + r.ID
+}
+
+func jobListID(j *ct.Job) string {
+	if j == nil {
+		return ""
+	}
+	return j.UUID
 }
 
 // controllerListPageSize is the controller maximum. A short page is the end.
