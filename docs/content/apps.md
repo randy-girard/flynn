@@ -286,6 +286,26 @@ URL must be one of:
   the push fails with `ssh submodule URL for app <app> requires ...`, naming
   what is missing.
 
+Each gitlink in the pushed commit is matched to the `.gitmodules` section
+whose `path` is that gitlink's path, and fetched from that same section's
+`url`. The section name does not have to equal the path, as with
+`git submodule add --name libs/foo <url> vendor/foo`, which writes
+`[submodule "libs/foo"]` with `path = vendor/foo`. Only `path` and `url` are
+read; `update`, `branch` and other keys are ignored and never run. The push
+fails, before any submodule URL is checked or contacted, when:
+
+- a gitlink has no section with its path (`submodule <path>: no .gitmodules
+  section has path = <path>`), or that section has no `url`;
+- two sections have the same `path`, or one section sets `path` or `url`
+  more than once;
+- a `path` is absolute, has an empty, `.` or `..` component, has a `.git`
+  component (in any case), or contains control characters;
+- a section name contains control characters or a `..` component.
+
+Every submodule URL is then checked before the first submodule is fetched.
+Relative URLs (`../lib.git`) are refused, since gitreceive has no superproject
+remote to resolve them against; use an absolute `https://` URL.
+
 `file://`, local paths, `http://`, `git://`, remote-helper URLs (`ext::`),
 URLs that start with `-`, `*.discoverd`, single-label names, and private,
 loopback, link-local, CGNAT (including the Flynn overlay) and NAT64 addresses

@@ -147,6 +147,9 @@ func checkSubmoduleSCPURL(raw string, sshOK bool, lookup func(string) ([]netip.A
 	colon := strings.Index(raw, ":")
 	slash := strings.Index(raw, "/")
 	if colon < 0 || (slash >= 0 && slash < colon) {
+		if strings.HasPrefix(raw, "./") || strings.HasPrefix(raw, "../") {
+			return submoduleSource{}, errors.New("relative submodule URLs are not supported (use an absolute https URL)")
+		}
 		return submoduleSource{}, errors.New("local paths are not allowed")
 	}
 	if !sshOK {

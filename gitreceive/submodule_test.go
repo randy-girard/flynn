@@ -14,12 +14,16 @@ import (
 )
 
 // TestMain lets the hook tests run this test binary as /bin/gitreceived, so
-// the real -check-submodule-url code decides each URL.
+// the real -check-submodule-url and -list-submodules code runs. Every hook
+// run lists submodules (EDGE-27), so GITRECEIVED_BIN points every hook in
+// these tests at this binary.
 func TestMain(m *testing.M) {
 	if os.Getenv("GITRECEIVE_TEST_RUN_MAIN") == "1" {
 		main()
 		os.Exit(0)
 	}
+	os.Setenv("GITRECEIVED_BIN", os.Args[0])
+	os.Setenv("GITRECEIVE_TEST_RUN_MAIN", "1")
 	os.Exit(m.Run())
 }
 
@@ -183,7 +187,7 @@ func runArchiveHook(t *testing.T, parent, rev string, extraEnv []string, apps ..
 	t.Helper()
 	tarPath := filepath.Join(t.TempDir(), "out.tar")
 	args := append([]string{"bash", rev, tarPath}, apps...)
-	hook := exec.Command("bash", append([]string{"-c", archiveTreeFunc + `
+	hook := exec.Command("bash", append([]string{"-c", "set -eo pipefail\n" + archiveTreeFunc + `
 rev="$1"; out="$2"; shift 2
 git-archive-all "$rev" "$@" > "$out"
 `}, args...)...)

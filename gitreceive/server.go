@@ -51,6 +51,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == submoduleListFlag {
+		if err := runListSubmodules(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-ensure-preview" {
 		if err := runEnsurePreview(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -643,6 +650,9 @@ func (w writeFlusher) Write(p []byte) (int, error) {
 // opt-in. Submodule URLs are tenant input (EDGE-02): each one goes through
 // `gitreceived -check-submodule-url` first, and only the commit the gitlink
 // records is fetched, with depth 1, a time limit and a file size limit.
+// `gitreceived -list-submodules` maps each gitlink to the .gitmodules section
+// whose path it is (the section name may differ, EDGE-27) and validates the
+// paths; every URL is checked before the first fetch.
 const archiveTreeFunc = `git-archive-all() {
 	rev="$1"
 	shift
@@ -657,17 +667,19 @@ const archiveTreeFunc = `git-archive-all() {
 			-u GIT_PROXY_COMMAND -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_COUNT \
 			"$@"
 	}
-	submodule_fetch() {
-		local sha="$1" url="$2" dest="$3"
-		shift 3
+	# submodule_plan URL APP... checks URL and, for ssh, that the client,
+	# key and host key are there, and prints the checker's three lines.
+	# Nothing is contacted.
+	submodule_plan() {
+		local url="$1"
+		shift
 		local plan proto fetch_url pin
 		plan="$("${SUBMODULE_URL_CHECK:-/bin/gitreceived}" -check-submodule-url "$url" "$@")" || return 1
-		{ read -r proto; read -r fetch_url; read -r pin; } <<< "$plan"
+		{ read -r proto; read -r fetch_url; read -r pin || true; } <<< "$plan"
 		[ -n "$proto" ] && [ -n "$fetch_url" ] || return 1
-		local -a cfg=(-c http.followRedirects=false -c credential.helper= -c core.askPass=)
 		local known="$HOME/.ssh/known_hosts"
 		case "$proto" in
-		https) [ -n "$pin" ] || return 1; cfg+=(-c "http.curloptResolve=$pin") ;;
+		https) [ -n "$pin" ] || return 1 ;;
 		ssh)
 			# EDGE-26: fail closed, naming what is missing, before ssh runs.
 			# Host keys are only ever checked strictly against
@@ -689,6 +701,17 @@ const archiveTreeFunc = `git-archive-all() {
 			fi
 			;;
 		esac
+		printf '%s\n%s\n%s\n' "$proto" "$fetch_url" "$pin"
+	}
+	# submodule_fetch PLAN SHA DEST fetches SHA as submodule_plan decided.
+	submodule_fetch() {
+		local plan="$1" sha="$2" dest="$3"
+		local proto fetch_url pin
+		{ read -r proto; read -r fetch_url; read -r pin || true; } <<< "$plan"
+		[ -n "$proto" ] && [ -n "$fetch_url" ] || return 1
+		local -a cfg=(-c http.followRedirects=false -c credential.helper= -c core.askPass=)
+		local known="$HOME/.ssh/known_hosts"
+		[ "$proto" != https ] || cfg+=(-c "http.curloptResolve=$pin")
 		local -a limit=(timeout -k 10 "${SUBMODULE_FETCH_TIMEOUT:-300}")
 		(
 			ulimit -f "${SUBMODULE_MAX_FILE_KB:-1048576}"
@@ -718,24 +741,42 @@ const archiveTreeFunc = `git-archive-all() {
 		)
 	}
 	git archive --format=tar "$rev" | tar -x -C "$work"
-	if [ -f "$work/.gitmodules" ]; then
-		links="$(mktemp)"
-		git ls-tree -r "$rev" > "$links"
-		while read -r mode type sha path; do
-			[ "$mode" = "160000" ] || continue
-			url="$(git config -f "$work/.gitmodules" --get "submodule.${path}.url" || true)"
-			[ -n "$url" ] || continue
-			# receive-pack exports GIT_DIR and GIT_QUARANTINE_PATH. Git 2.45+
-			# refuses ref updates in that environment, so the fetch runs
-			# outside it (git_outside); otherwise slugbuilder gets an empty stream.
-			if ! submodule_fetch "$sha" "$url" "$work/$path" "$@" < /dev/null; then
-				echo "submodule ${path}: cannot fetch ${url} (only https to public hosts, or ssh for apps in SSH_CLIENT_KEY_APPS)" >&2
-				rm -f "$links"
-				return 1
-			fi
-		done < "$links"
-		rm -f "$links"
+	local unpacked="${PIPESTATUS[0]}${PIPESTATUS[1]}"
+	if [ "$unpacked" != 00 ]; then
+		echo "cannot unpack ${rev}" >&2
+		return 1
 	fi
+	# One parse of .gitmodules, keyed by the gitlinks' paths (EDGE-27).
+	local mods sha path url plan i
+	mods="$(mktemp)"
+	if ! "${GITRECEIVED_BIN:-/bin/gitreceived}" -list-submodules "$rev" > "$mods"; then
+		rm -f "$mods"
+		return 1
+	fi
+	local -a m_sha=() m_path=() m_url=() m_plan=()
+	while IFS= read -r -d '' sha && IFS= read -r -d '' path && IFS= read -r -d '' url; do
+		m_sha+=("$sha")
+		m_path+=("$path")
+		m_url+=("$url")
+	done < "$mods"
+	rm -f "$mods"
+	# Every URL is checked before any submodule is fetched.
+	for i in "${!m_sha[@]}"; do
+		if ! plan="$(submodule_plan "${m_url[$i]}" "$@" < /dev/null)"; then
+			echo "submodule ${m_path[$i]}: cannot fetch ${m_url[$i]} (only https to public hosts, or ssh for apps in SSH_CLIENT_KEY_APPS)" >&2
+			return 1
+		fi
+		m_plan+=("$plan")
+	done
+	for i in "${!m_sha[@]}"; do
+		# receive-pack exports GIT_DIR and GIT_QUARANTINE_PATH. Git 2.45+
+		# refuses ref updates in that environment, so the fetch runs
+		# outside it (git_outside); otherwise slugbuilder gets an empty stream.
+		if ! submodule_fetch "${m_plan[$i]}" "${m_sha[$i]}" "$work/${m_path[$i]}" < /dev/null; then
+			echo "submodule ${m_path[$i]}: cannot fetch ${m_url[$i]}" >&2
+			return 1
+		fi
+	done
 	tar --create --exclude-vcs -C "$work" .
 }
 `
