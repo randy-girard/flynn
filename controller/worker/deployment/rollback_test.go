@@ -466,19 +466,21 @@ func watchCapacity(f *fakeFormationCluster) map[string]int {
 }
 
 // EDGE-72, the dev-cluster incident: the app's current release (e0165d85)
-// has web=0 while an older release (0a8a5e46) runs the app with web=3, and
-// 0a8a5e46 was once the target of a failed deployment. A successful deploy
-// copies the current formation (web=0) to the new release. The repair then
-// zeroed 0a8a5e46, so the app ran nothing at all (for the system Postgres:
-// every engine stopped).
+// has web=0 worker=1 (system Postgres: postgres:0 web:2) while an older
+// release (0a8a5e46) runs web=3, and 0a8a5e46 was once the target of a
+// failed deployment. A successful deploy copies the current formation to the
+// new release (a deploy whose counts are all zero finishes in the controller
+// and never reaches the worker, so the other type matters). The repair then
+// zeroed 0a8a5e46, so no web job ran at all (for the system Postgres: every
+// engine stopped).
 func TestZeroFailedFormationsKeepsTheFormationThatRunsTheApp(t *testing.T) {
 	f := newFakeFormationCluster("devnode1", "devnode2", "devnode3")
 	webReleases(f, "0a8a5e46", "e0165d85", "12384ef4")
 	f.formations["0a8a5e46"] = &ct.Formation{AppID: "app", ReleaseID: "0a8a5e46", Processes: map[string]int{"web": 3}}
-	f.formations["e0165d85"] = &ct.Formation{AppID: "app", ReleaseID: "e0165d85", Processes: map[string]int{"web": 0}}
+	f.formations["e0165d85"] = &ct.Formation{AppID: "app", ReleaseID: "e0165d85", Processes: map[string]int{"web": 0, "worker": 1}}
 	f.appRelease = "e0165d85"
 	dep := &ct.Deployment{ID: "be6f21f3", AppID: "app", OldReleaseID: "e0165d85", NewReleaseID: "12384ef4",
-		Strategy: "one-by-one", Processes: map[string]int{"web": 0}, Status: "running"}
+		Strategy: "one-by-one", Processes: map[string]int{"web": 0, "worker": 1}, Status: "running"}
 	f.deployments = []*ct.Deployment{
 		dep,
 		{ID: "d-failed", AppID: "app", OldReleaseID: "older", NewReleaseID: "0a8a5e46", Status: "failed"},
@@ -493,6 +495,9 @@ func TestZeroFailedFormationsKeepsTheFormationThatRunsTheApp(t *testing.T) {
 	}
 	if low["web"] < 3 {
 		t.Fatalf("running web jobs dropped to %d during the deploy, want never below 3", low["web"])
+	}
+	if n := f.formations["12384ef4"].Processes["worker"]; n != 1 {
+		t.Fatalf("new release worker=%d, want 1 (the deploy must have run)", n)
 	}
 }
 
