@@ -876,8 +876,10 @@ func (r *FileRepo) DeleteIdleLayer(names []string, grace time.Duration) (bool, i
 		return false, 0, err
 	}
 	var freed int64
+	var marked int
 	external := make(map[string][]backend.FileInfo)
 	for rows.Next() {
+		marked++
 		var info backend.FileInfo
 		var backendName string
 		var externalID *string
@@ -900,6 +902,11 @@ func (r *FileRepo) DeleteIdleLayer(names []string, grace time.Duration) (bool, i
 	if err := rows.Err(); err != nil {
 		tx.Rollback()
 		return false, 0, err
+	}
+	if marked == 0 {
+		// another sweep (every server instance runs one) got it first
+		tx.Rollback()
+		return false, 0, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return false, 0, err

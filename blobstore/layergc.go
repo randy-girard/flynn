@@ -144,7 +144,8 @@ func (g *layerGC) run() (layerGCResult, error) {
 		}
 		if !deleted {
 			if err == nil {
-				// stored again or uploading since the listing
+				// stored again, uploading, or deleted by another
+				// instance's sweep since the listing
 				res.Young++
 			}
 			continue

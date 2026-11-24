@@ -337,3 +337,22 @@ func TestAppLayerCountsTowardQuota(t *testing.T) {
 		t.Fatalf("shared layer = %d %s", code, msg)
 	}
 }
+
+// Every server instance sweeps: a layer another instance deleted since this
+// one listed it is not reported as deleted again.
+func TestDeleteIdleLayerReportsOnlyWhatItDeleted(t *testing.T) {
+	db, r := layerGCDB(t)
+	names := []string{"/tarreceive/apps/app-1/layers/twice.squashfs", "/tarreceive/apps/app-1/layers/twice.json"}
+	for _, name := range names {
+		putObject(t, r, name)
+		ageObject(t, db, name, 48*time.Hour)
+	}
+	deleted, freed, err := r.DeleteIdleLayer(names, time.Hour)
+	if err != nil || !deleted || freed <= 0 {
+		t.Fatalf("first delete = %v %d %v", deleted, freed, err)
+	}
+	deleted, freed, err = r.DeleteIdleLayer(names, time.Hour)
+	if err != nil || deleted || freed != 0 {
+		t.Fatalf("second delete = %v %d %v, want nothing deleted", deleted, freed, err)
+	}
+}
