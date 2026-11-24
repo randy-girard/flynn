@@ -1031,14 +1031,29 @@ and self-hosted clusters use the same path.
 
 To export a single app, run `flynn -a APPNAME apps:export --file app.tar`. A file
 named `app.tar` will be created with the app configuration and image, along with
-a copy of all data stored in associated databases. The app export can be
-restored to the same cluster under a different name, or a different Flynn
-cluster. The export holds the release env (app secrets) and the Postgres and
-MySQL dumps, so `--file` writes it owner-only (mode 0600, tar entries 0600)
+the data of the app's databases that the export can dump (see below). The app
+export can be restored to the same cluster under a different name, or a
+different Flynn cluster. The export holds the release env (app secrets) and the
+database dumps, so `--file` writes it owner-only (mode 0600, tar entries 0600)
 the same way as a cluster backup: to a temp file beside the destination,
 synced, and renamed into place. A failed export, including a full disk on the
 final flush, exits non-zero and never replaces an earlier export. Without
 `--file` the tar goes to stdout and its mode is whatever the redirect creates.
+
+The export never leaves out a database silently. Each resource attached to the
+app (`flynn addons`) is listed in the archive's `resources.json` and is either
+dumped into the archive or makes the export fail:
+
+| Resource | In the export |
+| --- | --- |
+| Built-in Postgres or MySQL appliance (`FLYNN_POSTGRES` / `FLYNN_MYSQL` on the app) | `postgres.dump` / `mysql.dump`, as before |
+| Plugin Redis (`addons:create redis`) | `resources/<name>.dump`, taken with the plugin's `redis:dump` |
+| Plugin Postgres, MySQL, MongoDB, ClickHouse, Kafka | Not included. The export fails, names the resource and its provider, and prints the plugin command that backs it up (`flynn -a APPNAME pg:dump <name>` stores the dump in the cluster blobstore; `flynn -a APPNAME mysql:dump <name> --file <file>` writes a file) |
+
+To export the app anyway, back those databases up with the printed commands
+and rerun with `--skip-databases`. The export then prints a warning for each
+resource it leaves out and lists them under `databases-skipped` in
+`resources.json`.
 
 Slug and image layers are copied by a one-off on the blobstore app, using the
 blobstore release. That job is a system job, so it can resolve
@@ -1049,10 +1064,25 @@ blobstore image is busybox plus `flynn-blobstore`; it does not contain curl.
 
 To import an app, run `flynn apps:import --file app.tar`. This will create a new app
 on the cluster, import the configuration, create databases, and import the data
-from the exported app. Layer uploads use the same blobstore-app one-off as export. Layer uploads use the same blobstore-app one-off as export. If you'd like to provide a new name for the app, the
+from the exported app. Layer uploads use the same blobstore-app one-off as export. If you'd like to provide a new name for the app, the
 `--name` flag may be specified. By default a new route is created based on the
 app name and the cluster domain. To import the old routes in addition to the new
 route, add the `--routes` flag.
+
+Each database dump in the export is restored into a new resource provisioned
+for the new app (a plugin Redis dump through the plugin's `redis:restore`,
+retried for up to five minutes while the new instance starts). The new app
+never gets the source app's database connection env: `DATABASE_URL`,
+`REDIS_URL`, `FLYNN_POSTGRES*`, the `FLYNN_<ENGINE>_<COLOR>_URL` attachment
+variables and the other keys `resources.json` lists for each resource are
+dropped with a warning, and the new resources add their own. An archive made
+before `resources.json` existed is handled the same way by dropping every
+database connection variable (database URL schemes, `PG*`, `MYSQL_*`,
+`FLYNN_POSTGRES*` and the other add-on keys). A resource that was left out with
+`--skip-databases` has no copy in the new app; create one with
+`flynn addons:create` and restore your own backup into it. Pass
+`--keep-database-env` only when the copy should share the source app's
+databases: the env is then copied as is and plugin dumps are not restored.
 
 ## SSH Client Key
 

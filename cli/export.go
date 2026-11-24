@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -33,11 +34,20 @@ usage: flynn apps:export [options]
 Export application configuration and data.
 
 The application's metadata, deploy strategy, release configuration, slug,
-formation, and Postgres database will be exported to a tar file.
+formation, and the data of its databases will be exported to a tar file.
+
+Every resource attached to the app must be in the export. A built-in Postgres
+or MySQL (FLYNN_POSTGRES / FLYNN_MYSQL) is dumped as before, and a plugin
+Redis is dumped with the plugin's redis:dump. Other plugin databases
+(Postgres, MySQL, MongoDB, ClickHouse, Kafka) cannot be put in the file: the
+export fails, names each one, and prints the plugin command that backs it up.
+--skip-databases exports without them instead, prints a warning, and lists
+them as databases-skipped in the archive's resources.json.
 
 Options:
-	-f, --file=<file>  name of file to export to (defaults to stdout)
-	-q, --quiet        don't print progress
+	-f, --file=<file>   name of file to export to (defaults to stdout)
+	-q, --quiet         don't print progress
+	--skip-databases    export without the data of resources the export cannot dump
 `)
 
 	register("apps:import", runImport, `
@@ -46,15 +56,21 @@ usage: flynn apps:import [options]
 Create a new application using exported configuration and data.
 
 The application will be created using the metadata, deploy strategy, release
-configuration, slug, formation, and Postgres database from the provided export
-file.
+configuration, slug, formation, and database data from the provided export
+file. Each database in the export is restored into a new resource for the new
+app. The source app's database connection env (DATABASE_URL, REDIS_URL,
+FLYNN_POSTGRES*, FLYNN_REDIS_*_URL and the other attachment variables) is not
+copied, so the new app never uses the source app's databases.
+--keep-database-env copies it anyway: the new app then shares those
+databases, and plugin dumps in the export are not restored.
 
 Options:
-	-f, --file=<file>  name of file to import from (defaults to stdin)
-	-n, --name=<name>  name of app to create (defaults to exported app name)
-	-q, --quiet        don't print progress
-	-r, --routes       import routes
-	-j, --jobs=<jobs>  number of pg_restore jobs to use [default: 4]
+	-f, --file=<file>     name of file to import from (defaults to stdin)
+	-n, --name=<name>     name of app to create (defaults to exported app name)
+	-q, --quiet           don't print progress
+	-r, --routes          import routes
+	-j, --jobs=<jobs>     number of pg_restore jobs to use [default: 4]
+	--keep-database-env   copy the source app's database connection env
 `)
 }
 
@@ -71,25 +87,27 @@ func runExport(args *docopt.Args, client controller.Client) error {
 		bar = b
 	}
 
+	opts := exportOptions{SkipDatabases: args.Bool["--skip-databases"]}
+
 	// The export holds the release env and database dumps, so a file is
 	// written owner-only and only replaces path once it is complete.
 	if filename := args.String["--file"]; filename != "" {
 		return backup.WriteFileAtomic(filename, func(w io.Writer) error {
-			return exportApp(client, w, bar)
+			return exportApp(client, w, bar, opts)
 		})
 	}
-	return exportApp(client, os.Stdout, bar)
+	return exportApp(client, os.Stdout, bar, opts)
 }
 
 // exportApp writes the app export tar to dest. The tar trailer is part of the
 // export, so an error closing the tar writer is returned.
-func exportApp(client controller.Client, dest io.Writer, bar backup.ProgressBar) error {
+func exportApp(client controller.Client, dest io.Writer, bar backup.ProgressBar, opts exportOptions) error {
 	app, err := client.GetApp(mustApp())
 	if err != nil {
 		return fmt.Errorf("error getting app: %s", err)
 	}
 	tw := backup.NewTarWriter(app.Name, dest, bar)
-	if err := writeExportEntries(client, tw, app, bar); err != nil {
+	if err := writeExportEntries(client, tw, app, bar, opts); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -98,31 +116,43 @@ func exportApp(client controller.Client, dest io.Writer, bar backup.ProgressBar)
 	return nil
 }
 
-func writeExportEntries(client controller.Client, tw *backup.TarWriter, app *ct.App, bar backup.ProgressBar) error {
-	if err := tw.WriteJSON("app.json", app); err != nil {
-		return fmt.Errorf("error exporting app: %s", err)
-	}
-
+func writeExportEntries(client controller.Client, tw *backup.TarWriter, app *ct.App, bar backup.ProgressBar, opts exportOptions) error {
 	routes, err := client.AppRouteList(mustApp())
 	if err != nil {
 		return fmt.Errorf("error getting routes: %s", err)
 	}
+	release, err := client.GetAppRelease(mustApp())
+	if err != nil && err != controller.ErrNotFound {
+		return fmt.Errorf("error retrieving app: %s", err)
+	}
+	// Decide what happens to every attached resource before writing, so an
+	// export that would leave out a database fails before it starts.
+	var plan *exportPlan
+	if release != nil {
+		if plan, err = planExport(client, mustApp(), release, opts); err != nil {
+			return err
+		}
+	}
+
+	if err := tw.WriteJSON("app.json", app); err != nil {
+		return fmt.Errorf("error exporting app: %s", err)
+	}
 	if err := tw.WriteJSON("routes.json", routes); err != nil {
 		return fmt.Errorf("error exporting routes: %s", err)
 	}
-
-	release, err := client.GetAppRelease(mustApp())
-	if err == controller.ErrNotFound {
+	if release == nil {
 		// if the app has no release then there is nothing more to export
 		return nil
-	} else if err != nil {
-		return fmt.Errorf("error retrieving app: %s", err)
-	} else if err == nil {
-		// Do not allow the exporting of passwords.
-		delete(release.Env, "REDIS_PASSWORD")
+	}
 
-		if err := tw.WriteJSON("release.json", release); err != nil {
-			return fmt.Errorf("error exporting release: %s", err)
+	// Do not allow the exporting of passwords.
+	delete(release.Env, "REDIS_PASSWORD")
+	if err := tw.WriteJSON("release.json", release); err != nil {
+		return fmt.Errorf("error exporting release: %s", err)
+	}
+	if len(plan.manifest.Resources) > 0 {
+		if err := tw.WriteJSON(exportManifestEntry, &plan.manifest); err != nil {
+			return fmt.Errorf("error exporting resources: %s", err)
 		}
 	}
 
@@ -284,9 +314,9 @@ func writeExportEntries(client controller.Client, tw *backup.TarWriter, app *ct.
 		}
 	}
 
-	if pgConfig, err := getAppPgRunConfig(client); err == nil {
+	if pgConfig := plan.legacyPG; pgConfig != nil {
 		configPgDump(pgConfig)
-		if err := tw.WriteCommandOutput(client, "postgres.dump", pgConfig.App, &ct.NewJob{
+		if err := tw.WriteCommandOutput(client, exportPostgresEntry, pgConfig.App, &ct.NewJob{
 			ReleaseID:  pgConfig.Release,
 			Args:       pgConfig.Args,
 			Env:        pgConfig.Env,
@@ -296,15 +326,21 @@ func writeExportEntries(client controller.Client, tw *backup.TarWriter, app *ct.
 		}
 	}
 
-	if mysqlConfig, err := getAppMysqlRunConfig(client); err == nil {
+	if mysqlConfig := plan.legacyMySQL; mysqlConfig != nil {
 		configMysqlDump(mysqlConfig)
-		if err := tw.WriteCommandOutput(client, "mysql.dump", mysqlConfig.App, &ct.NewJob{
+		if err := tw.WriteCommandOutput(client, exportMysqlEntry, mysqlConfig.App, &ct.NewJob{
 			ReleaseID:  mysqlConfig.Release,
 			Args:       mysqlConfig.Args,
 			Env:        mysqlConfig.Env,
 			DisableLog: mysqlConfig.DisableLog,
 		}); err != nil {
 			return fmt.Errorf("error creating mysql dump: %s", err)
+		}
+	}
+
+	for _, d := range plan.pluginDumps {
+		if err := writePluginDump(client, tw, d, bar); err != nil {
+			return err
 		}
 	}
 
@@ -340,9 +376,11 @@ func runImport(args *docopt.Args, client controller.Client) error {
 			}
 			archive io.Reader
 		}
-		pgDump     io.Reader
-		mysqlDump  io.Reader
-		uploadSize int64
+		pgDump        io.Reader
+		mysqlDump     io.Reader
+		uploadSize    int64
+		manifest      *exportResourceManifest
+		resourceDumps = map[string]*os.File{}
 	)
 	numResources := 0
 	numRoutes := 1
@@ -354,6 +392,26 @@ func runImport(args *docopt.Args, client controller.Client) error {
 			break
 		} else if err != nil {
 			return fmt.Errorf("error reading export tar: %s", err)
+		}
+
+		// Entries are <app>/<name>; plugin resource dumps sit in
+		// <app>/resources/.
+		rel := header.Name
+		if i := strings.Index(rel, "/"); i >= 0 {
+			rel = rel[i+1:]
+		}
+		if strings.HasPrefix(rel, exportResourceDir) {
+			f, err := ioutil.TempFile("", "flynn-import-resource-")
+			if err != nil {
+				return fmt.Errorf("error creating resource dump tempfile: %s", err)
+			}
+			defer f.Close()
+			defer os.Remove(f.Name())
+			if _, err := io.Copy(f, tr); err != nil {
+				return fmt.Errorf("error reading %s: %s", header.Name, err)
+			}
+			resourceDumps[rel] = f
+			continue
 		}
 
 		filename := path.Base(header.Name)
@@ -389,6 +447,11 @@ func runImport(args *docopt.Args, client controller.Client) error {
 			}
 			release.ID = ""
 			release.ArtifactIDs = nil
+		case exportManifestEntry:
+			manifest = &exportResourceManifest{}
+			if err := json.NewDecoder(tr).Decode(manifest); err != nil {
+				return fmt.Errorf("error decoding resources: %s", err)
+			}
 		case "artifacts.json":
 			if err := json.NewDecoder(tr).Decode(&artifacts); err != nil {
 				return fmt.Errorf("error decoding artifacts: %s", err)
@@ -482,6 +545,8 @@ func runImport(args *docopt.Args, client controller.Client) error {
 	if name := args.String["--name"]; name != "" {
 		app.Name = name
 	}
+	// The attachment records name the source app's resources.
+	delete(app.Meta, metaAddonAttachments)
 	if err := client.CreateApp(app); err != nil {
 		return fmt.Errorf("error creating app: %s", err)
 	}
@@ -495,6 +560,36 @@ func runImport(args *docopt.Args, client controller.Client) error {
 		bar.Output = os.Stderr
 		bar.Start()
 		defer bar.Finish()
+	}
+
+	// The archive's release env still points at the source app's
+	// databases. A copy that kept it would read and write them, so those
+	// keys are dropped. The data the archive holds is restored below into
+	// new resources, which add their own env.
+	keepDatabaseEnv := args.Bool["--keep-database-env"]
+	legacyRedis := release != nil && release.Env["FLYNN_REDIS"] != ""
+	if release != nil && release.Env != nil {
+		if keepDatabaseEnv {
+			var kept []string
+			for k, v := range release.Env {
+				if databaseEnvKey(k, v) {
+					kept = append(kept, k)
+				}
+			}
+			sort.Strings(kept)
+			if len(kept) > 0 {
+				exportLogf("WARNING: --keep-database-env: %s keeps the source app's database env (%s) and shares %s's databases.", app.Name, strings.Join(kept, ", "), oldName)
+			}
+		} else if dropped := importDropDatabaseEnv(release.Env, manifest); len(dropped) > 0 {
+			exportLogf("WARNING: not copying %s's database connection env to %s: %s. The copy does not use the source app's databases; pass --keep-database-env to share them.", oldName, app.Name, strings.Join(dropped, ", "))
+		}
+	}
+	if manifest != nil {
+		for _, r := range manifest.Resources {
+			if r.Skipped {
+				exportLogf("WARNING: the export does not include the data of %s (provider %s, left out with --skip-databases); %s has no copy of it.", r.Name, r.Provider, app.Name)
+			}
+		}
 	}
 
 	if pgDump != nil && release != nil {
@@ -559,7 +654,46 @@ func runImport(args *docopt.Args, client controller.Client) error {
 		}
 	}
 
-	if release != nil && release.Env["FLYNN_REDIS"] != "" {
+	restoredRedis := false
+	if manifest != nil && release != nil {
+		if err := func() error {
+			prevApp := flagApp
+			flagApp = app.Name
+			defer func() { flagApp = prevApp }()
+			for _, r := range manifest.Resources {
+				if !strings.HasPrefix(r.Data, exportResourceDir) {
+					continue
+				}
+				if keepDatabaseEnv {
+					exportLogf("WARNING: --keep-database-env: not restoring %s; %s uses the source app's %s.", r.Data, app.Name, r.Name)
+					continue
+				}
+				dump, ok := resourceDumps[r.Data]
+				if !ok {
+					return fmt.Errorf("export lists %s for %s, but the archive does not contain it", r.Data, r.Name)
+				}
+				if release.Env == nil {
+					release.Env = map[string]string{}
+				}
+				env, err := restorePluginResource(client, app, release.Env, r, dump)
+				if err != nil {
+					return err
+				}
+				for k, v := range env {
+					release.Env[k] = v
+				}
+				numResources++
+				if r.Provider == "redis" {
+					restoredRedis = true
+				}
+			}
+			return nil
+		}(); err != nil {
+			return err
+		}
+	}
+
+	if legacyRedis && !restoredRedis {
 		res, err := client.ProvisionResource(&ct.ResourceReq{
 			ProviderID: "redis",
 			Apps:       []string{app.ID},

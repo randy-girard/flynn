@@ -149,7 +149,7 @@ func (w *trailerFails) Write(p []byte) (int, error) {
 func TestExportReturnsCloseError(t *testing.T) {
 	withExportApp(t, "demo")
 	w := &trailerFails{}
-	err := exportApp(exportClient{}, w, nil)
+	err := exportApp(exportClient{}, w, nil, exportOptions{})
 	if !errors.Is(err, errTrailer) {
 		t.Fatalf("err = %v, want the tar close error", err)
 	}
