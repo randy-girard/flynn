@@ -1,6 +1,7 @@
 package updaterdeploy
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/httpclient"
 )
 
 // hostInfraApps are persistent host-daemon jobs. Controller all-at-once
@@ -640,8 +642,10 @@ func (r *hostInfraRollout) finish(log log15.Logger) error {
 	if err := r.putFormation(r.oldRelease.ID, zeroProcesses(r.processes), r.oldFormationTags(), log); err != nil {
 		return err
 	}
-	if err := r.client.SetAppRelease(r.appID, r.newRelease.ID); err != nil {
-		return fmt.Errorf("set host-infra app release: %w", err)
+	if err := hostInfraRead("set host-infra app release", log, func() error {
+		return r.client.SetAppRelease(r.appID, r.newRelease.ID)
+	}); err != nil {
+		return err
 	}
 	if err := r.zeroStaleFormations(r.newRelease.ID, log); err != nil {
 		return err
@@ -659,24 +663,37 @@ func (r *hostInfraRollout) finish(log log15.Logger) error {
 // would leave the app with no jobs at all. Likewise a release that runs a
 // process type keep's formation does not run stays (EDGE-72).
 func (r *hostInfraRollout) zeroStaleFormations(keep string, log log15.Logger) error {
-	cur, err := r.client.GetFormation(r.appID, keep)
-	if err == controller.ErrNotFound || err == nil && (cur == nil || processCount(cur.Processes) == 0) {
+	var cur *ct.Formation
+	err := hostInfraRead("get host-infra formation for release "+keep, log, func() (err error) {
+		cur, err = r.client.GetFormation(r.appID, keep)
+		return err
+	})
+	if errors.Is(err, controller.ErrNotFound) || err == nil && (cur == nil || processCount(cur.Processes) == 0) {
 		if log != nil {
 			log.Warn("current host-infra formation is empty, leaving other formations alone", "app", r.appID, "release", keep)
 		}
 		return nil
 	} else if err != nil {
-		return fmt.Errorf("get host-infra formation for release %s: %w", keep, err)
+		return err
 	}
-	releases, err := r.client.AppReleaseList(r.appID)
-	if err != nil {
-		return fmt.Errorf("list host-infra releases: %w", err)
+	var releases []*ct.Release
+	if err := hostInfraRead("list host-infra releases", log, func() (err error) {
+		releases, err = r.client.AppReleaseList(r.appID)
+		return err
+	}); err != nil {
+		return err
 	}
 	for _, rel := range releases {
 		if rel == nil || rel.ID == "" || rel.ID == keep {
 			continue
 		}
+		// The two reads above waited for the controller, so these are not
+		// retried: an unreadable old formation is left for the next run, as
+		// before, instead of costing a full budget per release.
 		f, err := r.client.GetFormation(r.appID, rel.ID)
+		if err != nil && !errors.Is(err, controller.ErrNotFound) && log != nil {
+			log.Warn("could not read superseded host-infra formation, leaving it", "app", r.appID, "release", rel.ID, "err", err)
+		}
 		if err != nil || f == nil || processCount(f.Processes) == 0 {
 			continue
 		}
@@ -750,6 +767,39 @@ func (r *hostInfraRollout) oldFormationTags() map[string]map[string]string {
 		tags[typ] = inner
 	}
 	return tags
+}
+
+// hostInfraRead runs a controller call made after a host's discoverd was
+// replaced, retrying for hostInfraFormationBudget like putFormation. Right
+// after the swap the controller lookup answered 404 or a stale address that
+// refused, and one failed GET ended the update (EDGE-69). A controller 404 and
+// a 401 are answers, not outages, and return at once.
+func hostInfraRead(what string, log log15.Logger, fn func() error) error {
+	start := time.Now()
+	deadline := start.Add(hostInfraFormationBudget)
+	var err error
+	attempt := 1
+	for ; ; attempt++ {
+		err = fn()
+		if err == nil {
+			if attempt > 1 && log != nil {
+				log.Info("controller answered after the host-infra swap", "call", what, "attempts", attempt, "waited", time.Since(start).Round(time.Millisecond))
+			}
+			return nil
+		}
+		if errors.Is(err, controller.ErrNotFound) || httpclient.IsUnauthorized(err) {
+			return err
+		}
+		if attempt >= 3 && time.Now().Add(hostInfraFormationRetryDelay).After(deadline) {
+			break
+		}
+		if log != nil {
+			log.Warn("waiting for the controller after the host-infra swap", "call", what, "attempt", attempt,
+				"waited", time.Since(start).Round(time.Millisecond), "budget", hostInfraFormationBudget, "err", err)
+		}
+		time.Sleep(hostInfraFormationRetryDelay)
+	}
+	return fmt.Errorf("%s: controller did not answer within %s (%d attempts); last error: %w", what, hostInfraFormationBudget, attempt, err)
 }
 
 func (r *hostInfraRollout) putFormation(releaseID string, processes map[string]int, tags map[string]map[string]string, log log15.Logger) error {
