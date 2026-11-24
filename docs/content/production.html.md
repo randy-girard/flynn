@@ -832,11 +832,15 @@ and otherwise when the limit is passed:
   `GIT_CURL_VERBOSE=1 git push` shows).
 - A push that sends nothing for `PUSH_IDLE_TIMEOUT` is refused the same way
   (`remote: -----> Push refused: no data arrived for 1m0s, the gitreceive
-  upload idle timeout (PUSH_IDLE_TIMEOUT).`) and its connection closed. If
-  the client then resumes, git sends the rest of its pack as a new request,
-  which is answered `400`, so the output ends with `error: RPC failed; HTTP
-  400` and `Everything up-to-date`; the push was still refused. A client
-  that did not ask for git's status report gets `408 Request Timeout`.
+  upload idle timeout (PUSH_IDLE_TIMEOUT).`) and its connection closed. git
+  prints the reason as soon as it arrives but goes on trying to send its
+  pack: a client that is still connected and sends nothing more keeps
+  waiting after the message until it is interrupted (`Ctrl-C`), because the
+  router keeps its connection open. When the client sends again, git sends
+  the rest of its pack as a new request, which is answered `400`, so the
+  output ends with `error: RPC failed; HTTP 400` and `Everything
+  up-to-date`; the push was still refused. A client that did not ask for
+  git's status report gets `408 Request Timeout`.
 - Each refused push is logged by gitreceive as `push refused` with the app,
   the setting, the limit, the bytes received and the answer
   (`report-status`, `413` or `408`).
