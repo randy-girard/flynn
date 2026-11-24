@@ -2,9 +2,12 @@ package httpclient
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
@@ -88,7 +91,32 @@ var connectAttempts = attempt.Strategy{
 	Delay: 100 * time.Millisecond,
 }
 
+// ResumingStream streams events into outputCh and reconnects after the
+// connection drops, for up to connectAttempts.Total, asking the server for
+// the events after the last one it sent (the Last-Event-Id header, read from
+// an int64 ID field of the event type). Before the first event that cursor
+// is the stream's start id from the sse.LastEventIDHeader response header,
+// so a reconnect before any event still resumes where the stream began.
+// Against a server that sends no start id the cursor stays 0 until the first
+// event, and the server replays nothing for 0: a caller that must not miss
+// a change in that gap uses ResumingStreamWithOptions with EndOnDisconnect.
 func ResumingStream(connect func(int64) (*http.Response, error, bool), outputCh interface{}) (stream.Stream, error) {
+	return ResumingStreamWithOptions(connect, outputCh, StreamOptions{})
+}
+
+// ErrStreamDisconnected ends a stream opened with EndOnDisconnect when its
+// connection drops.
+var ErrStreamDisconnected = errors.New("httpclient: event stream disconnected")
+
+// StreamOptions changes how a resuming stream handles a dropped connection.
+type StreamOptions struct {
+	// EndOnDisconnect ends the stream with ErrStreamDisconnected when the
+	// connection drops, instead of reconnecting. The first connect is still
+	// retried. A caller that builds state from a list uses it to list again.
+	EndOnDisconnect bool
+}
+
+func ResumingStreamWithOptions(connect func(int64) (*http.Response, error, bool), outputCh interface{}, opts StreamOptions) (stream.Stream, error) {
 	stream := stream.New()
 	firstErr := make(chan error)
 	go func() {
@@ -118,6 +146,11 @@ func ResumingStream(connect func(int64) (*http.Response, error, bool), outputCh 
 			if err != nil {
 				stream.Error = err
 				return
+			}
+			if lastID == 0 {
+				if start, err := strconv.ParseInt(res.Header.Get(sse.LastEventIDHeader), 10, 64); err == nil && start > 0 {
+					lastID = start
+				}
 			}
 			chanValue := reflect.MakeChan(outValue.Type(), 0)
 			s := Stream(res, chanValue)
@@ -149,6 +182,14 @@ func ResumingStream(connect func(int64) (*http.Response, error, bool), outputCh 
 					}
 					outValue.Send(v)
 				}
+			}
+			if opts.EndOnDisconnect {
+				if err := s.Err(); err != nil {
+					stream.Error = fmt.Errorf("%w: %v", ErrStreamDisconnected, err)
+				} else {
+					stream.Error = ErrStreamDisconnected
+				}
+				return
 			}
 		}
 	}()

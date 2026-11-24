@@ -356,6 +356,12 @@ func (c *Client) Stream(method, path string, in, out interface{}) (stream.Stream
 }
 
 func (c *Client) ResumingStream(method, path string, ch interface{}) (stream.Stream, error) {
+	return c.ResumingStreamWithOptions(method, path, ch, StreamOptions{})
+}
+
+// ResumingStreamWithOptions is ResumingStream with options for a dropped
+// connection.
+func (c *Client) ResumingStreamWithOptions(method, path string, ch interface{}, opts StreamOptions) (stream.Stream, error) {
 	// use a copy of the client with a zero timeout (it doesn't really
 	// make sense to have a resuming stream with a timeout)
 	httpClient := *c.HTTP
@@ -369,7 +375,7 @@ func (c *Client) ResumingStream(method, path string, ch interface{}) (stream.Str
 		res, err := c.RawReqWithHTTP(method, path, header, nil, nil, &httpClient)
 		return res, err, err != c.ErrNotFound
 	}
-	return ResumingStream(connect, ch)
+	return ResumingStreamWithOptions(connect, ch, opts)
 }
 
 func (c *Client) StreamWithHeader(method, path string, header http.Header, in, out interface{}) (stream.Stream, error) {

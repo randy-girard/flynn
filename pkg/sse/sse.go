@@ -107,3 +107,10 @@ func (dec *Decoder) Decode(v interface{}) error {
 	}
 	return json.Unmarshal(data, v)
 }
+
+// LastEventIDHeader is the response header a resumable event stream sets to
+// the id of the newest event that the stream does not send (the events
+// before it subscribed). A client that has seen no event resumes from this
+// id, so events made while it was disconnected are replayed. Servers from
+// before EDGE-94 do not set it.
+const LastEventIDHeader = "X-Last-Event-Id"
