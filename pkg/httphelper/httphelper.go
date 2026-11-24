@@ -107,6 +107,9 @@ const (
 	// InsufficientStorageErrorCode is a refusal because a storage quota
 	// (the blobstore APP_QUOTA) is used up (HTTP 507).
 	InsufficientStorageErrorCode ErrorCode = "insufficient_storage"
+	// RequestTimeoutErrorCode is an upload whose body stopped arriving
+	// (HTTP 408).
+	RequestTimeoutErrorCode ErrorCode = "request_timeout"
 )
 
 var ErrRequestBodyTooBig = errors.New("httphelper: request body too big")
@@ -126,6 +129,7 @@ var errorResponseCodes = map[ErrorCode]int{
 	RatelimitedErrorCode:         429,
 	ServiceUnavailableErrorCode:  503,
 	InsufficientStorageErrorCode: 507,
+	RequestTimeoutErrorCode:      408,
 }
 
 type JSONError struct {

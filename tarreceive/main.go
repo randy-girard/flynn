@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/controller/authorizer"
@@ -71,14 +72,15 @@ func main() {
 	} else {
 		srv.sem = nil
 	}
-	log.Printf("layer limits: MAX_LAYER_SIZE=%d MAX_CONCURRENT_LAYERS=%d (0 is unlimited)", srv.maxLayerSize, concurrency)
+	if err := srv.configureUploads(); err != nil {
+		log.Fatalln(err)
+	}
+	log.Printf("layer limits: MAX_LAYER_SIZE=%d MAX_CONCURRENT_LAYERS=%d MAX_CONCURRENT_UPLOADS=%d MIN_FREE_DISK=%d (0 is unlimited) UPLOAD_IDLE_TIMEOUT=%s (0s is off)",
+		srv.maxLayerSize, concurrency, cap(srv.uploads), srv.disk.minFree, srv.idleTimeout)
 
-	handler := httphelper.ContextInjector(
-		"tarreceive",
-		httphelper.NewRequestLogger(srv),
-	)
-
-	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), handler))
+	hs := &http.Server{Addr: ":" + os.Getenv("PORT"), Handler: wrapHandler(srv)}
+	uploadlimit.ApplyServerTimeouts(hs)
+	log.Fatal(hs.ListenAndServe())
 }
 
 // Defaults for the layer limits (EDGE-08). flynn docker:push sends the whole
@@ -110,6 +112,17 @@ type server struct {
 	squash func(src, dst string) error
 	// upload PUTs data to a blobstore URL.
 	upload func(data io.Reader, url string) error
+	// idleTimeout cuts off a layer body that sends nothing for this long
+	// (EDGE-36); 0 is off.
+	idleTimeout time.Duration
+	// uploads bounds how many layers are received and on the temp disk at
+	// once; nil is no limit. slotWait is how long a layer waits for a slot.
+	uploads  chan struct{}
+	slotWait time.Duration
+	// tempDir holds the layers in progress; "" is the system temp dir.
+	tempDir string
+	// disk refuses layers the temp filesystem cannot hold.
+	disk *diskGuard
 }
 
 func newServer(auth *authorizer.Authorizer, client controller.Client) *server {
@@ -123,6 +136,10 @@ func newServer(auth *authorizer.Authorizer, client controller.Client) *server {
 		sem:          make(chan struct{}, defaultLayerConcurrency),
 		squash:       mksquashfs,
 		upload:       upload,
+		idleTimeout:  defaultUploadIdleTimeout,
+		uploads:      make(chan struct{}, defaultMaxConcurrentUploads),
+		slotWait:     defaultSlotWait,
+		disk:         &diskGuard{minFree: defaultMinFreeDisk, free: freeSpace, checkEvery: diskCheckEvery},
 	}
 	if client != nil {
 		s.createArtifact = client.CreateArtifact
@@ -215,6 +232,10 @@ func errorCodeFor(status int) httphelper.ErrorCode {
 		return httphelper.RequestBodyTooBigErrorCode
 	case http.StatusInsufficientStorage:
 		return httphelper.InsufficientStorageErrorCode
+	case http.StatusServiceUnavailable:
+		return httphelper.ServiceUnavailableErrorCode
+	case http.StatusRequestTimeout:
+		return httphelper.RequestTimeoutErrorCode
 	}
 	return httphelper.UnknownErrorCode
 }
@@ -315,6 +336,7 @@ func mksquashfs(src, dst string) error {
 
 // layerTooLarge answers 413 naming the limit and the setting that raises it.
 func (s *server) layerTooLarge(w http.ResponseWriter) {
+	w.Header().Set("Connection", "close")
 	httphelper.JSON(w, http.StatusRequestEntityTooLarge, httphelper.JSONError{
 		Code: httphelper.RequestBodyTooBigErrorCode,
 		Message: fmt.Sprintf("layer exceeds the tarreceive limit of %s; an operator can raise it with `flynn -a tarreceive env:set MAX_LAYER_SIZE=<size>`",
@@ -331,7 +353,10 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		s.layerTooLarge(w)
 		return
 	}
-	body := uploadlimit.NewReader(r.Body, s.maxLayerSize)
+	// EDGE-36: a body that sends nothing for UPLOAD_IDLE_TIMEOUT is cut off
+	idle := uploadlimit.NewIdleBody(w, r.Body, s.idleTimeout)
+	defer idle.Done()
+	body := uploadlimit.NewReader(idle, s.maxLayerSize)
 
 	// The layer is named by the SHA256 of its tar. Once its config is
 	// stored, keep it: rebuilding can produce different squashfs bytes, and
@@ -342,6 +367,10 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 	if existing, err := s.storedLayer(app, id); err == nil {
 		// Read the upload so the client sees the answer, not a reset.
 		io.Copy(ioutil.Discard, body)
+		if idle.TimedOut() {
+			s.bodyIdle(w)
+			return
+		}
 		httphelper.JSON(w, http.StatusOK, existing)
 		return
 	} else if err != ct.ErrNotFound {
@@ -349,9 +378,23 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		return
 	}
 
+	// EDGE-36: the layer takes an upload slot and room on the temp disk
+	// before any of it is written, and keeps both until its temp files
+	// are removed.
+	release, ok := s.uploadSlot(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	space, ok := s.disk.reserve(w, s.tempDir, r.ContentLength)
+	if !ok {
+		return
+	}
+	defer space.release()
+
 	layer, err := func() (*ct.ImageLayer, error) {
 		// copy the tar to a temp file and generate its SHA256 hash
-		tmpDir, err := ioutil.TempDir("", "")
+		tmpDir, err := ioutil.TempDir(s.tempDir, "")
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +405,7 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 			return nil, err
 		}
 		tarHash := sha256.New()
-		if _, err := io.Copy(io.MultiWriter(tarFile, tarHash), body); err != nil {
+		if _, err := io.Copy(io.MultiWriter(space.writer(tarFile), tarHash), body); err != nil {
 			tarFile.Close()
 			return nil, err
 		}
@@ -453,8 +496,16 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 
 		return layer, nil
 	}()
+	if idle.TimedOut() {
+		s.bodyIdle(w)
+		return
+	}
 	if body.Exceeded {
 		s.layerTooLarge(w)
+		return
+	}
+	if errors.Is(err, errDiskLow) {
+		s.disk.low(w)
 		return
 	}
 	if err != nil {
