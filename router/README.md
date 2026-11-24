@@ -47,7 +47,9 @@ the router does not have, changes nothing. When the event stream drops, the
 sync ends with `router: sync error` and runs again from the start after
 2 seconds: open the stream, list, remove. The stream is never resumed, so a
 change made while it was down is not lost, even when the stream had not seen
-an event yet.
+an event yet. When the controller's node dies without closing the connection
+(a reboot), TCP keepalive on the router's controller connections (5 s idle,
+3 probes 5 s apart) ends the stream within about 20 seconds.
 
 TCP routes may store a hostname and a TLS mode:
 

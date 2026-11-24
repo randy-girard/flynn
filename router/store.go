@@ -3,12 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"time"
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/dialer"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/stream"
 	router "github.com/randy-girard/flynn/router/types"
 )
@@ -21,6 +25,26 @@ type Store interface {
 var controllerAttempts = attempt.Strategy{
 	Total: 2 * time.Minute,
 	Delay: time.Second,
+}
+
+// controllerKeepAlive bounds how long a route stream stays on a controller
+// whose node died without closing the connection (a reboot or power loss
+// sends no FIN): about 5 s idle plus 3 probes 5 s apart. The default dialer
+// took 2 m 45 s, and the router kept serving routes deleted in that time.
+var controllerKeepAlive = net.KeepAliveConfig{
+	Enable:   true,
+	Idle:     5 * time.Second,
+	Interval: 5 * time.Second,
+	Count:    3,
+}
+
+// controllerHTTPClient is httphelper.RetryClient with controllerKeepAlive
+// on its connections.
+func controllerHTTPClient() *http.Client {
+	tr := httphelper.RetryClient.Transport.(*http.Transport).Clone()
+	d := net.Dialer{Timeout: dialer.Default.Timeout, KeepAliveConfig: controllerKeepAlive}
+	tr.Dial = dialer.RetryDial(d.Dial)
+	return &http.Client{Transport: tr}
 }
 
 func NewControllerStore() (*ControllerStore, error) {
@@ -40,7 +64,7 @@ func NewControllerStore() (*ControllerStore, error) {
 			return fmt.Errorf("no controller instances available")
 		}
 		inst := instances[0]
-		client, err = controller.NewClient("", controller.KeyFromEnvOrMeta(inst.Meta))
+		client, err = controller.NewClientWithHTTP("", controller.KeyFromEnvOrMeta(inst.Meta), controllerHTTPClient())
 		return err
 	})
 	if err != nil {

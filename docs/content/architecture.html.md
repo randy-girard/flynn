@@ -404,7 +404,9 @@ port stops accepting.
 Each router opens the controller's route event stream, then lists every route
 and applies the list: routes it has that are not listed are removed. Changes
 made while it lists arrive on the stream. When the stream drops (a controller
-restart or deploy, a node reboot), the router does not resume it. It logs
+restart or deploy, a node reboot), the router does not resume it. A connection
+to a controller whose node went away without closing it is given up by TCP
+keepalive within about 20 seconds. It logs
 `sync error`, waits 2 seconds, and repeats the open, list and remove. A route
 changed or deleted while the stream was down is applied at that point, and a
 route deleted on the controller stops being served on every node.
