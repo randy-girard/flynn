@@ -1928,6 +1928,19 @@ func TestProductionCheckSireniaFormation(t *testing.T) {
 	assertPassed(t, err)
 	mustCheck(t, got, "ok", "sirenia-formation", "apps=2")
 
+	// EDGE-76: the primary is on the current release but another formation
+	// still runs engines (a rollback kept a failed release's peers).
+	f = &productionFixture{sirenia: []updaterdeploy.SireniaFormationState{
+		{App: "postgres", ProcessType: "postgres", CurrentRelease: "aaaa", CurrentCount: 3, PrimaryRelease: "aaaa", PrimaryCount: 3,
+			Others: map[string]int{"12384ef4-0000-4000-8000-000000000000": 2}},
+	}}
+	got, err = f.run(t)
+	assertPassed(t, err)
+	row = mustCheck(t, got, "warn", "sirenia-formation", "postgres current=aaaa postgres=3 also=12384ef4 postgres=2")
+	if !strings.Contains(row.action, "more than one release") {
+		t.Fatalf("the action must say engines run from more than one release: %q", row.action)
+	}
+
 	f = &productionFixture{sireniaErr: errors.New("discoverd unavailable")}
 	got, err = f.run(t)
 	assertFailed(t, err)

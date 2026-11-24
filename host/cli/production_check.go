@@ -422,7 +422,9 @@ func collectProductionRows(cfg productionCheckConfig) []productionRow {
 // addSireniaFormationLine checks that every sirenia app's engines run from
 // its current release (EDGE-73). A current release with no engines while
 // another release runs them fails: every deploy copies the current formation,
-// so before EDGE-73 a deploy left the engines where they were. Engines on
+// so before EDGE-73 a deploy left the engines where they were. Another
+// release's formation that still asks for engines while the primary is on
+// the current release warns (EDGE-76: a rollback kept its peers). Engines on
 // another release while the current release also runs some warns (it is
 // also the shape during a sirenia deploy).
 func addSireniaFormationLine(add func(productionRow), states []updaterdeploy.SireniaFormationState, err error) {
@@ -439,13 +441,35 @@ func addSireniaFormationLine(add func(productionRow), states []updaterdeploy.Sir
 		}
 		return id
 	}
+	also := func(s updaterdeploy.SireniaFormationState) string {
+		ids := make([]string, 0, len(s.Others))
+		for id := range s.Others {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		out := ""
+		for _, id := range ids {
+			out += fmt.Sprintf(" also=%s %s=%d", short(id), s.ProcessType, s.Others[id])
+		}
+		return out
+	}
 	bad := false
 	for _, s := range states {
 		if !s.Mismatch() {
+			if len(s.Others) == 0 {
+				continue
+			}
+			// EDGE-76: a rollback kept a failed release's engines.
+			bad = true
+			add(productionRow{
+				status: "warn", check: "sirenia-formation",
+				detail: fmt.Sprintf("%s current=%s %s=%d%s", s.App, short(s.CurrentRelease), s.ProcessType, s.CurrentCount, also(s)),
+				action: "Engines run from more than one release. Unless a deploy of the app is running, run flynn-host update (or deploy the app); its orphan repair scales the other releases down.",
+			})
 			continue
 		}
 		bad = true
-		detail := fmt.Sprintf("%s current=%s %s=%d engines=%s %s=%d", s.App, short(s.CurrentRelease), s.ProcessType, s.CurrentCount, short(s.PrimaryRelease), s.ProcessType, s.PrimaryCount)
+		detail := fmt.Sprintf("%s current=%s %s=%d engines=%s %s=%d", s.App, short(s.CurrentRelease), s.ProcessType, s.CurrentCount, short(s.PrimaryRelease), s.ProcessType, s.PrimaryCount) + also(s)
 		if s.Stuck() {
 			add(productionRow{
 				status: "fail", check: "sirenia-formation", detail: detail,
@@ -461,7 +485,7 @@ func addSireniaFormationLine(add func(productionRow), states []updaterdeploy.Sir
 	if !bad {
 		add(productionRow{
 			status: "ok", check: "sirenia-formation", detail: fmt.Sprintf("apps=%d", len(states)),
-			action: "Every sirenia app's primary runs from its current release.",
+			action: "Every sirenia app's primary and engines run from its current release.",
 		})
 	}
 }

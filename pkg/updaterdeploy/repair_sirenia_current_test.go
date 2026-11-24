@@ -235,3 +235,48 @@ func TestPlanOrphanSireniaRepairNeverZeroesCurrentOrPrimary(t *testing.T) {
 		t.Fatal("PlanOrphanSireniaRepair changed its input")
 	}
 }
+
+// EDGE-76: a sirenia rollback that keeps a release's engines (mid-roll peers
+// that did not hand back, or a primary on the failed release) leaves more
+// than one formation running engines. The state lists the formations other
+// than the current and the primary's release that still ask for engines.
+func TestSireniaFormationStatesListsOtherEngineFormations(t *testing.T) {
+	const (
+		appID = "postgres-app"
+		relB  = "current"
+		relX  = "kept"
+		relY  = "zeroed"
+	)
+	defer sireniaPrimaryOn(t, relB)()
+	ctrl := &fakeRepairController{
+		apps:        []*ct.App{{ID: appID, Name: "postgres"}},
+		appReleases: map[string]string{appID: relB},
+		releases: map[string]*ct.Release{
+			relB: {ID: relB, Env: map[string]string{"SIRENIA_PROCESS": "postgres"}},
+		},
+		formations: map[string][]*ct.Formation{
+			appID: {
+				{AppID: appID, ReleaseID: relB, Processes: map[string]int{"postgres": 3, "web": 2}},
+				{AppID: appID, ReleaseID: relX, Processes: map[string]int{"postgres": 2}},
+				{AppID: appID, ReleaseID: relY, Processes: map[string]int{"postgres": 0, "web": 1}},
+			},
+		},
+	}
+	states, err := SireniaFormationStates(ctrl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("states = %+v", states)
+	}
+	s := states[0]
+	if s.Mismatch() {
+		t.Fatalf("state %+v: the primary is on the current release", s)
+	}
+	if len(s.Others) != 1 || s.Others[relX] != 2 {
+		t.Fatalf("Others = %v, want only %s=2", s.Others, relX)
+	}
+	if !s.Split() {
+		t.Fatalf("state %+v: two formations run engines, want Split", s)
+	}
+}

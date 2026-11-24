@@ -87,6 +87,22 @@ type SireniaFormationState struct {
 	PrimaryRelease string
 	// PrimaryCount is that release's formation count of ProcessType.
 	PrimaryCount int
+	// Others maps every other release whose formation asks for ProcessType
+	// engines to its count (EDGE-76: a sirenia rollback that kept a failed
+	// release's peers).
+	Others map[string]int
+}
+
+// Split reports whether engines run from more than one formation.
+func (s SireniaFormationState) Split() bool {
+	n := len(s.Others)
+	if s.CurrentCount > 0 {
+		n++
+	}
+	if s.PrimaryRelease != s.CurrentRelease && s.PrimaryCount > 0 {
+		n++
+	}
+	return n > 1
 }
 
 // Mismatch reports whether the primary runs from a release that is not the
@@ -230,6 +246,12 @@ func readSireniaFormationState(ctrl controller.Client, app *ct.App) (SireniaForm
 		}
 		if f.ReleaseID == state.PrimaryRelease {
 			state.PrimaryCount = f.Processes[state.ProcessType]
+		}
+		if f.ReleaseID != state.CurrentRelease && f.ReleaseID != state.PrimaryRelease && f.Processes[state.ProcessType] > 0 {
+			if state.Others == nil {
+				state.Others = make(map[string]int)
+			}
+			state.Others[f.ReleaseID] = f.Processes[state.ProcessType]
 		}
 	}
 	return state, formations, true, nil
