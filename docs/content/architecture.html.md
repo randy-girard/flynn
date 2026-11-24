@@ -259,6 +259,37 @@ If engines run from another release that the primary is not on, and the
 current release asks for none, the deploy fails instead of finishing without
 moving them.
 
+A failed sirenia deploy is not rolled back by deleting the new formation when
+that could stop the peers that hold the data. The rollback first reads where
+the sirenia primary is:
+
+- If the new release runs no engines yet, nothing moved, and the rollback is
+  the one described above.
+- If the primary is on the new release (the deploy replaced the asyncs, the
+  sync and the primary, then failed while waiting for writes, scaling the old
+  release down, or rolling `web`), the new formation keeps its engines and
+  none of them is stopped. When the new release already has the deploy's
+  count of cluster members, the other releases' engine counts go to zero: all
+  their peers had been replaced, and starting them again would only add peers
+  with older data. Otherwise their counts are left as they are. Other process
+  types are rolled back. The app's current release stays the old one, and the
+  deployment fails with an error that says the primary is on the new release.
+  The next deploy (or `flynn-host update`) finds the primary there and moves
+  the engines to one release.
+- If the primary is still on the old release (a failure mid-roll, when some
+  asyncs or the sync are already new peers), the old formation is restored,
+  and the new peers are removed only once the old release's restarted peers
+  have joined the cluster, so it never runs fewer members than the deploy's
+  count. If they do not join within two minutes, the new peers stay and the
+  error says so; the next deploy's orphan repair removes them.
+- If the primary cannot be read, the old formation is restored and the new
+  release's engines are kept.
+
+Keeping a peer running cannot lose a write; stopping the primary's formation
+can. While two formations run engines, `flynn-host production:check` warns on
+its `sirenia-formation` line. The error the rollback reports is added to the
+deployment's `failed` event.
+
 The updater, the sirenia deploy and the host's cluster repair also check
 formations. The updater's orphan repair (`flynn-host update`) zeroes stray
 engine formations only when the primary runs from the current release and that

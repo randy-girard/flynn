@@ -111,6 +111,11 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 			} else if f != nil {
 				log.Warn("rolling back deployment due to error", "err", e)
 				e = c.rollback(log, deployment, f, job.Stop)
+				if e != nil {
+					// The failed event is what flynn-host update and
+					// `flynn deployment` show: say what the rollback left.
+					errMsg += "; rollback: " + e.Error()
+				}
 			} else {
 				e = nil
 			}
@@ -163,12 +168,28 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 
 func (c *context) rollback(l log15.Logger, deployment *ct.Deployment, original *ct.Formation, stop chan struct{}) error {
 	log := l.New("fn", "rollback")
+	if deployment.Strategy == "sirenia" {
+		if handled, err := c.rollbackSirenia(log, deployment, original, stop); handled {
+			return err
+		}
+	}
+	if err := c.restoreOriginalFormation(log, original, original.Processes, stop); err != nil {
+		return err
+	}
+	return c.deleteNewFormation(log, deployment)
+}
 
-	log.Info("restoring the original formation", "release.id", original.ReleaseID)
+// restoreOriginalFormation scales the old release back to processes with
+// the original tags. It returns an error only when the old formation was
+// left unchanged; then the new one must not be removed, or the app could be
+// left with nothing running (the next successful deploy zeroes this release,
+// zeroFailedDeploymentFormations).
+func (c *context) restoreOriginalFormation(log log15.Logger, original *ct.Formation, processes map[string]int, stop chan struct{}) error {
+	log.Info("restoring the original formation", "release.id", original.ReleaseID, "processes", processes)
 	timeout := 10 * time.Second
 	restoreWritten := false
 	opts := ct.ScaleOptions{
-		Processes: original.Processes,
+		Processes: processes,
 		// An omni roll pins the old formation to the hosts it has not left
 		// yet (flynn-host-ids). Restore every process type's original tags
 		// so the old release comes back on every host.
@@ -185,18 +206,18 @@ func (c *context) rollback(l log15.Logger, deployment *ct.Deployment, original *
 	}
 	if err := c.client.ScaleAppRelease(original.AppID, original.ReleaseID, opts); err != nil {
 		if !restoreWritten || err == ct.ErrScalingStopped {
-			// The old formation is unchanged, so zeroing the new one could
-			// leave the app with nothing running. The next successful
-			// deploy zeroes this release (zeroFailedDeploymentFormations).
 			log.Error("error restoring the original formation", "err", err)
 			return err
 		}
 		// The restore is written and the scheduler will converge on it.
 		// Returning here (EDGE-63) left the new release's formation running
 		// for good: the que retry sees finished_at and does nothing.
-		log.Warn("original formation restored but not confirmed in time, removing the new formation anyway", "err", err)
+		log.Warn("original formation restored but not confirmed in time, going on with the rollback", "err", err)
 	}
+	return nil
+}
 
+func (c *context) deleteNewFormation(log log15.Logger, deployment *ct.Deployment) error {
 	log.Info("deleting the new formation")
 	if err := rollbackDeleteAttempts.Run(func() error {
 		err := c.client.DeleteFormation(deployment.AppID, deployment.NewReleaseID)

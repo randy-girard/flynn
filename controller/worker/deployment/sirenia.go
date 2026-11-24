@@ -459,6 +459,51 @@ var sireniaPrimaryRelease = func(service string) (string, error) {
 	return cluster.Primary.Meta["FLYNN_RELEASE_ID"], nil
 }
 
+// sireniaClusterReleases returns FLYNN_RELEASE_ID of every member of the
+// sirenia cluster that discoverd publishes for service: the primary first,
+// then the sync, then the asyncs. Tests replace it.
+var sireniaClusterReleases = func(service string) ([]string, error) {
+	meta, err := discoverd.NewService(service).GetMeta()
+	if err != nil {
+		if discoverd.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if meta == nil || len(meta.Data) == 0 {
+		return nil, nil
+	}
+	var cluster state.State
+	if err := json.Unmarshal(meta.Data, &cluster); err != nil {
+		return nil, err
+	}
+	var out []string
+	add := func(inst *discoverd.Instance) {
+		if inst == nil {
+			return
+		}
+		rel := ""
+		if inst.Meta != nil {
+			rel = inst.Meta["FLYNN_RELEASE_ID"]
+		}
+		out = append(out, rel)
+	}
+	add(cluster.Primary)
+	add(cluster.Sync)
+	for _, a := range cluster.Async {
+		add(a)
+	}
+	return out, nil
+}
+
+// sireniaRollbackJoinTimeout bounds how long a sirenia rollback waits for the
+// old release's peers to join the cluster before it removes the new
+// release's peers; sireniaRollbackPoll is how often it looks.
+var (
+	sireniaRollbackJoinTimeout = 2 * time.Minute
+	sireniaRollbackPoll        = time.Second
+)
+
 // errSireniaSingletonState is returned by the HA roll when discoverd says the
 // cluster runs in singleton mode; the caller then deploys it as a singleton.
 var errSireniaSingletonState = errors.New("sirenia cluster is in singleton mode")

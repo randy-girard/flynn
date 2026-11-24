@@ -171,7 +171,12 @@ running. The rollback removes the new release's formation. If it could not,
 the next successful deploy of the app scales that release to zero once the
 new release has jobs up for every process type it runs. A formation that may
 still be running the app, or that belongs to a datastore, is left alone (see
-[Architecture](architecture.html.md#controller)).
+[Architecture](architecture.html.md#controller)). A failed deploy of a
+`sirenia` datastore (such as the system Postgres) never
+stops the engines that run its primary: once the primary has moved to the new
+release, the rollback keeps that release's engines, rolls back the other
+process types and fails the deployment with an error saying so. The next
+deploy moves the engines to one release.
 
 ### Release phase
 
