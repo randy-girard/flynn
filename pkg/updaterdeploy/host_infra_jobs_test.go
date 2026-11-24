@@ -900,3 +900,22 @@ func TestReplaceHostInfraBacksOffWhenStartedJobsAreStoppedAtOnce(t *testing.T) {
 		t.Fatalf("started %d flannel jobs that were each stopped at once; want at most %d", len(h.added), hostInfraMaxExternalStops)
 	}
 }
+
+// EDGE-72's shape per process type: the current formation is not empty
+// (another type is scaled), but it runs none of the type an older release
+// still runs. Zeroing that release would leave the type with no jobs.
+func TestZeroStaleFormationsKeepsAReleaseThatRunsATypeTheCurrentDoesNot(t *testing.T) {
+	c := newFakeInfraController(t, "layer-old")
+	c.formations["rel-old"].Processes = map[string]int{"app": 0, "web": 1}
+	stale := &ct.Release{ID: "rel-stale", ArtifactIDs: []string{"art-older"}}
+	c.releases = append(c.releases, stale)
+	c.formations["rel-stale"] = &ct.Formation{AppID: "app-flannel", ReleaseID: "rel-stale", Processes: map[string]int{"app": 1}}
+	r := &hostInfraRollout{client: c, appID: "app-flannel", oldRelease: c.release, newRelease: c.release}
+
+	if err := r.zeroStaleFormations("rel-old", nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := c.formations["rel-stale"].Processes["app"]; n != 1 {
+		t.Fatalf("stale formation app=%d, want 1: the current release runs no app job", n)
+	}
+}

@@ -656,7 +656,8 @@ func (r *hostInfraRollout) finish(log log15.Logger) error {
 // release left at scale 1 by an interrupted update stays active, and a
 // full-strength probe then waits for a second discoverd that never
 // registers. Nothing is zeroed while keep's own formation is empty: that
-// would leave the app with no jobs at all.
+// would leave the app with no jobs at all. Likewise a release that runs a
+// process type keep's formation does not run stays (EDGE-72).
 func (r *hostInfraRollout) zeroStaleFormations(keep string, log log15.Logger) error {
 	cur, err := r.client.GetFormation(r.appID, keep)
 	if err == controller.ErrNotFound || err == nil && (cur == nil || processCount(cur.Processes) == 0) {
@@ -677,6 +678,14 @@ func (r *hostInfraRollout) zeroStaleFormations(keep string, log log15.Logger) er
 		}
 		f, err := r.client.GetFormation(r.appID, rel.ID)
 		if err != nil || f == nil || processCount(f.Processes) == 0 {
+			continue
+		}
+		if typ := uncoveredProcessType(f.Processes, cur.Processes); typ != "" {
+			// keep's formation runs none of this type, so this release may
+			// be the only one running it (EDGE-72).
+			if log != nil {
+				log.Warn("leaving superseded host-infra formation alone, the current release runs none of its type", "app", r.appID, "release", rel.ID, "type", typ, "processes", f.Processes, "current", keep)
+			}
 			continue
 		}
 		if log != nil {
@@ -795,6 +804,22 @@ func copyProcesses(p map[string]int) map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+// uncoveredProcessType returns a process type that p runs and cur does not,
+// or "".
+func uncoveredProcessType(p, cur map[string]int) string {
+	var types []string
+	for typ, n := range p {
+		if n > 0 && cur[typ] <= 0 {
+			types = append(types, typ)
+		}
+	}
+	if len(types) == 0 {
+		return ""
+	}
+	sort.Strings(types)
+	return types[0]
 }
 
 func processCount(p map[string]int) int {
