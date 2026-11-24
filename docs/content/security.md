@@ -620,7 +620,18 @@ token. The slugbuilder script does the cache download and upload as root and
 unsets both URLs before any buildpack runs, so buildpack code never sees them. The
 app's `.slugignore` is applied by the unprivileged build user, never as root,
 and only to paths inside the build directory (`..` patterns and symlink escapes
-are skipped). A scoped
+are skipped). Image layers are unpacked confined to their directory
+(EDGE-106): by the CLI for `flynn docker:push` (as the user, on their
+machine), by dockerbuilder, and by tarreceive (as root, one directory per
+upload). Each path in a layer is resolved inside that directory the way the
+kernel resolves it in the container: an absolute symlink target starts again
+at the image root and `..` stops there (`openat2` with `RESOLVE_IN_ROOT` on
+Linux 5.6 and later, an `O_NOFOLLOW` walk one directory at a time
+elsewhere). So a layer cannot create, write, hardlink, chmod, chown or
+mknod anything outside the directory, for example in the pusher's `~/.ssh`
+or in another upload's directory on tarreceive. Symlinks themselves are
+kept, since images rely on them; an entry replaces an existing symlink
+rather than writing through it. A scoped
 `build:artifacts` token (the same one create-artifact uses for the
 controller) may GET/HEAD/PUT only its own app's objects:
 `/slugs/apps/<app-id>/layers/`, `/slugs/apps/<app-id>/images/`, and

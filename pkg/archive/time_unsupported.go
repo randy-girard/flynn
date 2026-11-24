@@ -1,16 +1,7 @@
-// +build !linux
+//go:build !linux && !windows
+// +build !linux,!windows
 
 package archive
 
-import (
-	"syscall"
-	"time"
-)
-
-func timeToTimespec(time time.Time) (ts syscall.Timespec) {
-	nsec := int64(0)
-	if !time.IsZero() {
-		nsec = time.UnixNano()
-	}
-	return syscall.NsecToTimespec(nsec)
-}
+// utimeOmit is UTIME_OMIT from <sys/stat.h> on macOS and the BSDs.
+const utimeOmit = -2

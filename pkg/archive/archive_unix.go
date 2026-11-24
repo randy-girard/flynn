@@ -1,3 +1,4 @@
+//go:build !windows
 // +build !windows
 
 package archive
@@ -5,24 +6,27 @@ package archive
 import (
 	"archive/tar"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
 
+type whiteoutConverter interface {
+	ConvertRead(hdr *tar.Header, d *dirHandle, base string) (bool, error)
+}
+
+// overlayWhiteoutConverter turns Docker whiteouts into overlayfs ones (a
+// 0:0 character device, the opaque xattr), for layers mounted as overlay
+// lower directories.
 type overlayWhiteoutConverter struct{}
 
-func (c overlayWhiteoutConverter) ConvertRead(hdr *tar.Header, path string) (bool, error) {
-	base := filepath.Base(path)
-	dir := filepath.Dir(path)
-
+func (c overlayWhiteoutConverter) ConvertRead(hdr *tar.Header, d *dirHandle, base string) (bool, error) {
 	// if a directory is marked as opaque by the AUFS special file, we need to translate that to overlay
 	if base == whiteoutOpaqueDir {
-		err := unix.Setxattr(dir, "trusted.overlay.opaque", []byte{'y'}, 0)
+		err := unix.Fsetxattr(d.fd, "trusted.overlay.opaque", []byte{'y'}, 0)
 		if err != nil {
-			return false, errors.Wrapf(err, "setxattr(%q, trusted.overlay.opaque=y)", dir)
+			return false, errors.Wrapf(err, "setxattr(%q, trusted.overlay.opaque=y)", d.path)
 		}
 		// don't write the file itself
 		return false, err
@@ -31,12 +35,11 @@ func (c overlayWhiteoutConverter) ConvertRead(hdr *tar.Header, path string) (boo
 	// if a file was deleted and we are using overlay, we need to create a character device
 	if strings.HasPrefix(base, whiteoutPrefix) {
 		originalBase := base[len(whiteoutPrefix):]
-		originalPath := filepath.Join(dir, originalBase)
 
-		if err := unix.Mknod(originalPath, unix.S_IFCHR, 0); err != nil {
-			return false, errors.Wrapf(err, "failed to mknod(%q, S_IFCHR, 0)", originalPath)
+		if err := mknodAt(d, originalBase, unix.S_IFCHR, 0); err != nil {
+			return false, errors.Wrapf(err, "failed to mknod(%q, S_IFCHR, 0)", d.join(originalBase))
 		}
-		if err := os.Chown(originalPath, hdr.Uid, hdr.Gid); err != nil && !os.IsPermission(err) {
+		if err := unix.Fchownat(d.fd, originalBase, hdr.Uid, hdr.Gid, unix.AT_SYMLINK_NOFOLLOW); err != nil && !isPermission(err) {
 			return false, err
 		}
 
@@ -51,24 +54,21 @@ func (c overlayWhiteoutConverter) ConvertRead(hdr *tar.Header, path string) (boo
 // a plain directory tree (as opposed to preparing an overlay mount).
 type flatWhiteoutConverter struct{}
 
-func (flatWhiteoutConverter) ConvertRead(hdr *tar.Header, path string) (bool, error) {
-	base := filepath.Base(path)
-	dir := filepath.Dir(path)
-
+func (flatWhiteoutConverter) ConvertRead(hdr *tar.Header, d *dirHandle, base string) (bool, error) {
 	if base == whiteoutOpaqueDir {
-		entries, err := os.ReadDir(dir)
+		names, err := readDirNames(d)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return false, nil
 			}
 			return false, err
 		}
-		for _, entry := range entries {
-			if entry.Name() == base {
+		for _, name := range names {
+			if name == base {
 				continue
 			}
-			if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
-				return false, err
+			if err := removeAllAt(d.fd, name); err != nil {
+				return false, &os.PathError{Op: "remove", Path: d.join(name), Err: err}
 			}
 		}
 		return false, nil
@@ -79,9 +79,9 @@ func (flatWhiteoutConverter) ConvertRead(hdr *tar.Header, path string) (bool, er
 	}
 
 	if strings.HasPrefix(base, whiteoutPrefix) {
-		originalPath := filepath.Join(dir, base[len(whiteoutPrefix):])
-		if err := os.RemoveAll(originalPath); err != nil && !os.IsNotExist(err) {
-			return false, err
+		original := base[len(whiteoutPrefix):]
+		if err := removeAllAt(d.fd, original); err != nil {
+			return false, &os.PathError{Op: "remove", Path: d.join(original), Err: err}
 		}
 		return false, nil
 	}
@@ -90,8 +90,10 @@ func (flatWhiteoutConverter) ConvertRead(hdr *tar.Header, path string) (bool, er
 }
 
 // handleTarTypeBlockCharFifo is an OS-specific helper function used by
-// createTarFile to handle the following types of header: Block; Char; Fifo
-func handleTarTypeBlockCharFifo(hdr *tar.Header, path string) error {
+// createTarFile to handle the following types of header: Block; Char; Fifo.
+// created is false when mknod was not permitted (an unprivileged unpack
+// skips device nodes).
+func handleTarTypeBlockCharFifo(hdr *tar.Header, d *dirHandle, base string) (created bool, err error) {
 	mode := uint32(hdr.Mode & 07777)
 	switch hdr.Typeflag {
 	case tar.TypeBlock:
@@ -102,26 +104,11 @@ func handleTarTypeBlockCharFifo(hdr *tar.Header, path string) error {
 		mode |= unix.S_IFIFO
 	}
 
-	if err := unix.Mknod(path, mode, int(unix.Mkdev(uint32(hdr.Devmajor), uint32(hdr.Devminor)))); err != nil {
-		if os.IsPermission(err) {
-			return nil
+	if err := mknodAt(d, base, mode, unix.Mkdev(uint32(hdr.Devmajor), uint32(hdr.Devminor))); err != nil {
+		if isPermission(err) {
+			return false, nil
 		}
-		return err
+		return false, &os.PathError{Op: "mknod", Path: hdr.Name, Err: err}
 	}
-	return nil
-}
-
-func handleLChmod(hdr *tar.Header, path string, hdrInfo os.FileInfo) error {
-	if hdr.Typeflag == tar.TypeLink {
-		if fi, err := os.Lstat(hdr.Linkname); err == nil && (fi.Mode()&os.ModeSymlink == 0) {
-			if err := os.Chmod(path, hdrInfo.Mode()); err != nil && !os.IsPermission(err) {
-				return err
-			}
-		}
-	} else if hdr.Typeflag != tar.TypeSymlink {
-		if err := os.Chmod(path, hdrInfo.Mode()); err != nil && !os.IsPermission(err) {
-			return err
-		}
-	}
-	return nil
+	return true, nil
 }

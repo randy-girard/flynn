@@ -1,9 +1,6 @@
 package archive
 
-import (
-	"archive/tar"
-	"errors"
-)
+import "errors"
 
 var errNotSupportedPlatform = errors.New("platform and architecture is not supported")
 
@@ -28,7 +25,3 @@ const whiteoutLinkDir = whiteoutMetaPrefix + "plnk"
 // whiteoutOpaqueDir file means directory has been made opaque - meaning
 // readdir calls to this directory do not follow to lower layers.
 const whiteoutOpaqueDir = whiteoutMetaPrefix + ".opq"
-
-type whiteoutConverter interface {
-	ConvertRead(hdr *tar.Header, path string) (bool, error)
-}

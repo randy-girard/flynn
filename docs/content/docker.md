@@ -53,6 +53,21 @@ root stays at the image root, as in the container. More than 40 links in one
 lookup count as a loop. An absolute command (`/bin/sh`) is passed on
 unchecked.
 
+To flatten the image, the CLI unpacks each layer into a temporary directory
+on the machine that pushes, and tarreceive (or dockerbuilder) unpacks the
+result again. Each unpack stays inside its directory whatever the layer
+holds. A symlink is kept as it is in the image, including an absolute one
+(`/var/run -> /run`) or one whose `..` goes above the root. Later entries
+that pass through a symlink, in the same layer or a later one, are resolved
+the way the container resolves them: a layer with `x -> /home/me/.ssh`
+followed by `x/authorized_keys` writes the image's own
+`/home/me/.ssh/authorized_keys`, never the file on your machine. An entry
+whose name leaves the image with `..` (`../x`), a hardlink whose target is
+not a file in the image (its target is looked up the same way), and a
+symlink loop refuse the push. Device
+nodes, FIFOs and setuid bits are kept (the CLI skips device nodes it is not
+allowed to create).
+
 The CLI flattens the image into one uncompressed tar. tarreceive refuses one
 over `MAX_LAYER_SIZE` (default 32 GiB) with `layer exceeds the tarreceive
 limit` before the upload starts, and one its temp disk cannot hold (twice the
