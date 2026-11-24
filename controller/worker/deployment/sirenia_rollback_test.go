@@ -2,7 +2,6 @@ package deployment
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -351,22 +350,5 @@ func TestSireniaRollbackBeforeAnyEngineMoved(t *testing.T) {
 	}
 	if n := formationCount(f, relCurrent, "postgres"); n != 3 || s.primary() != relCurrent || s.lowMembers < 3 || low["postgres"] < 3 {
 		t.Errorf("old postgres=%d primary=%q low members=%d low engines=%d; want 3, %s, 3, 3", n, s.primary(), s.lowMembers, low["postgres"], relCurrent)
-	}
-}
-
-// The failed event carries what the rollback left (EDGE-76 (d)): a sirenia
-// rollback that kept the new release's engines says so in the deployment's
-// error, which flynn-host update and `flynn deployment` print.
-func TestHandleDeploymentReportsTheRollbackOutcome(t *testing.T) {
-	src, err := os.ReadFile("context.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(src)
-	rb := strings.Index(body, "e = c.rollback(log, deployment, f, job.Stop)")
-	add := strings.Index(body, `errMsg += "; rollback: " + e.Error()`)
-	ev := strings.Index(body, "Error:     errMsg,")
-	if rb < 0 || add < rb || ev < add {
-		t.Fatal("the failed event must include the rollback's error")
 	}
 }

@@ -132,8 +132,9 @@ func (s *DeployerSuite) waitForDeploymentStatus(t *c.C, events chan *ct.Deployme
 	for {
 		select {
 		case event := <-events:
-			// ignore pending status
-			if event.Status == "pending" {
+			// ignore pending status, and the running event the worker
+			// writes before it rolls a failed deploy back (EDGE-75)
+			if event.Status == "pending" || (event.Status == "running" && event.RollingBack) {
 				continue
 			}
 			if event.Status != status {

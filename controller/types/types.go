@@ -1005,6 +1005,10 @@ type DeploymentEvent struct {
 	// Progress is a non-fatal status line (pg_basebackup / WAL catch-up)
 	// so flynn-host update can log what a long sirenia wait is doing.
 	Progress string `json:"progress,omitempty"`
+	// RollingBack marks the event the worker writes before it rolls a
+	// failed deploy back (status stays running until the rollback is done
+	// and the failed event is written with finished_at, EDGE-75).
+	RollingBack bool `json:"rolling_back,omitempty"`
 }
 
 func (e *DeploymentEvent) Err() error {

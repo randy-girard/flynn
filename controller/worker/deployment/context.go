@@ -2,29 +2,52 @@ package deployment
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/controller/client"
-	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/attempt"
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 type context struct {
-	db     *postgres.DB
 	client controller.Client
 	logger log15.Logger
+	store  deploymentStore
 }
 
 func JobHandler(db *postgres.DB, client controller.Client, logger log15.Logger) func(*que.Job) error {
-	return (&context{db, client, logger}).HandleDeployment
+	return (&context{client: client, logger: logger, store: &pgDeploymentStore{db}}).HandleDeployment
 }
 
+// errRollbackInProgress is returned to que when another worker has started
+// rolling the deployment back: the job stays queued and is retried later,
+// when the deployment is finished (or the rollback is taken over).
+var errRollbackInProgress = errors.New("another worker is rolling this deployment back")
+
+// rollbackTakeoverAfter is how old a rollback marker must be before a worker
+// that claims the job assumes the worker that wrote it is gone and rolls the
+// deployment back itself. A rollback takes at most a few minutes (the
+// restore wait, 30 s of delete retries, the sirenia waits of up to 2 min,
+// 60 s to write the outcome).
+const rollbackTakeoverAfter = 10 * time.Minute
+
+// HandleDeployment runs a deployment job. The deployment's outcome and its
+// finished_at are written together, last (EDGE-75): after the rollback of a
+// failed deploy, and after SetAppRelease of a successful one. A reader that
+// sees finished_at therefore sees status complete or failed, and the app's
+// next queued deployment starts only once the rollback is done.
+//
+// Before rolling back, the worker records that it is doing so. que's lock is
+// a Postgres session lock: when the platform Postgres primary moves, another
+// worker can claim the same job while this one is still rolling back. That
+// claim finds the marker and does not run Perform again.
 func (c *context) HandleDeployment(job *que.Job) (e error) {
 	log := c.logger.New("fn", "HandleDeployment")
 	log.Info("handling deployment", "job_id", job.ID, "error_count", job.ErrorCount)
@@ -37,11 +60,15 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 
 	log.Info("getting deployment record", "deployment_id", args.ID)
 	deployment, err := c.client.GetDeployment(args.ID)
+	if err == controller.ErrNotFound {
+		log.Error("deployment record not found, dropping the job", "deployment_id", args.ID)
+		return nil
+	}
 	if err != nil {
+		// Nothing has been done yet: let que retry. (This used to set
+		// finished_at with no outcome; a deployment no worker can read
+		// is finished by the stale-deploy repair, deployment_stale.go.)
 		log.Error("error getting deployment record", "deployment_id", args.ID, "err", err)
-		if args.ID != "" {
-			_ = c.setDeploymentDone(args.ID)
-		}
 		return err
 	}
 	if deployment.FinishedAt != nil {
@@ -55,11 +82,21 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		"strategy", deployment.Strategy,
 	)
 
+	startedAt, startErr, rollingBack, err := c.store.RollbackStarted(deployment.ID)
+	if err != nil {
+		log.Error("error reading the deployment's rollback marker", "err", err)
+		return err
+	}
+	if rollingBack {
+		return c.resumeRollback(log, deployment, startedAt, startErr, job.Stop)
+	}
+
 	// Buffer job events so a hung event_insert (postgres primary restart
 	// during a sirenia deploy) cannot stall Perform on an unbuffered send.
 	events := make(chan ct.DeploymentEvent, 32)
-	defer close(events)
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		log.Info("watching deployment events")
 		for ev := range events {
 			log.Info("received deployment event", "status", ev.Status, "type", ev.JobType, "state", ev.JobState)
@@ -71,44 +108,42 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		}
 		log.Info("stopped watching deployment events")
 	}()
+	// closeEvents waits until every progress event is written, so the
+	// rollback marker and the outcome are the deployment's latest events
+	// (deployment_status() is the latest event's status).
+	var closeOnce sync.Once
+	closeEvents := func() {
+		closeOnce.Do(func() {
+			close(events)
+			<-drained
+		})
+	}
+	defer closeEvents()
 
 	var f *ct.Formation
 	defer func() {
 		if deploymentOutcomeFor(e) == outcomeLeaveRunning {
 			return
 		}
-		log.Info("marking the deployment as done")
-		if err := c.setDeploymentDone(deployment.ID); err != nil {
-			log.Error("error marking the deployment as done", "err", err)
-			// isolate_deploys is WHERE finished_at IS NULL. Emitting complete
-			// here leaves the unique index held (HA 2026-09-27: each
-			// controller process opened a 20-conn pool against a 20-conn
-			// role limit).
-			if e == nil {
-				e = err
-			}
-			return
-		}
-		if err := data.StartNextQueuedDeployment(c.db, deployment.AppID); err != nil {
-			log.Error("error starting the next queued deployment", "err", err)
-		}
-		c.clearAppBuilding(deployment.AppID)
-
-		if e == nil {
-			// signal success
-			events <- ct.DeploymentEvent{
-				ReleaseID: deployment.NewReleaseID,
-				Status:    "complete",
-			}
-		} else {
-			// rollback failed deploy
-			errMsg := e.Error()
-			if IsSkipRollback(e) {
+		closeEvents()
+		status, errMsg := "complete", ""
+		if e != nil {
+			status, errMsg = "failed", e.Error()
+			switch {
+			case IsSkipRollback(e):
 				// ErrSkipRollback indicates the deploy failed in some way
 				// but no further action should be taken, so set the error
 				// to nil to avoid retrying the deploy
 				e = nil
-			} else if f != nil {
+			case f != nil:
+				if err := c.store.MarkRollingBack(deployment, errMsg); err != nil {
+					// Without the marker, a worker that claimed the job
+					// during the rollback would run Perform again. Roll
+					// nothing back, finish nothing, and let que retry.
+					log.Error("error recording the rollback, leaving the deployment for a retry", "err", err)
+					e = fmt.Errorf("%s; could not record the rollback: %v", errMsg, err)
+					return
+				}
 				log.Warn("rolling back deployment due to error", "err", e)
 				e = c.rollback(log, deployment, f, job.Stop)
 				if e != nil {
@@ -116,14 +151,15 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 					// `flynn deployment` show: say what the rollback left.
 					errMsg += "; rollback: " + e.Error()
 				}
-			} else {
+			default:
 				e = nil
 			}
-			events <- ct.DeploymentEvent{
-				ReleaseID: deployment.NewReleaseID,
-				Status:    "failed",
-				Error:     errMsg,
-			}
+		}
+		if err := c.finish(log, deployment, status, errMsg); err != nil && e == nil {
+			// isolate_deploys is WHERE finished_at IS NULL: a retry
+			// must finish it (HA 2026-09-27: each controller process
+			// opened a 20-conn pool against a 20-conn role limit).
+			e = err
 		}
 	}()
 
@@ -164,6 +200,65 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 	}
 
 	return nil
+}
+
+// finish writes finished_at with the outcome in one write, then starts the
+// app's next queued deployment.
+func (c *context) finish(log log15.Logger, deployment *ct.Deployment, status, errMsg string) error {
+	log.Info("marking the deployment as done", "status", status)
+	finished, err := c.store.Finish(deployment.ID, status, errMsg)
+	if err != nil {
+		log.Error("error marking the deployment as done", "err", err)
+		return err
+	}
+	if !finished {
+		log.Warn("the deployment was already finished, not writing an outcome", "status", status)
+		return nil
+	}
+	if err := c.store.StartNextQueued(deployment.AppID); err != nil {
+		log.Error("error starting the next queued deployment", "err", err)
+	}
+	c.clearAppBuilding(deployment.AppID)
+	return nil
+}
+
+// resumeRollback handles a claim of a deployment that a worker already
+// started rolling back. It never runs Perform. While the marker is recent
+// the rollback belongs to that worker, and the job is retried later. An old
+// marker means that worker is gone: roll back again from the deployment's
+// original formation (restoring it and deleting the new one are both safe to
+// repeat; the sirenia rollback reads the cluster again) and finish the
+// deployment as failed.
+func (c *context) resumeRollback(log log15.Logger, deployment *ct.Deployment, startedAt time.Time, deployErr string, stop chan struct{}) error {
+	age := time.Since(startedAt)
+	if age < rollbackTakeoverAfter {
+		log.Warn("another worker is rolling this deployment back, not performing it again", "rollback.started_at", startedAt, "age", age)
+		return errRollbackInProgress
+	}
+	log.Warn("the worker that started rolling this deployment back did not finish, rolling it back again", "rollback.started_at", startedAt, "age", age)
+	errMsg := deployErr
+	if errMsg == "" {
+		errMsg = "deployment failed"
+	}
+	if err := c.store.MarkRollingBack(deployment, errMsg); err != nil {
+		log.Error("error recording the rollback", "err", err)
+		return err
+	}
+	errMsg += "; the worker rolling it back did not finish, so it was rolled back again"
+	original := &ct.Formation{
+		AppID:     deployment.AppID,
+		ReleaseID: deployment.OldReleaseID,
+		Processes: deployment.Processes,
+		Tags:      deployment.Tags,
+	}
+	rbErr := c.rollback(log, deployment, original, stop)
+	if rbErr != nil {
+		errMsg += "; rollback: " + rbErr.Error()
+	}
+	if err := c.finish(log, deployment, "failed", errMsg); err != nil {
+		return err
+	}
+	return rbErr
 }
 
 func (c *context) rollback(l log15.Logger, deployment *ct.Deployment, original *ct.Formation, stop chan struct{}) error {
@@ -442,12 +537,6 @@ func hasVolumes(r *ct.Release) bool {
 	return false
 }
 
-func (c *context) setDeploymentDone(id string) error {
-	return doneAttempts.Run(func() error {
-		return c.db.Exec("deployment_update_finished_at_now", id)
-	})
-}
-
 func (c *context) clearAppBuilding(appID string) {
 	if c == nil || c.client == nil || appID == "" {
 		return
@@ -466,7 +555,7 @@ func (c *context) createDeploymentEvent(e ct.DeploymentEvent) error {
 	if e.Status == "" {
 		e.Status = "running"
 	}
-	return c.execWithRetries("event_insert_op", e.AppID, e.DeploymentID, string(ct.EventTypeDeployment), e, ct.EventOpUpdate)
+	return c.store.CreateEvent(e)
 }
 
 var execAttempts = attempt.Strategy{
@@ -474,16 +563,10 @@ var execAttempts = attempt.Strategy{
 	Delay: 100 * time.Millisecond,
 }
 
-// doneAttempts is longer than execAttempts: marking finished_at must survive
-// a brief platform-postgres connection-limit storm or isolate_deploys sticks.
+// doneAttempts is longer than execAttempts: marking finished_at (and the
+// rollback marker) must survive a brief platform-postgres connection-limit
+// storm or isolate_deploys sticks.
 var doneAttempts = attempt.Strategy{
 	Total: 60 * time.Second,
 	Delay: 500 * time.Millisecond,
-}
-
-// Retry db queries in case postgres has been deployed
-func (c *context) execWithRetries(query string, args ...interface{}) error {
-	return execAttempts.Run(func() error {
-		return c.db.Exec(query, args...)
-	})
 }

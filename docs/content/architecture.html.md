@@ -215,6 +215,28 @@ separate persistence loop. A write that is still failing after one minute is
 dropped from that queue. A failed write of a stopped job keeps the job in
 memory so a later sync can retry it.
 
+A deployment is `pending` (or `queued` behind another deploy of the app),
+then `running` while the controller worker rolls it out, and ends `complete`
+or `failed`. The worker writes the outcome and the deployment's `finished_at`
+together, in one write, as its last step: after the new release is made
+current, or after the rollback of a failed deploy. A deployment that has
+`finished_at` therefore always has its outcome, and the app's next queued
+deploy starts only once the rollback is done. Before a rollback starts the
+worker writes a `running` event with `rolling_back` set and a `rolling back:`
+progress line. If another worker claims the job meanwhile (the job queue's
+lock is a Postgres session lock, which is lost when the platform Postgres
+primary moves), it finds that event and does not run the deploy again; it
+retries later. If the event is more than ten minutes old, the worker that
+wrote it is taken to be gone, and the new one rolls back from the
+deployment's original formation and marks the deployment failed. If the
+event cannot be written, the worker rolls nothing back and the job is
+retried. `flynn-host update`, `flynn release deploy`, `git push` and the
+other deploy commands succeed only on `complete` and fail on `failed`. A
+controller from before this change set `finished_at` before the rollback;
+against one, a deployment with `finished_at` and no outcome is waited on for
+two minutes, then counts as a success only if the app's current release is
+the deployment's new release, and fails otherwise.
+
 A deploy that fails is rolled back by the controller worker. The rollback
 restores the old release's process counts and tags, which also removes the
 per-host pins an omni roll puts on the old formation. It then deletes the new

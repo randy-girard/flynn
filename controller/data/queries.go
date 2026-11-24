@@ -59,6 +59,8 @@ var preparedStatements = map[string]string{
 	"deployment_start_next":                    deploymentStartNextQuery,
 	"deployment_update_finished_at":            deploymentUpdateFinishedAtQuery,
 	"deployment_update_finished_at_now":        deploymentUpdateFinishedAtNowQuery,
+	"deployment_finish":                        deploymentFinishQuery,
+	"deployment_rollback_started":              deploymentRollbackStartedQuery,
 	"deployment_delete":                        deploymentDeleteQuery,
 	"event_select":                             eventSelectQuery,
 	"event_insert":                             eventInsertQuery,
@@ -469,6 +471,14 @@ RETURNING d.deployment_id`
 UPDATE deployments SET finished_at = $2 WHERE deployment_id = $1`
 	deploymentUpdateFinishedAtNowQuery = `
 UPDATE deployments SET finished_at = now() WHERE deployment_id = $1`
+	deploymentFinishQuery = `
+UPDATE deployments SET finished_at = now()
+WHERE deployment_id = $1 AND finished_at IS NULL
+RETURNING app_id, new_release_id`
+	deploymentRollbackStartedQuery = `
+SELECT created_at, COALESCE(data->>'progress', '') FROM events
+WHERE object_type = 'deployment' AND object_id = $1 AND data->>'rolling_back' = 'true'
+ORDER BY created_at DESC LIMIT 1`
 	deploymentDeleteQuery = `
 DELETE FROM deployments WHERE deployment_id = $1`
 	deploymentSelectQuery = `

@@ -19,7 +19,7 @@ func TestHandleDeploymentClearsBuildingMeta(t *testing.T) {
 	if !strings.Contains(body, "c.clearAppBuilding(deployment.AppID)") {
 		t.Fatal("finished deploys must clear git-push building meta so the dashboard header drops")
 	}
-	if !strings.Contains(body, "StartNextQueuedDeployment") {
+	if !strings.Contains(body, "c.store.StartNextQueued(deployment.AppID)") {
 		t.Fatal("finished deploys must start the next queued deploy")
 	}
 	if !strings.Contains(body, "if deployment.FinishedAt != nil") {
