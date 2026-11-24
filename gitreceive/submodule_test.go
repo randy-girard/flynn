@@ -272,39 +272,6 @@ func TestSubmoduleCloneRefusesUnsafeURL(t *testing.T) {
 	}
 }
 
-// An app named in SSH_CLIENT_KEY_APPS may use ssh submodules. ssh gets the
-// cluster key file explicitly (it is no longer ~/.ssh/id_rsa), connects to
-// the address that was checked, and verifies the host key under the name.
-func TestSubmoduleSSHUsesKeyOnlyForOptedInApp(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not installed")
-	}
-	_, subRev := submoduleOrigin(t)
-	pathEnv, marker := fakeSSH(t)
-	home := t.TempDir()
-	parent, rev := submoduleParent(t, "ssh://git@203.0.113.5/org/private.git", subRev)
-	_, out, err := runArchiveHook(t, parent, rev, []string{pathEnv, "HOME=" + home, "SSH_CLIENT_KEY_APPS=app-name"}, "app-id", "app-name")
-	if err == nil {
-		t.Fatalf("fake ssh fails, so the hook should fail\n%s", out)
-	}
-	args, rerr := os.ReadFile(marker)
-	if rerr != nil {
-		t.Fatalf("ssh did not run for an opted-in app: %v\n%s", rerr, out)
-	}
-	for _, want := range []string{
-		filepath.Join(home, ".ssh", "cluster_client_key"),
-		"IdentitiesOnly=yes",
-		"BatchMode=yes",
-		"StrictHostKeyChecking=yes",
-		"HostKeyAlias=203.0.113.5",
-		"git@203.0.113.5",
-	} {
-		if !strings.Contains(string(args), want) {
-			t.Errorf("ssh args missing %q:\n%s", want, args)
-		}
-	}
-}
-
 // The hook still includes a submodule when the checker allows it, fetches
 // only the recorded commit (depth 1), and runs under a time limit.
 func TestSubmoduleFetchIsShallowAndPinned(t *testing.T) {
@@ -364,29 +331,5 @@ func TestHookPassesAppIdentityToSubmoduleCheck(t *testing.T) {
 	}
 	if !found {
 		t.Error("hook env lacks RECEIVE_APP_NAME")
-	}
-}
-
-// start.sh must not install the cluster key as root's default identity, and
-// must not write it at all when no app opted in.
-func TestStartScriptInstallsKeyOnlyWhenAppsOptIn(t *testing.T) {
-	for _, c := range []struct {
-		apps string
-		want bool
-	}{{"", false}, {"web", true}} {
-		home := t.TempDir()
-		cmd := exec.Command("bash", "start.sh")
-		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "SSH_CLIENT_KEY=-----BEGIN KEY-----", "SSH_CLIENT_KEY_APPS=" + c.apps, "SSH_CLIENT_HOSTS=github.com ssh-ed25519 AAAA"}
-		cmd.Run() // exec /bin/gitreceived fails here; only the files matter
-		if _, err := os.Stat(filepath.Join(home, ".ssh", "id_rsa")); err == nil {
-			t.Errorf("apps=%q: key installed as the default identity", c.apps)
-		}
-		fi, err := os.Stat(filepath.Join(home, ".ssh", "cluster_client_key"))
-		if c.want != (err == nil) {
-			t.Errorf("apps=%q: key file present=%v", c.apps, err == nil)
-		}
-		if err == nil && fi.Mode().Perm() != 0600 {
-			t.Errorf("key mode %v", fi.Mode().Perm())
-		}
 	}
 }

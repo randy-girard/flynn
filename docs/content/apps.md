@@ -280,8 +280,11 @@ URL must be one of:
   to the addresses that were checked (`http.curloptResolve`) and does not
   follow redirects.
 - `ssh://user@host/path` or `user@host:path`, also to public addresses, only
-  for apps listed in gitreceive `SSH_CLIENT_KEY_APPS` (see
-  [SSH Client Key](production.html.md#ssh-client-key)).
+  for apps listed in gitreceive `SSH_CLIENT_KEY_APPS`, with the cluster
+  `SSH_CLIENT_KEY` set and the host's key in `SSH_CLIENT_HOSTS` (see
+  [SSH Client Key](production.html.md#ssh-client-key)). If either is missing,
+  the push fails with `ssh submodule URL for app <app> requires ...`, naming
+  what is missing.
 
 `file://`, local paths, `http://`, `git://`, remote-helper URLs (`ext::`),
 URLs that start with `-`, `*.discoverd`, single-label names, and private,

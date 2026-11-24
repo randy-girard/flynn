@@ -573,11 +573,13 @@ the checked addresses and does not follow redirects), and `ssh` only for apps
 in `SSH_CLIENT_KEY_APPS`. Local paths, `file://`, `*.discoverd`, other
 schemes, option-looking URLs and private, overlay and loopback addresses are
 refused before anything is contacted. Each fetch is depth 1, time limited and
-file size limited. gitreceive writes the cluster SSH client key only when
-`SSH_CLIENT_KEY_APPS` is set, to `~/.ssh/cluster_client_key` rather than the
-default identity, and passes it to ssh only for an opted-in app's submodule
-(with `IdentitiesOnly`, `BatchMode` and strict host key checking against
-`SSH_CLIENT_HOSTS`). See [Apps — Git submodules](apps.md#git-submodules).
+file size limited. gitreceive drops the cluster SSH client key from its
+environment when `SSH_CLIENT_KEY_APPS` is unset. For an opted-in app's
+submodule it writes the key to a mode 0600 file in a private tmpfs directory
+for that fetch only, removes it afterwards, and passes it to ssh with
+`IdentitiesOnly`, `BatchMode` and strict host key checking against
+`SSH_CLIENT_HOSTS` (no accept-new). A missing ssh client, key or host key
+fails the push with a message naming what is missing, before ssh runs. See [Apps — Git submodules](apps.md#git-submodules).
 
 Build jobs (slugbuilder / dockerbuilder) are a separate overlay class. They
 run tenant code (`bin/compile`, custom buildpacks, Dockerfile `RUN`), so on

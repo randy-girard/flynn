@@ -665,12 +665,28 @@ const archiveTreeFunc = `git-archive-all() {
 		{ read -r proto; read -r fetch_url; read -r pin; } <<< "$plan"
 		[ -n "$proto" ] && [ -n "$fetch_url" ] || return 1
 		local -a cfg=(-c http.followRedirects=false -c credential.helper= -c core.askPass=)
-		local ssh_cmd=""
+		local known="$HOME/.ssh/known_hosts"
 		case "$proto" in
 		https) [ -n "$pin" ] || return 1; cfg+=(-c "http.curloptResolve=$pin") ;;
 		ssh)
+			# EDGE-26: fail closed, naming what is missing, before ssh runs.
+			# Host keys are only ever checked strictly against
+			# SSH_CLIENT_HOSTS (no accept-new: every job start would trust
+			# whatever key answered first).
 			[ -n "$pin" ] || return 1
-			ssh_cmd="ssh -F /dev/null -i ${SSH_CLIENT_KEY_FILE:-$HOME/.ssh/cluster_client_key} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o HostKeyAlias=$pin"
+			local who="${2:-$1}"
+			if ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; then
+				echo "ssh submodule URL for app ${who} requires an OpenSSH client (ssh, ssh-keygen), which is not available in this gitreceive image" >&2
+				return 1
+			fi
+			if [ -z "${SSH_CLIENT_KEY:-}" ]; then
+				echo "ssh submodule URL for app ${who} requires the cluster SSH client key (gitreceive SSH_CLIENT_KEY), which is not set" >&2
+				return 1
+			fi
+			if ! ssh-keygen -F "$pin" -f "$known" >/dev/null 2>&1; then
+				echo "ssh submodule URL for app ${who} requires a host key for ${pin} in gitreceive SSH_CLIENT_HOSTS, which is not available" >&2
+				return 1
+			fi
 			;;
 		esac
 		local -a limit=(timeout -k 10 "${SUBMODULE_FETCH_TIMEOUT:-300}")
@@ -678,8 +694,17 @@ const archiveTreeFunc = `git-archive-all() {
 			ulimit -f "${SUBMODULE_MAX_FILE_KB:-1048576}"
 			unset GIT_SSH GIT_SSH_COMMAND GIT_SSH_VARIANT
 			export GIT_ALLOW_PROTOCOL="$proto" GIT_TERMINAL_PROMPT=0
-			if [ -n "$ssh_cmd" ]; then
-				export GIT_SSH_COMMAND="$ssh_cmd"
+			if [ "$proto" = ssh ]; then
+				# The key exists on disk only for this fetch: mode 0600 in a
+				# private directory on tmpfs (/dev/shm in the gitreceive job),
+				# removed when this subshell exits.
+				keydir="$(mktemp -d "${SUBMODULE_KEY_DIR:-/dev/shm}/flynn-submodule-key.XXXXXX" 2>/dev/null || mktemp -d)" || exit 1
+				trap 'rm -rf "$keydir"' EXIT
+				trap 'exit 1' HUP INT TERM
+				(umask 077 && printf '%s\n' "$SSH_CLIENT_KEY" > "$keydir/key") || exit 1
+				chmod 600 "$keydir/key" || exit 1
+				unset SSH_CLIENT_KEY
+				export GIT_SSH_COMMAND="ssh -F /dev/null -i $keydir/key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o UserKnownHostsFile=$known -o GlobalKnownHostsFile=/dev/null -o HostKeyAlias=$pin"
 			fi
 			rm -rf "$dest"
 			mkdir -p "$(dirname "$dest")"

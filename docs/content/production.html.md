@@ -1149,11 +1149,21 @@ every app) or to a comma-separated list of app names or IDs:
 flynn -a gitreceive env:set SSH_CLIENT_KEY_APPS="billing-web,billing-worker"
 ```
 
-With `SSH_CLIENT_KEY_APPS` unset, no app receives the key, gitreceive does
-not write it to disk, and `ssh` submodule URLs are refused. For an opted-in
-app, gitreceive fetches `ssh` submodules with the key (strict host key
-checking against `SSH_CLIENT_HOSTS`, public addresses only; see
-[Apps — Git submodules](apps.md#git-submodules)). For an opted-in app
+With `SSH_CLIENT_KEY_APPS` unset, no app receives the key, gitreceive drops
+it from its environment at start, and `ssh` submodule URLs are refused. For an
+opted-in app, gitreceive fetches `ssh` submodules with the key, public
+addresses only (see [Apps — Git submodules](apps.md#git-submodules)). The
+gitreceive image installs the OpenSSH client for this. The key is written to
+disk only for the length of each fetch: a mode 0600 file in a private
+directory on tmpfs (`/dev/shm`), removed when the fetch ends; it is never
+`~/.ssh/id_rsa`. Host keys are checked strictly against `SSH_CLIENT_HOSTS`
+(hashed `ssh-keyscan -H` output works); gitreceive never accepts an unknown
+host key. Check the keys `ssh-keyscan` printed against the fingerprints your
+git host publishes before you set them. A push whose submodule host has no
+entry fails with `ssh submodule URL for app <app> requires a host key for
+<host> in gitreceive SSH_CLIENT_HOSTS, which is not available`, and one with
+no `SSH_CLIENT_KEY` set fails with `... requires the cluster SSH client key
+(gitreceive SSH_CLIENT_KEY), which is not set`. For an opted-in app
 the slugbuilder stages the key in a root-only file (mode 0600), loads it into
 an `ssh-agent` and deletes the file before any buildpack runs. Buildpack code
 gets `SSH_AUTH_SOCK` and can authenticate with the key while the build runs, but
