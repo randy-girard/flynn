@@ -21,10 +21,16 @@ func newControllerHTTPClient(dial func(network, addr string) (net.Conn, error), 
 	if dial == nil {
 		dial = discoverdDial
 	}
+	return newControllerHTTPClientContext(contextDial(dial), timeout)
+}
+
+// newControllerHTTPClientContext is newControllerHTTPClient for a dialer that
+// takes the request context itself.
+func newControllerHTTPClientContext(dial func(ctx context.Context, network, addr string) (net.Conn, error), timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			DialContext:           contextDial(dial),
+			DialContext:           dial,
 			ResponseHeaderTimeout: controllerResponseHeaderTimeout,
 			TLSHandshakeTimeout:   10 * time.Second,
 			IdleConnTimeout:       90 * time.Second,

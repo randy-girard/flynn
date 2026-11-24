@@ -1410,11 +1410,15 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		hosts = nil
 	}
 
-	// discoverdDial resolves *.discoverd through the discoverd API (systemd-resolved
+	// The dial resolves *.discoverd through the discoverd API (systemd-resolved
 	// does not) and rotates across instances. A host restart can leave the first
 	// registered controller accepting TCP but not answering HTTP; pinning addrs[0]
-	// made every artifact retry hit that peer.
-	httpClient := newControllerHTTPClient(discoverdDial, 0)
+	// made every artifact retry hit that peer. It also looks the controller up
+	// again with backoff when the lookup is empty or every address refuses: the
+	// host-infra step below replaces discoverd on every host, and a replaced
+	// discoverd answered from an old snapshot for about a second (EDGE-69).
+	updateDial := newUpdateDiscoverdDialer(log)
+	httpClient := newControllerHTTPClientContext(updateDial.DialContext, 0)
 	key := controllerAPIKeyFromHosts(instances[0].Meta, hosts)
 	if key == "" {
 		return missingControllerKeyErr()
@@ -1424,7 +1428,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		log.Error("error creating controller client", "err", err)
 		return fmt.Errorf("error creating controller client: %w", err)
 	}
-	repairClient, err := controller.NewClientWithHTTP("http://controller.discoverd", key, newControllerHTTPClient(discoverdDial, controllerRepairHTTPTimeout))
+	repairClient, err := controller.NewClientWithHTTP("http://controller.discoverd", key, newControllerHTTPClientContext(updateDial.DialContext, controllerRepairHTTPTimeout))
 	if err != nil {
 		log.Error("error creating controller repair client", "err", err)
 		return fmt.Errorf("error creating controller repair client: %w", err)
@@ -1510,6 +1514,9 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		log.Error("error replacing host-infra jobs", "err", err)
 		return err
 	}
+	// Keep-alive connections from before the swap may lead to an address the
+	// old discoverd handed out; the next request looks the controller up again.
+	httpClient.CloseIdleConnections()
 
 	// Deploy system apps in order
 	log.Info("deploying system apps")
