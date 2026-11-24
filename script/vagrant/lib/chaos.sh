@@ -287,7 +287,8 @@ footer{color:var(--mute);font-size:12px;margin-top:32px}
 EOF
     awk -F'\t' -v seed="${seed}" -v rounds="${rounds}" -v order="${order}" -v started="${started}" \
       -v finished="${finished}" -v verdict="${verdict}" -v nodes="$(flynn_vagrant_get_nodes)" \
-      -v tenants="${CHAOS_TENANT_APPS:-none}" -v interval="${CHAOS_MONITOR_INTERVAL:-15}" '
+      -v tenants="${CHAOS_TENANT_APPS:-none}" -v interval="${CHAOS_MONITOR_INTERVAL:-15}" \
+      -v settle="${CHAOS_SETTLE_SUMMARY:-not run}" '
       function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s); return s }
       FILENAME == ARGV[1] {
         total++; t[total] = $2; ph[total] = $3; st[total] = $4; fl[total] = $6
@@ -305,7 +306,7 @@ EOF
         next
       }
       {
-        nr++; rr[nr] = $1; rk[nr] = $2; rt[nr] = $3; rres[nr] = $6; rrec[nr] = $7
+        nr++; rr[nr] = $1; rk[nr] = $2; rt[nr] = $3; rres[nr] = $6; rrec[nr] = $7; rset[nr] = ($8 != "" ? $8 : "-")
         if ($6 == "recovered") { rec++; v = $7; sub(/s$/, "", v); if (v + 0 > maxrec) { maxrec = v + 0; maxround = $1 } }
         else if ($6 == "skipped") skp++
         else failed++
@@ -314,6 +315,7 @@ EOF
         pass = (verdict ~ /^PASSED/)
         print "<h1>Flynn chaos report</h1>"
         printf "<div class=\"verdict %s\">%s</div>\n", (pass ? "pass" : "fail"), esc(verdict)
+        printf "<p class=\"meta\">final full-strength gate: %s</p>\n", esc(settle)
         printf "<p class=\"meta\">%s &rarr; %s &middot; seed <code>%s</code> (<code>CHAOS_SEED=%s</code> repeats this run) &middot; %s nodes &middot; tenant apps: %s<br>fault order: %s</p>\n", esc(started), esc(finished), esc(seed), esc(seed), esc(nodes), esc(tenants), esc(order)
         print "<div class=\"cards\">"
         printf "<div class=\"card\"><div class=\"k\">Rounds</div><div class=\"v\">%d / %d</div><div class=\"s\">recovered of %s planned</div></div>\n", rec, nr, esc(rounds)
@@ -322,10 +324,10 @@ EOF
         printf "<div class=\"card\"><div class=\"k\">Healthy samples</div><div class=\"v\">%d%%</div><div class=\"s\">%d of %d, every %ss</div></div>\n", (total ? int(ok * 100 / total) : 0), ok, total, esc(interval)
         print "</div>"
 
-        print "<h2>Rounds</h2><table><tr><th>Round</th><th>Fault</th><th>Result</th><th>Recovery</th><th>Checks failed</th><th>Target</th></tr>"
+        print "<h2>Rounds</h2><table><tr><th>Round</th><th>Fault</th><th>Result</th><th>Recovery</th><th>Settle</th><th>Checks failed</th><th>Target</th></tr>"
         for (i = 1; i <= nr; i++) {
           cls = (rres[i] == "recovered" ? "ok" : (rres[i] == "skipped" ? "skip" : "bad"))
-          printf "<tr><td class=\"num\">%s</td><td>%s</td><td><span class=\"badge %s\">%s</span></td><td class=\"num\">%s</td><td>%s</td><td class=\"msg\">%s</td></tr>\n", esc(rr[i]), esc(rk[i]), cls, esc(rres[i]), esc(rrec[i]), (secs[rr[i]] ? secs[rr[i]] : "-"), esc(rt[i])
+          printf "<tr><td class=\"num\">%s</td><td>%s</td><td><span class=\"badge %s\">%s</span></td><td class=\"num\">%s</td><td class=\"num\">%s</td><td>%s</td><td class=\"msg\">%s</td></tr>\n", esc(rr[i]), esc(rk[i]), cls, esc(rres[i]), esc(rrec[i]), esc(rset[i]), (secs[rr[i]] ? secs[rr[i]] : "-"), esc(rt[i])
         }
         print "</table>"
 
@@ -378,15 +380,16 @@ chaos_write_report() {
     echo "  started   ${started}"
     echo "  finished  ${finished}"
     echo "  result    ${verdict}"
+    echo "  settle    ${CHAOS_SETTLE_SUMMARY:-not run}"
     echo "  seed      ${seed} (CHAOS_SEED=${seed} repeats this run)"
     echo "  rounds    ${rounds}, order: ${order}"
     echo "  nodes     $(flynn_vagrant_get_nodes), tenant apps: ${CHAOS_TENANT_APPS:-none}"
     echo
     echo "Rounds"
-    printf '  %-5s %-18s %-14s %-9s %-24s %s\n' ROUND FAULT RESULT RECOVERY "CHECKS FAILED" TARGET
+    printf '  %-5s %-18s %-14s %-9s %-7s %-24s %s\n' ROUND FAULT RESULT RECOVERY SETTLE "CHECKS FAILED" TARGET
     awk -F'\t' '
       FILENAME == ARGV[1] { if ($3 ~ /^round /) { split($3, p, " "); n = p[2]; ns = split($5, s, ","); for (k = 1; k <= ns; k++) if (s[k] != "-" && !seen[n, s[k]]++) secs[n] = secs[n] (secs[n] ? "," : "") s[k] }; next }
-      { printf "  %-5s %-18s %-14s %-9s %-24s %s\n", $1, $2, $6, $7, (secs[$1] ? secs[$1] : "-"), $3 }
+      { printf "  %-5s %-18s %-14s %-9s %-7s %-24s %s\n", $1, $2, $6, $7, ($8 != "" ? $8 : "-"), (secs[$1] ? secs[$1] : "-"), $3 }
     ' "${dir}/samples.tsv" "${dir}/rounds.tsv"
     echo
     awk -F'\t' -v interval="${CHAOS_MONITOR_INTERVAL:-15}" '
@@ -427,6 +430,41 @@ chaos_check_budget() {
     echo "FAILED: bad CHAOS_MAX_SKIPPED ${CHAOS_MAX_SKIPPED} (want a number)"
     return 1
   fi
+  if [[ ! "${CHAOS_SETTLE_TRIES:-120}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAILED: bad CHAOS_SETTLE_TRIES ${CHAOS_SETTLE_TRIES} (want a number of tries, at least 1)"
+    return 1
+  fi
+}
+
+# chaos_full_strength runs the gate reload and update use,
+# wait_cluster_stable <label> CHAOS_SETTLE_TRIES 1 (hosts, controller,
+# status, postgres peers healthy, every service at its formation count;
+# default 120 tries five seconds apart). A round counts as recovered once the
+# health sample passes, but a postgres peer can still be resyncing then.
+# Sets CHAOS_SETTLE_SECS to the wait and, when the cluster is not back,
+# CHAOS_SETTLE_REASON to the last line the probe printed. The gate's output
+# is appended to $CHAOS_RUN_DIR/settle.log.
+chaos_full_strength() {
+  local label="$1" tries="${CHAOS_SETTLE_TRIES:-120}" start=${SECONDS} out st=0
+  out="${CHAOS_RUN_DIR}/settle.out"
+  CHAOS_SETTLE_REASON=""
+  echo "$(chaos_now) waiting for full strength after ${label} (up to ${tries} tries)"
+  { wait_cluster_stable "${label}" "${tries}" 1 < /dev/null 2>&1; } | tee "${out}" || st=$?
+  CHAOS_SETTLE_SECS=$((SECONDS - start))
+  { echo "== $(chaos_now) ${label}: exit ${st} after ${CHAOS_SETTLE_SECS}s"; cat "${out}"; } >> "${CHAOS_RUN_DIR}/settle.log"
+  if [[ "${st}" -ne 0 ]]; then
+    # The probe's own failure is the last line of the last attempt that is not
+    # wait_cluster_stable's retry or give-up message.
+    CHAOS_SETTLE_REASON="$(awk '
+      /^probing live cluster/ { last = ""; next }
+      /^waiting for Flynn to settle after / || /^cluster did not return to a stable state after / { next }
+      /^Connection to .* closed/ || /^Warning: Permanently added/ || /^[[:space:]]*$/ { next }
+      { last = $0 }
+      END { print last }' "${out}" | cut -c1-300)"
+    [[ -n "${CHAOS_SETTLE_REASON}" ]] || CHAOS_SETTLE_REASON="the probe did not pass in ${tries} tries"
+  fi
+  rm -f "${out}"
+  return "${st}"
 }
 
 # chaos_verdict prints the verdict of the run in $1 (rounds.tsv, samples.tsv)
@@ -480,8 +518,12 @@ chaos_verdict() {
 
 # chaos_cluster runs CHAOS_ROUNDS faults (default 10) cycling through a
 # shuffled CHAOS_FAULTS list. After each fault it waits CHAOS_SETTLE seconds,
-# then up to CHAOS_TIMEOUT seconds for every health section to pass. Stops at
-# the first round that does not recover. CHAOS_SEED repeats a run. A
+# then up to CHAOS_TIMEOUT seconds for every health section to pass, then for
+# full strength (chaos_full_strength) before the next fault. Stops at the
+# first round that does not recover or does not reach full strength. After
+# the last round the full-strength gate runs once more, and the run fails
+# when the cluster is not back by then, so the next command (update, reload,
+# an e2e) does not start on a degraded cluster. CHAOS_SEED repeats a run. A
 # background monitor samples health for the whole run, and a report is
 # written to CHAOS_REPORT_DIR (default ./flynn-logs/chaos/<UTC time>). The
 # verdict is chaos_verdict's: all rounds skipped, a slow recovery or a broken
@@ -490,7 +532,7 @@ chaos_cluster() {
   require_cluster_nodes
   local rounds="${CHAOS_ROUNDS:-10}" timeout="${CHAOS_TIMEOUT:-900}" settle="${CHAOS_SETTLE:-20}"
   local seed="${CHAOS_SEED:-$(date +%s)}" kinds=() i j tmp kind start st inject_at
-  local started verdict
+  local started verdict recovered recovered_at settled settle_line="" final_fail=""
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   chaos_check_budget >&2 || return 1
   CHAOS_RUN_DIR="${CHAOS_REPORT_DIR:-${ROOT}/flynn-logs/chaos/$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -523,6 +565,7 @@ chaos_cluster() {
   trap 'chaos_stop_monitor' EXIT
   trap 'chaos_stop_monitor; exit 130' INT TERM
   verdict=""
+  CHAOS_SETTLE_SUMMARY=""
   for ((i = 1; i <= rounds; i++)); do
     kind="${kinds[$(((i - 1) % ${#kinds[@]}))]}"
     CHAOS_TARGET=""
@@ -539,6 +582,7 @@ chaos_cluster() {
       echo "$(chaos_now) round ${i}/${rounds} ${kind}: fault failed: ${CHAOS_TARGET}" >&2
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" inject-failed - >> "${CHAOS_RUN_DIR}/rounds.tsv"
       verdict="FAILED: round ${i} ${kind} could not inject the fault"
+      settle_line="not run: the run stopped at round ${i}"
       break
     fi
     echo "$(chaos_now) round ${i}/${rounds} ${kind}: ${CHAOS_TARGET}"
@@ -550,15 +594,45 @@ chaos_cluster() {
     fi
     if chaos_wait_healthy "round ${i}" "${timeout}" "${avoid_node}"; then
       rm -f "${CHAOS_RUN_DIR}/avoid"
-      echo "$(chaos_now) round ${i}/${rounds} ${kind}: recovered in $((SECONDS - start))s"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" recovered "$((SECONDS - start))s" >> "${CHAOS_RUN_DIR}/rounds.tsv"
+      recovered="$((SECONDS - start))s"
+      recovered_at="$(date -u +%s)"
+      echo "$(chaos_now) round ${i}/${rounds} ${kind}: recovered in ${recovered}"
+      # The last round is followed by the final gate below. The gate is not
+      # part of the round's phase, so it is not charged to the round budget.
+      settled=final
+      if (( i < rounds )); then
+        echo "settle after round ${i} ${kind}" > "${CHAOS_RUN_DIR}/phase"
+        if ! chaos_full_strength "round ${i} ${kind}"; then
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "${recovered_at}" recovered "${recovered}" ">${CHAOS_SETTLE_SECS}s" >> "${CHAOS_RUN_DIR}/rounds.tsv"
+          verdict="FAILED: cluster did not return to full strength after round ${i} ${kind}: ${CHAOS_SETTLE_REASON}"
+          echo "$(chaos_now) ${verdict}" >&2
+          settle_line="not run: the run stopped at round ${i}"
+          break
+        fi
+        settled="${CHAOS_SETTLE_SECS}s"
+      fi
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "${recovered_at}" recovered "${recovered}" "${settled}" >> "${CHAOS_RUN_DIR}/rounds.tsv"
     else
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" FAILED ">${timeout}s" >> "${CHAOS_RUN_DIR}/rounds.tsv"
       verdict="FAILED: round ${i} ${kind} did not recover within ${timeout}s"
+      settle_line="not run: the run stopped at round ${i}"
       break
     fi
     echo "between rounds" > "${CHAOS_RUN_DIR}/phase"
   done
+  # Final gate: the run is only over when the cluster is back at full
+  # strength. Skipped when a round already stopped the run (it failed).
+  if [[ -z "${settle_line}" ]]; then
+    echo "settle" > "${CHAOS_RUN_DIR}/phase"
+    if chaos_full_strength "chaos"; then
+      settle_line="full strength after ${CHAOS_SETTLE_SECS}s (CHAOS_SETTLE_TRIES=${CHAOS_SETTLE_TRIES:-120})"
+    else
+      settle_line="not at full strength after ${CHAOS_SETTLE_SECS}s (CHAOS_SETTLE_TRIES=${CHAOS_SETTLE_TRIES:-120}): ${CHAOS_SETTLE_REASON}"
+      final_fail="cluster did not return to full strength after chaos: ${CHAOS_SETTLE_REASON}"
+      echo "$(chaos_now) FAILED: ${final_fail}" >&2
+    fi
+  fi
+  CHAOS_SETTLE_SUMMARY="${settle_line}"
   chaos_stop_monitor
   trap - EXIT INT TERM
   st=0
@@ -566,6 +640,13 @@ chaos_cluster() {
     st=1
   else
     verdict="$(chaos_verdict "${CHAOS_RUN_DIR}" "${timeout}")" || st=1
+  fi
+  if [[ -n "${final_fail}" ]]; then
+    st=1
+    case "${verdict}" in
+      FAILED:*) verdict="FAILED: ${final_fail}; ${verdict#FAILED: }" ;;
+      *) verdict="FAILED: ${final_fail}" ;;
+    esac
   fi
   chaos_write_report "${CHAOS_RUN_DIR}" "${seed}" "${rounds}" "${kinds[*]}" "${started}" "${verdict}"
   echo

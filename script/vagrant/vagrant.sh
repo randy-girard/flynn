@@ -84,8 +84,15 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
              shuffled CHAOS_FAULTS list (default: system-job plugin-job
              datastore-primary datastore-replica tenant-job host-restart
              node-reboot). After each fault, wait up to CHAOS_TIMEOUT seconds
-             (default 900) for every monitor check to pass; stop at the first
-             round that does not recover. Fails too when every round was
+             (default 900) for every monitor check to pass, then for full
+             strength (the reload/update gate: hosts, postgres peers healthy,
+             every service at its formation count; CHAOS_SETTLE_TRIES
+             five-second tries, default 120) before the next fault; stop at
+             the first round that does not get there. After the last round
+             the same gate runs again and the run fails ("FAILED: cluster did
+             not return to full strength after chaos: <reason>") when the
+             cluster is not back, so the next command does not start on a
+             degraded cluster. Fails too when every round was
              skipped, more than CHAOS_MAX_SKIPPED were skipped, a recovery
              took longer than CHAOS_TIMEOUT, or a round broke CHAOS_BUDGET
              (<fault>:<check>=<max> failed samples; default

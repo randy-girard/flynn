@@ -956,7 +956,7 @@ printf '1\tnode-reboot\tnode=dev-node2\t0\t0\trecovered\t75s\n2\ttenant-job\t-\t
 report="$(bash -c 'set -euo pipefail; flynn_vagrant_get_nodes() { echo 3; }; source "$1"; chaos_write_report "$2" 42 2 "node-reboot tenant-job" start "PASSED: 1 recovered, 1 skipped"; cat "$2/report.txt"' _ "${mod}/lib/chaos.sh" "${report_dir}")"
 html="$(cat "${report_dir}/report.html")"
 rm -rf "${report_dir}"
-for want in "PASSED: 1 recovered, 1 skipped" "CHAOS_SEED=42" "node-reboot        recovered      75s       cluster,plugins" "3 samples every 15s, 1 healthy (33%)" "cluster    2/3            1        ~30s" "plugins: dashboard=502" "report.html"; do
+for want in "PASSED: 1 recovered, 1 skipped" "CHAOS_SEED=42" "node-reboot        recovered      75s       -       cluster,plugins" "3 samples every 15s, 1 healthy (33%)" "cluster    2/3            1        ~30s" "plugins: dashboard=502" "report.html"; do
   if ! grep -Fq -e "${want}" <<<"${report}"; then
     echo "chaos report missing: ${want}" >&2
     printf '%s\n' "${report}" >&2

@@ -119,6 +119,7 @@ flynn_vagrant_get_nodes() { echo 3; }
 sleep() { :; }
 chaos_wait_healthy() { CHAOS_HEALTH_OUT="ok cluster: fine"; }
 chaos_monitor_loop() { :; }
+wait_cluster_stable() { echo "cluster is stable after $1"; }
 chaos_inject() { echo "inject $1" >> "${CHAOS_REPORT_DIR}/injected"; CHAOS_TARGET="kind=$1 none running"; [[ "${INJECT}" == skip ]] && return 3; CHAOS_TARGET="kind=$1 app=x"; return 0; }
 chaos_cluster
 ' _ "${lib}" "${tmp}" "${tmp}/${name}" "${inject}" > "${tmp}/${name}.out" 2>&1
