@@ -1338,6 +1338,17 @@ func (s *Store) Restore(r io.ReadCloser) error {
 	return nil
 }
 
+// CatchingUp reports whether the store is still re-applying the raft log it
+// had before Open. Until then its data is the last snapshot plus part of the
+// log: a replaced discoverd answered GET instances with 404 or with controller
+// addresses from before the last deploy (EDGE-69). The handler refuses those
+// reads with a retryable 503 so clients fail over to a current peer.
+func (s *Store) CatchingUp() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.catchingUp()
+}
+
 // catchingUp reports whether the store is still re-applying the raft log it
 // had before Open. Once caught up it stays caught up. Requires s.mu.
 func (s *Store) catchingUp() bool {

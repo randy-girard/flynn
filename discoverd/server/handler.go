@@ -386,6 +386,19 @@ func (h *Handler) serveDeleteInstance(w http.ResponseWriter, r *http.Request, pa
 	}
 }
 
+// storeCatchingUp answers a retryable 503 while a restarted store is still
+// re-applying its log, as streams already do. Its instance list is the last
+// snapshot until then (EDGE-69); the discoverd client fails over to another
+// peer on a retryable error but keeps its pin on a 404 or a stale 200.
+func (h *Handler) storeCatchingUp(w http.ResponseWriter) bool {
+	c, ok := h.Store.(interface{ CatchingUp() bool })
+	if !ok || !c.CatchingUp() {
+		return false
+	}
+	hh.ServiceUnavailableError(w, ErrCatchingUp.Error())
+	return true
+}
+
 // serveGetInstances returns a list of all instances for a service.
 func (h *Handler) serveGetInstances(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	// If the client is requesting a stream, then handle as a stream.
@@ -395,6 +408,9 @@ func (h *Handler) serveGetInstances(w http.ResponseWriter, r *http.Request, para
 	}
 
 	// Otherwise read instances from the store.
+	if h.storeCatchingUp(w) {
+		return
+	}
 	instances, err := h.Store.Instances(params.ByName("service"))
 	if err != nil {
 		hh.Error(w, err)
@@ -454,6 +470,9 @@ func (h *Handler) serveGetLeader(w http.ResponseWriter, r *http.Request, params 
 	}
 
 	// Otherwise retrieve the current leader.
+	if h.storeCatchingUp(w) {
+		return
+	}
 	service := params.ByName("service")
 	leader, err := h.Store.ServiceLeader(service)
 	if err != nil {

@@ -1235,7 +1235,11 @@ type MockStore struct {
 	SetServiceLeaderFn func(service, id string) error
 	ServiceLeaderFn    func(service string) (*discoverd.Instance, error)
 	SubscribeFn        func(service string, sendCurrent bool, kinds discoverd.EventKind, ch chan *discoverd.Event) stream.Stream
+	CatchingUpFn       func() bool
 }
+
+// CatchingUp reports false unless the test sets CatchingUpFn.
+func (s *MockStore) CatchingUp() bool { return s.CatchingUpFn != nil && s.CatchingUpFn() }
 
 func (s *MockStore) Leader() string { return s.LeaderFn() }
 func (s *MockStore) IsLeader() bool { return s.IsLeaderFn() }
