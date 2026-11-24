@@ -6,7 +6,11 @@
 # (from the controller's provider resources) and which job of each is the
 # leader (from discoverd). When either lookup fails it must not guess: a
 # controller error fails the run without stopping a job, and a datastore
-# whose leader is unknown is left out of both datastore pools.
+# whose leader is unknown is left out of both datastore pools. A replica is a
+# database peer (an instance of the datastore's discoverd service) that is not
+# the leader, never another process of the same app such as the postgres
+# `web` API job; when the instances cannot be listed the datastore is left out
+# of both pools too.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 guest="${ROOT}/script/vagrant/guest/chaos-fault.sh"
@@ -61,13 +65,14 @@ addr="127.0.0.1:$(cat "${tmp}/port")"
 #   providers=500      every controller instance fails GET /providers
 #   first_ctl_down=1   the first controller instance fails, the second works
 #   pg_leader=500      discoverd fails the postgres leader lookup
+#   pg_instances=500   discoverd fails the postgres instances lookup
 #   mysql=1            add a mysql resource (leader 10.0.0.4, replica 10.0.0.5)
 routes() {
-  local ctl_instances=200 providers=200 first_ctl_down=0 pg_leader=200 mysql=0 kv
+  local ctl_instances=200 providers=200 first_ctl_down=0 pg_leader=200 pg_instances=200 mysql=0 kv
   for kv in "$@"; do local "${kv}"; done
-  python3 - "${tmp}/routes.json" "${ctl_instances}" "${providers}" "${first_ctl_down}" "${pg_leader}" "${mysql}" <<'PY'
+  python3 - "${tmp}/routes.json" "${ctl_instances}" "${providers}" "${first_ctl_down}" "${pg_leader}" "${pg_instances}" "${mysql}" <<'PY'
 import json, sys
-out, ctl_instances, providers, first_ctl_down, pg_leader, mysql = sys.argv[1:]
+out, ctl_instances, providers, first_ctl_down, pg_leader, pg_instances, mysql = sys.argv[1:]
 ctl = [{"addr": "@ADDR@"}]
 r = {}
 if first_ctl_down == "1":
@@ -81,6 +86,10 @@ r["/providers"] = [int(providers), [{"id": "p1"}]]
 r["/providers/p1/resources"] = [200, res]
 r["/services/postgres/leader"] = [int(pg_leader), {"addr": "10.0.0.1:5432"}]
 r["/services/mysql/leader"] = [200, {"addr": "10.0.0.4:3306"}]
+# The database peers only; the postgres web job (10.0.0.30) registers as
+# postgres-api, not postgres.
+r["/services/postgres/instances"] = [int(pg_instances), [{"addr": "10.0.0.%d:5432" % i} for i in (1, 2, 3)]]
+r["/services/mysql/instances"] = [200, [{"addr": "10.0.0.4:3306"}, {"addr": "10.0.0.5:3306"}]]
 r["/services/flynn-host/instances"] = [200, [{"addr": "@ADDR@", "meta": {"id": "host1"}}]]
 def job(i, app, ip, system=True, typ="web"):
     md = {"flynn-controller.app_name": app, "flynn-controller.type": typ}
@@ -91,6 +100,7 @@ jobs = [
     job("job-pg-leader", "postgres", "10.0.0.1", typ="postgres"),
     job("job-pg-replica1", "postgres", "10.0.0.2", typ="postgres"),
     job("job-pg-replica2", "postgres", "10.0.0.3", typ="postgres"),
+    job("job-pg-web", "postgres", "10.0.0.30", typ="web"),
     job("job-router", "router", "10.0.0.10", typ="app"),
     job("job-tenant", "tenant-app", "10.0.0.20", system=False),
 ]
@@ -130,7 +140,7 @@ expect_error() {
 
 # Healthy stubs: every pool is what the fault name says.
 routes
-for seed in 1 2 3 4 5 6 7 8; do
+for seed in $(seq 1 16); do
   run system-job "${seed}"
   [[ "${st}" -eq 0 ]] || fail "system-job must succeed (exit ${st})"
   [[ "$(stopped)" == "job-router" ]] || fail "system-job must stop only non-datastore system jobs, stopped $(stopped)"
@@ -139,7 +149,7 @@ for seed in 1 2 3 4 5 6 7 8; do
   run datastore-replica "${seed}"
   case "$(stopped)" in
     job-pg-replica1|job-pg-replica2) ;;
-    *) fail "datastore-replica must stop a non-leader, stopped $(stopped)" ;;
+    *) fail "datastore-replica must stop a non-leader database peer (not the web API job), stopped $(stopped)" ;;
   esac
   run tenant-job "${seed}"
   [[ "$(stopped)" == "job-tenant" ]] || fail "tenant-job must stop the tenant job, stopped $(stopped)"
@@ -180,6 +190,20 @@ done
 # The unknown leader does not affect the other kinds.
 run system-job 1
 [[ "${st}" -eq 0 && "$(stopped)" == "job-router" ]] || fail "system-job must not depend on leader lookups, stopped $(stopped)"
+
+# Postgres instances cannot be listed: the replicas cannot be told apart from
+# the web job, so postgres is left out of both pools.
+routes pg_instances=500
+for fault in datastore-primary datastore-replica; do
+  run "${fault}" 1
+  expect_error "${fault} with the postgres instances unknown"
+  grep -Fq "postgres" "${tmp}/out" || fail "${fault}: must name the datastore whose instances are unknown"
+done
+routes pg_instances=500 mysql=1
+for seed in 1 2 3 4; do
+  run datastore-replica "${seed}"
+  [[ "${st}" -eq 0 && "$(stopped)" == "job-my-replica" ]] || fail "datastore-replica must skip postgres when its instances are unknown, stopped $(stopped) exit ${st}"
+done
 
 # Unknown postgres leader, mysql known: only mysql jobs are picked.
 routes pg_leader=500 mysql=1

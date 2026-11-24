@@ -4,7 +4,9 @@
 #   system-job         Layer 1 job (controller, router, discoverd, flannel, ...)
 #   plugin-job         a *-plugin app job (dashboard, datastore APIs, ...)
 #   datastore-primary  the leader job of a provider resource (forces failover)
-#   datastore-replica  a non-leader job of a provider resource
+#   datastore-replica  a non-leader database peer of a provider resource (an
+#                      instance of its discoverd service, never another
+#                      process of the app such as the postgres web API job)
 #   tenant-job         a job of a user app
 # APP_MATCH (optional) limits the datastore kinds to apps whose name contains
 # it, e.g. kafka. SEED makes the pick repeatable. Prints "target ..." and exits 3 when no job
@@ -13,9 +15,9 @@
 # It does not guess when a lookup fails. If no controller instance lists the
 # provider resources, datastore apps cannot be told apart from other system
 # or tenant jobs, so it exits 2 without stopping anything (plugin-job does
-# not need that list). A datastore whose discoverd leader lookup fails is
-# left out of both datastore pools; if that leaves the pool empty it exits 2
-# instead of 3. DISCOVERD_URL and HOST_JSON override the local discoverd and
+# not need that list). A datastore whose discoverd leader or instances lookup
+# fails is left out of both datastore pools; if that leaves the pool empty it
+# exits 2 instead of 3. DISCOVERD_URL and HOST_JSON override the local discoverd and
 # /etc/flynn/host.json (tests).
 set -euo pipefail
 export FLYNN_SKIP_UPDATE_CHECK=1
@@ -43,6 +45,15 @@ def leader_ip(svc):
     """The leader's IP, or None with the reason when discoverd cannot say."""
     try:
         return get(DISCOVERD + "/services/%s/leader" % svc, D)["addr"].rsplit(":", 1)[0], None
+    except Exception as e:
+        return None, "%s: %s" % (type(e).__name__, e)
+
+
+def peer_ips(svc):
+    """The IPs of the service's discoverd instances (the database peers), or
+    None with the reason when discoverd cannot say."""
+    try:
+        return {i["addr"].rsplit(":", 1)[0] for i in get(DISCOVERD + "/services/%s/instances" % svc, D) or []}, None
     except Exception as e:
         return None, "%s: %s" % (type(e).__name__, e)
 
@@ -100,15 +111,20 @@ for h in get(DISCOVERD + "/services/flynn-host/instances", D) or []:
             "system": (md.get("flynn-system-app") or "").lower() == "true",
         })
 
-leaders, unknown = {}, {}
+leaders, peers, unknown = {}, {}, {}
 if kind.startswith("datastore-"):
     for svc in sorted(datastores):
         ip, err = leader_ip(svc)
-        if ip:
-            leaders[svc] = ip
-        else:
+        if not ip:
             unknown[svc] = err
             print("note: leader of %s unknown (%s); left out of the datastore pools" % (svc, err))
+            continue
+        ips, err = peer_ips(svc)
+        if ips is None:
+            unknown[svc] = err
+            print("note: instances of %s unknown (%s); left out of the datastore pools" % (svc, err))
+            continue
+        leaders[svc], peers[svc] = ip, ips
 if kind == "system-job":
     pool = [j for j in jobs if j["system"] and j["app"] not in datastores and not j["app"].endswith("-plugin")]
 elif kind == "plugin-job":
@@ -116,7 +132,8 @@ elif kind == "plugin-job":
 elif kind == "datastore-primary":
     pool = [j for j in jobs if j["app"] in leaders and j["ip"] and j["ip"] == leaders[j["app"]]]
 elif kind == "datastore-replica":
-    pool = [j for j in jobs if j["app"] in leaders and j["ip"] and j["ip"] != leaders[j["app"]]]
+    pool = [j for j in jobs if j["app"] in leaders and j["ip"] and j["ip"] != leaders[j["app"]]
+            and j["ip"] in peers[j["app"]]]
 elif kind == "tenant-job":
     pool = [j for j in jobs if not j["system"] and j["app"] and j["app"] not in datastores
             and not j["app"].endswith("-plugin")]
@@ -126,7 +143,7 @@ pool = [j for j in pool if j["id"]]
 if app_match and kind.startswith("datastore-"):
     pool = [j for j in pool if app_match in j["app"]]
 if not pool and unknown and any(not app_match or app_match in a for a in unknown):
-    print("error: no %s job with a known leader (unknown: %s); not stopping a job" % (kind, ", ".join(sorted(unknown))))
+    print("error: no %s job with a known leader and peers (unknown: %s); not stopping a job" % (kind, ", ".join(sorted(unknown))))
     raise SystemExit(2)
 if not pool:
     print("target kind=%s none running" % kind)
