@@ -176,7 +176,9 @@ still be running the app, or that belongs to a datastore, is left alone (see
 stops the engines that run its primary: once the primary has moved to the new
 release, the rollback keeps that release's engines, rolls back the other
 process types and fails the deployment with an error saying so. The next
-deploy moves the engines to one release.
+deploy moves the engines to one release. A deploy command (`git push`, `flynn release
+deploy`, `flynn-host update`) waits until the deployment is `complete` or
+`failed`, including the rollback, and exits non-zero when it failed.
 
 ### Release phase
 

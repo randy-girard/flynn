@@ -11,24 +11,24 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 )
 
-func TestDeploymentFinishedTreatsRunningWithFinishedAtAsComplete(t *testing.T) {
+func TestDeploymentSucceededNeedsTheCompleteStatus(t *testing.T) {
 	now := time.Now()
-	if !deploymentFinished(&ct.Deployment{Status: "running", FinishedAt: &now}) {
-		t.Fatal("postgres HA deploys emit job events with status=running; after finished_at is set the complete event can be lost during failover")
+	if deploymentSucceeded(&ct.Deployment{Status: "running", FinishedAt: &now}) {
+		t.Fatal("finished_at with status running is not a success: an older worker set it before rolling a failed deploy back (EDGE-75)")
 	}
-	if !deploymentFinished(&ct.Deployment{Status: "complete"}) {
-		t.Fatal("status=complete must be finished")
+	if !deploymentSucceeded(&ct.Deployment{Status: "complete", FinishedAt: &now}) {
+		t.Fatal("status=complete must be a success")
 	}
-	if deploymentFinished(&ct.Deployment{Status: "failed", FinishedAt: &now}) {
+	if deploymentSucceeded(&ct.Deployment{Status: "failed", FinishedAt: &now}) {
 		t.Fatal("failed must not be treated as success")
 	}
-	if deploymentFinished(&ct.Deployment{Status: "pending"}) {
+	if deploymentSucceeded(&ct.Deployment{Status: "pending"}) {
 		t.Fatal("in-flight deploy is not finished")
 	}
-	if deploymentFinished(&ct.Deployment{Status: "running"}) {
+	if deploymentSucceeded(&ct.Deployment{Status: "running"}) {
 		t.Fatal("running without finished_at is still in progress")
 	}
-	if deploymentFinished(nil) {
+	if deploymentSucceeded(nil) {
 		t.Fatal("nil deployment is not finished")
 	}
 }
@@ -37,9 +37,8 @@ func TestWaitAppReleaseUnblocksWhenSSEStallsAfterPostgresRestart(t *testing.T) {
 	// flynn-host update logs "waiting for deployment to complete" then blocks
 	// in DeployAppRelease. A sirenia postgres deploy kills the primary; the
 	// controller SSE connection stays open but never delivers "complete".
-	// The worker still sets finished_at (and the last event is often
-	// status=running from a job up/down). Without polling, the updater hangs
-	// until the 30m stopWait.
+	// The worker writes finished_at with status complete (EDGE-75). Without
+	// polling, the updater hangs until the 30m stopWait.
 	now := time.Now()
 	events := make(chan *ct.DeploymentEvent)
 	go func() {
@@ -50,7 +49,7 @@ func TestWaitAppReleaseUnblocksWhenSSEStallsAfterPostgresRestart(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- waitAppRelease(events, func() (*ct.Deployment, error) {
-			return &ct.Deployment{Status: "running", FinishedAt: &now}, nil
+			return &ct.Deployment{Status: "complete", FinishedAt: &now}, nil
 		}, func() error {
 			return errors.New("deployment failed")
 		}, stop, 15*time.Millisecond, nil)
@@ -135,8 +134,8 @@ func TestDeployAppReleasePollsWhileStreamOpen(t *testing.T) {
 	if wait < 0 || wait < fn {
 		t.Fatal("DeployAppRelease must poll via waitAppRelease so a stalled postgres SSE stream cannot hang flynn-host update")
 	}
-	if !strings.Contains(body[fn:wait], "waitAppRelease(") {
-		t.Fatal("DeployAppRelease must call waitAppRelease")
+	if !strings.Contains(body[fn:wait], "deployWait{") || !strings.Contains(body[fn:wait], "isCurrent:") {
+		t.Fatal("DeployAppRelease must wait with deployWait (polling, and the app release check for an older controller)")
 	}
 	if !strings.Contains(body, "logDeployProgress") {
 		t.Fatal("DeployAppRelease must log Progress events so postgres HA waits are visible")
@@ -153,7 +152,7 @@ func TestWaitAppReleaseKeepsPollingAfterStreamEnds(t *testing.T) {
 			return &ct.Deployment{Status: "running"}, nil
 		}
 		now := time.Now()
-		return &ct.Deployment{Status: "running", FinishedAt: &now}, nil
+		return &ct.Deployment{Status: "complete", FinishedAt: &now}, nil
 	}, nil, stop, 10*time.Millisecond, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -767,11 +767,26 @@ func (c *Client) DeployAppRelease(appID, releaseID string, stopWait <-chan struc
 	}
 	defer stream.Close()
 
-	err = waitAppRelease(events, func() (*ct.Deployment, error) {
-		return c.GetDeployment(d.ID)
-	}, func() error {
-		return c.deploymentFailedMessage(d)
-	}, stopWait, deployWaitPollInterval, logDeployProgress)
+	err = deployWait{
+		events: events,
+		get: func() (*ct.Deployment, error) {
+			return c.GetDeployment(d.ID)
+		},
+		isCurrent: func(dep *ct.Deployment) (bool, error) {
+			rel, err := c.GetAppRelease(dep.AppID)
+			if err != nil {
+				return false, err
+			}
+			return rel.ID == dep.NewReleaseID, nil
+		},
+		onFailed: func() error {
+			return c.deploymentFailedMessage(d)
+		},
+		stopWait:   stopWait,
+		interval:   deployWaitPollInterval,
+		grace:      finishedWithoutOutcomeGrace,
+		onProgress: logDeployProgress,
+	}.run()
 	if err != nil && stream.Err() != nil {
 		return fmt.Errorf("%w (event stream ended: %s)", err, stream.Err())
 	}
@@ -783,26 +798,22 @@ func (c *Client) DeployAppRelease(appID, releaseID string, stopWait <-chan struc
 // wait; the SSE stream can stay open without ever delivering "complete".
 const deployWaitPollInterval = time.Second
 
-// deploymentFinished reports whether GetDeployment shows a successful
-// terminal deploy. deployment_status() is the latest event's status field,
-// so after a postgres failover the row often still says "running" even
-// though the worker already wrote finished_at.
-func deploymentFinished(d *ct.Deployment) bool {
-	if d == nil || d.Status == "failed" {
-		return false
-	}
-	if d.Status == "complete" {
-		return true
-	}
-	return d.FinishedAt != nil
+// finishedWithoutOutcomeGrace is how long a deploy wait gives a deployment
+// that has finished_at but no complete or failed status to show its outcome.
+// A current controller writes finished_at and the outcome in one write
+// (EDGE-75), so this only happens with an older one: it set finished_at
+// before rolling a failed deploy back (up to about 40 s) and wrote the
+// failed event after, and the complete event could be lost when the
+// platform Postgres primary moved.
+const finishedWithoutOutcomeGrace = 2 * time.Minute
+
+// deploymentSucceeded reports whether GetDeployment shows a successful
+// deploy. deployment_status() is the latest event's status, so only
+// "complete" is a success: finished_at alone is not (EDGE-75).
+func deploymentSucceeded(d *ct.Deployment) bool {
+	return d != nil && d.Status == "complete"
 }
 
-// waitAppRelease waits for a deployment to finish. It watches the event
-// stream and also polls GetDeployment so a stalled SSE connection after a
-// postgres restart cannot hang flynn-host update until stopWait (30m).
-// The poll runs beside the stream read: GetDeployment blocks while the
-// platform Postgres primary is down, and doing that poll on the stream
-// goroutine drops the completion event.
 func logDeployProgress(e *ct.DeploymentEvent) {
 	if e == nil {
 		return
@@ -816,38 +827,89 @@ func logDeployProgress(e *ct.DeploymentEvent) {
 	}
 }
 
+// waitAppRelease waits for a deployment's outcome; see deployWait.
 func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deployment, error), onFailed func() error, stopWait <-chan struct{}, interval time.Duration, onProgress func(*ct.DeploymentEvent)) error {
+	return deployWait{
+		events:     events,
+		get:        get,
+		onFailed:   onFailed,
+		stopWait:   stopWait,
+		interval:   interval,
+		grace:      finishedWithoutOutcomeGrace,
+		onProgress: onProgress,
+	}.run()
+}
+
+// deployWait waits for a deployment to succeed or fail. It watches the
+// event stream and also polls GetDeployment so a stalled SSE connection
+// after a postgres restart cannot hang flynn-host update until stopWait
+// (30m). The poll runs beside the stream read: GetDeployment blocks while
+// the platform Postgres primary is down, and doing that poll on the stream
+// goroutine drops the completion event.
+//
+// Success is a complete event or status. A failed event or status is a
+// failure. finished_at with any other status is neither: the wait goes on
+// for grace, and then fails with an error that says so, unless isCurrent
+// shows the deployment's new release is the app's current release (the
+// worker makes it current only after Perform succeeded, before finished_at:
+// an older controller whose complete event was lost).
+type deployWait struct {
+	events     <-chan *ct.DeploymentEvent
+	get        func() (*ct.Deployment, error)
+	isCurrent  func(*ct.Deployment) (bool, error)
+	onFailed   func() error
+	stopWait   <-chan struct{}
+	interval   time.Duration
+	grace      time.Duration
+	onProgress func(*ct.DeploymentEvent)
+}
+
+type deployPoll struct {
+	dep *ct.Deployment
+	// current: the new release is the app's current release (asked only
+	// for a finished deployment without an outcome).
+	current bool
+}
+
+func (w deployWait) run() error {
+	interval := w.interval
 	if interval <= 0 {
 		interval = deployWaitPollInterval
 	}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	failed := func() error {
-		if onFailed != nil {
-			return onFailed()
+		if w.onFailed != nil {
+			return w.onFailed()
 		}
 		return errors.New("deployment failed")
 	}
 	// One poll at a time, off the select. A GetDeployment that blocks on a
 	// down primary must not stop this loop from reading the event stream.
-	polls := make(chan *ct.Deployment, 1)
+	polls := make(chan deployPoll, 1)
 	var polling int32
 	launchPoll := func() {
 		if !atomic.CompareAndSwapInt32(&polling, 0, 1) {
 			return
 		}
 		go func() {
-			dep, err := get()
-			atomic.StoreInt32(&polling, 0)
+			defer atomic.StoreInt32(&polling, 0)
+			dep, err := w.get()
 			if err != nil || dep == nil {
 				return
 			}
+			p := deployPoll{dep: dep}
+			if dep.FinishedAt != nil && dep.Status != "complete" && dep.Status != "failed" && w.isCurrent != nil {
+				p.current, _ = w.isCurrent(dep)
+			}
 			select {
-			case polls <- dep:
+			case polls <- p:
 			default:
 			}
 		}()
 	}
+	events := w.events
+	var finishedSeen time.Time
 	for {
 		select {
 		case e, ok := <-events:
@@ -864,20 +926,33 @@ func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deploymen
 				}
 				return failed()
 			default:
-				if onProgress != nil {
-					onProgress(e)
+				if w.onProgress != nil {
+					w.onProgress(e)
 				}
 			}
-		case dep := <-polls:
-			if dep.Status == "failed" {
+		case p := <-polls:
+			dep := p.dep
+			switch {
+			case dep.Status == "failed":
 				return failed()
-			}
-			if deploymentFinished(dep) {
+			case deploymentSucceeded(dep):
 				return nil
+			case dep.FinishedAt == nil:
+				continue
+			case p.current:
+				log15.Warn("deployment has finished_at but no outcome; the app runs its new release, taking it as complete", "deployment.id", dep.ID, "status", dep.Status, "release.id", dep.NewReleaseID)
+				return nil
+			}
+			if finishedSeen.IsZero() {
+				finishedSeen = time.Now()
+				log15.Info("deployment has finished_at but no outcome yet, waiting for it", "deployment.id", dep.ID, "status", dep.Status)
+			}
+			if time.Since(finishedSeen) >= w.grace {
+				return fmt.Errorf("deployment %s has finished_at but no complete or failed status after %s (status %q), and the app's current release is not %s: treating it as failed", dep.ID, w.grace, dep.Status, dep.NewReleaseID)
 			}
 		case <-tick.C:
 			launchPoll()
-		case <-stopWait:
+		case <-w.stopWait:
 			return errors.New("deploy wait cancelled")
 		}
 	}
