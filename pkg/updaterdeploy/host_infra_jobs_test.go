@@ -2,6 +2,7 @@ package updaterdeploy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -28,11 +29,19 @@ type fakeInfraHost struct {
 	lagLists       int
 	listedAfterAdd int
 	hidden         []*host.Job
+	// listErrs are returned, one per call, by ListJobs once a job was
+	// added (EDGE-65: the host API stalls while the job starts).
+	listErrs []error
 }
 
 func (f *fakeInfraHost) ID() string { return f.id }
 
 func (f *fakeInfraHost) ListJobs() (map[string]host.ActiveJob, error) {
+	if len(f.added) > 0 && len(f.listErrs) > 0 {
+		err := f.listErrs[0]
+		f.listErrs = f.listErrs[1:]
+		return nil, err
+	}
 	if len(f.added) > 0 && f.listedAfterAdd < f.lagLists {
 		f.listedAfterAdd++
 		return f.jobs, nil
@@ -917,5 +926,77 @@ func TestZeroStaleFormationsKeepsAReleaseThatRunsATypeTheCurrentDoesNot(t *testi
 	}
 	if n := c.formations["rel-stale"].Processes["app"]; n != 1 {
 		t.Fatalf("stale formation app=%d, want 1: the current release runs no app job", n)
+	}
+}
+
+func flannelHost(id string) *fakeInfraHost {
+	return &fakeInfraHost{
+		id: id,
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID:         "old",
+					Metadata:   map[string]string{"flynn-controller.app_name": "flannel"},
+					Config:     host.ContainerConfig{Env: map[string]string{"FLYNN_JOB_ID": "old"}},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+	}
+}
+
+// EDGE-65: a ListJobs that times out or is refused while the replacement
+// starts is a missed poll, not the end of the update (the old job is
+// already stopped at that point, so failing left the host without it).
+func TestReplaceHostInfraToleratesTransientListJobsErrors(t *testing.T) {
+	art := squashArtifact(t, "layer-new")
+	h := flannelHost("devnode2")
+	h.listErrs = []error{
+		errors.New(`Get "http://192.168.57.21:1113/host/jobs": net/http: timeout awaiting response headers`),
+		errors.New(`Get "http://192.168.57.21:1113/host/jobs": dial tcp 192.168.57.21:1113: connect: connection refused`),
+	}
+	if err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"flannel": art}, nil, false, nil); err != nil {
+		t.Fatalf("replacement failed on a transient ListJobs error: %v", err)
+	}
+	if len(h.listErrs) != 0 {
+		t.Fatalf("the injected ListJobs errors were not all hit: %v", h.listErrs)
+	}
+	if len(h.added) != 1 {
+		t.Fatalf("started %d jobs, want 1", len(h.added))
+	}
+}
+
+func TestReplaceHostInfraListJobsDeadlineNamesTheLastError(t *testing.T) {
+	old := hostInfraReplaceTimeout
+	hostInfraReplaceTimeout = 300 * time.Millisecond
+	defer func() { hostInfraReplaceTimeout = old }()
+	art := squashArtifact(t, "layer-new")
+	h := flannelHost("devnode2")
+	for i := 0; i < 1000; i++ {
+		h.listErrs = append(h.listErrs, errors.New("connection refused"))
+	}
+	err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"flannel": art}, nil, false, nil)
+	if err == nil {
+		t.Fatal("want an error when ListJobs keeps failing")
+	}
+	for _, want := range []string{"flannel on devnode2", "list jobs", "last error: connection refused", "after "} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+}
+
+// A permanent host answer still ends the replacement at once.
+func TestReplaceHostInfraFailsFastOnPermanentListJobsError(t *testing.T) {
+	art := squashArtifact(t, "layer-new")
+	h := flannelHost("devnode2")
+	h.listErrs = []error{errors.New("httpclient: raw req: unexpected status 401")}
+	start := time.Now()
+	if err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"flannel": art}, nil, false, nil); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("err = %v, want the 401", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("took %s", d)
 	}
 }

@@ -203,11 +203,33 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 	// loop and none of them stay running.
 	var pendingID string
 	externalStops := 0
-	deadline := time.Now().Add(hostInfraReplaceTimeout)
+	start := time.Now()
+	deadline := start.Add(hostInfraReplaceTimeout)
+	// A ListJobs that fails while the replacement starts is a missed poll
+	// until the deadline (EDGE-65): the old job is already stopped, so
+	// giving up here leaves the host without it.
+	var listErr error
+	listFailures := 0
 	for time.Now().Before(deadline) {
 		jobs, err := h.ListJobs()
 		if err != nil {
-			return fmt.Errorf("list jobs on %s: %w", h.ID(), err)
+			if !isTransientHostStop(err) && !strings.Contains(err.Error(), "unexpected status 5") {
+				return fmt.Errorf("list jobs on %s: %w", h.ID(), err)
+			}
+			listErr = err
+			listFailures++
+			if log != nil {
+				log.Warn("missed host job list poll, retrying until the deadline", "host", h.ID(), "app", name, "attempt", listFailures,
+					"waited", time.Since(start).Round(time.Millisecond), "budget", hostInfraReplaceTimeout, "err", err)
+			}
+			time.Sleep(hostInfraListRetryWait(listFailures))
+			continue
+		}
+		if listErr != nil {
+			if log != nil {
+				log.Info("host job list answered again", "host", h.ID(), "app", name, "missed", listFailures)
+			}
+			listErr = nil
 		}
 		if j := findRunningHostInfraJobWithLayers(jobs, name, want, release); j != nil {
 			if log != nil {
@@ -280,7 +302,24 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 		pendingID = job.ID
 		time.Sleep(100 * time.Millisecond)
 	}
+	if listErr != nil {
+		return fmt.Errorf("%s on %s did not become running on pulled image after %s: list jobs failed %d times, after %s; last error: %w",
+			name, h.ID(), hostInfraReplaceTimeout, listFailures, time.Since(start).Round(time.Millisecond), listErr)
+	}
 	return fmt.Errorf("%s on %s did not become running on pulled image after %s", name, h.ID(), hostInfraReplaceTimeout)
+}
+
+// hostInfraListRetryWait backs off a failed ListJobs poll: 100 ms doubling
+// to 2 s.
+func hostInfraListRetryWait(failures int) time.Duration {
+	d := 100 * time.Millisecond
+	for i := 1; i < failures && d < 2*time.Second; i++ {
+		d *= 2
+	}
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
 }
 
 func anyHostInfraJob(jobs map[string]host.ActiveJob, appName string) *host.Job {
