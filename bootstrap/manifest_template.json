@@ -481,8 +481,8 @@
   {
     "id": "router-wait",
     "action": "wait",
-    "url": "http://router-api.discoverd",
-    "status": 404
+    "url": "http://router-api.discoverd/.well-known/status",
+    "status": 200
   },
   {
     "id": "gitreceive-route",

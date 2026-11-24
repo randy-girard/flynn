@@ -147,3 +147,26 @@ func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 		t.Fatalf("discoverd-key not referenced enough times: %d", strings.Count(s, `(index .StepData \"discoverd-key\").Data`))
 	}
 }
+
+// Since EDGE-04 the router API answers 401 to everything but its status
+// path without the cluster key, so a wait for the old 404 on / never ends
+// and a fresh bootstrap times out at router-wait.
+func TestRouterWaitUsesPublicStatusPath(t *testing.T) {
+	data, err := os.ReadFile("manifest_template.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the template has unquoted placeholders, so read the step as text
+	s := string(data)
+	i := strings.Index(s, `"id": "router-wait"`)
+	if i < 0 {
+		t.Fatal("missing router-wait step")
+	}
+	step := s[i:]
+	if j := strings.Index(step, "}"); j >= 0 {
+		step = step[:j]
+	}
+	if !strings.Contains(step, `"url": "http://router-api.discoverd/.well-known/status"`) || !strings.Contains(step, `"status": 200`) {
+		t.Fatalf("router-wait must wait for 200 on the public status path, got:\n%s", step)
+	}
+}
