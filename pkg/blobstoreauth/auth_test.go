@@ -257,6 +257,8 @@ func TestBuildArtifactURLAllowed(t *testing.T) {
 		"http://blobstore.discoverd/slugs/apps/app-1/layers/abc.squashfs",
 		"http://blobstore.discoverd/tarreceive/apps/app-1/images/abc.json",
 		"http://blobstore.discoverd/tarreceive/layers/abc.squashfs",
+		// EDGE-35: tarreceive stores the app's own layers here
+		"http://blobstore.discoverd/tarreceive/apps/app-1/layers/abc.squashfs",
 	} {
 		if !BuildArtifactURLAllowed(u, apps) {
 			t.Errorf("%s should be allowed", u)
@@ -272,6 +274,9 @@ func TestBuildArtifactURLAllowed(t *testing.T) {
 		"http://blobstore.discoverd/slugs/apps/app-1/../app-2/layers/x.squashfs",
 		"http://BLOBSTORE.discoverd:80/slugs/apps/app-2/layers/x.squashfs",
 		"http://blobstore.discoverd/tarreceive/layers/a/b.squashfs",
+		"http://blobstore.discoverd/tarreceive/apps/app-2/layers/abc.squashfs",
+		"http://blobstore.discoverd/tarreceive/apps/app-1/layers/a/b.squashfs",
+		"http://blobstore.discoverd/tarreceive/apps/app-1/other/abc.squashfs",
 		"http://blobstore.discoverd/slugs/apps/app-1/layers/x.squashfs?token=1",
 		"file:///var/lib/flynn/layer-cache/x.squashfs",
 		"https://example.com/x.squashfs",

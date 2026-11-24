@@ -33,7 +33,9 @@ for each process.
 
 The CLI flattens the image into one uncompressed tar. tarreceive refuses one
 over `MAX_LAYER_SIZE` (default 32 GiB) with `layer exceeds the tarreceive
-limit` before the upload starts; see
+limit` before the upload starts. The layer is stored under the app's own
+blobstore prefix and counts toward its `APP_QUOTA`; an image pushed to two
+apps is stored once for each. See
 [Upload limits](production.html.md#upload-limits).
 
 ## Container stack

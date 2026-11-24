@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 // EDGE-08: a layer read from a file is sent with its length, so tarreceive
@@ -57,3 +59,37 @@ func TestCreateLayerSendsFileLength(t *testing.T) {
 type onlyReader struct{ r *strings.Reader }
 
 func (o onlyReader) Read(p []byte) (int, error) { return o.r.Read(p) }
+
+// EDGE-35: a client for an app names it on every layer and artifact request,
+// so tarreceive stores them under that app's blobstore prefix.
+func TestClientNamesApp(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.RequestURI())
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "key")
+	c.App = "app-1"
+	if _, err := c.GetLayer("abc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateFlatLayer("abc", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateLayer("abc", strings.NewReader("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CreateArtifact(&ct.ImageManifest{}); err != nil {
+		t.Fatal(err)
+	}
+	c.App = ""
+	if _, err := c.GetLayer("abc"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"GET /layer/abc?app=app-1", "POST /layer/abc?app=app-1", "POST /layer/abc?app=app-1", "POST /artifact?app=app-1", "GET /layer/abc"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("requests = %v, want %v", got, want)
+	}
+}

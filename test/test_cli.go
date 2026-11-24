@@ -1494,9 +1494,11 @@ func (s *CLISuite) TestDockerExportImport(t *c.C) {
 	// busybox plus flynn-blobstore and has no curl, so the test process
 	// deletes the objects itself with the cluster key.
 	for _, layer := range layers {
+		// the layers are stored under the app's prefix (EDGE-35)
+		layerURL := artifact.LayerURL(layer)
 		for _, url := range []string{
-			utils.LayerURL(layer.ID),
-			utils.ConfigURL(layer.ID),
+			layerURL,
+			utils.ConfigURLForLayerURL(layerURL),
 		} {
 			req, err := http.NewRequest(http.MethodDelete, url, nil)
 			t.Assert(err, c.IsNil)

@@ -18,6 +18,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	tarclient "github.com/randy-girard/flynn/tarreceive/client"
+	tarutils "github.com/randy-girard/flynn/tarreceive/utils"
 )
 
 // BuildResult holds the image manifest and process metadata produced from a
@@ -158,8 +159,9 @@ func CreateArtifact(client interface {
 	return artifact, nil
 }
 
-// imageArtifact is the artifact for a built image whose manifest is stored
-// under appID's prefix. Layers stay in the shared tarreceive store.
+// imageArtifact is the artifact for a built image whose manifest and layers
+// tarreceive stored under appID's prefix (EDGE-35; empty is the shared
+// store).
 func imageArtifact(build *BuildResult, id string, meta map[string]string, appID string) *ct.Artifact {
 	rawManifest := build.Manifest.RawManifest()
 	artifactMeta := map[string]string{"blobstore": "true"}
@@ -174,7 +176,7 @@ func imageArtifact(build *BuildResult, id string, meta map[string]string, appID 
 		RawManifest:      rawManifest,
 		Hashes:           build.Manifest.Hashes(),
 		Size:             int64(len(rawManifest)),
-		LayerURLTemplate: "http://blobstore.discoverd/tarreceive/layers/{id}.squashfs",
+		LayerURLTemplate: tarutils.LayerURLTemplateFor(appID),
 	}
 }
 

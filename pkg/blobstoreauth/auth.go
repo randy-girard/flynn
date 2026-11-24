@@ -300,9 +300,10 @@ func SlugLayerURLTemplate(appID string) string {
 	return baseURL + appPrefix("slugs", appID) + "/layers/{id}.squashfs"
 }
 
-// TarreceiveImageURL is where a dockerbuilder build stores its image
-// manifest. Its layers stay in the shared /tarreceive/layers store, which
-// only the tarreceive service writes.
+// TarreceiveImageURL is where tarreceive or a dockerbuilder build stores an
+// image manifest. Its layers are in /tarreceive/apps/<app>/layers (or, for
+// older images and cluster-key pushes that name no app, the shared
+// /tarreceive/layers store), which only the tarreceive service writes.
 func TarreceiveImageURL(appID, id string) string {
 	return baseURL + appPrefix("tarreceive", appID) + "/images/" + id + ".json"
 }
@@ -366,12 +367,29 @@ func sharedLayerPath(p string) bool {
 	return len(parts) == 3 && parts[0] == "tarreceive" && parts[1] == "layers" && parts[2] != "" && parts[2] != "." && parts[2] != ".."
 }
 
+// appLayerPath is a layer tarreceive stored under one of appIDs' own
+// prefixes, /tarreceive/apps/<app>/layers/<name> (EDGE-35). Like the shared
+// store only tarreceive writes there, so a build artifact may reference it,
+// but a build token may not PUT it (BuildPathAllowed).
+func appLayerPath(p string, appIDs []string) bool {
+	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	if len(parts) != 5 || parts[0] != "tarreceive" || parts[1] != appsDir || parts[3] != "layers" || parts[4] == "" || parts[4] == "." || parts[4] == ".." {
+		return false
+	}
+	for _, id := range appIDs {
+		if id != "" && id == parts[2] {
+			return true
+		}
+	}
+	return false
+}
+
 // BuildArtifactURLAllowed reports whether an artifact URL registered by a
 // scoped build token may be stored. Hosts fetch artifact layers with the
 // cluster key, so a URL outside the app's own prefix would read another
 // app's blobs. Only plain http URLs on the cluster blobstore qualify, with a
-// path that is already clean, no query, inside the app's own prefix or the
-// shared tarreceive layer store.
+// path that is already clean, no query, inside the app's own prefix (its
+// tarreceive layers included) or the shared tarreceive layer store.
 func BuildArtifactURLAllowed(raw string, appIDs []string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "http" || u.Host != "blobstore.discoverd" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
@@ -380,7 +398,7 @@ func BuildArtifactURLAllowed(raw string, appIDs []string) bool {
 	if u.RawPath != "" || path.Clean(u.Path) != u.Path {
 		return false
 	}
-	return BuildPathAllowed(u.Path, appIDs) || sharedLayerPath(u.Path)
+	return BuildPathAllowed(u.Path, appIDs) || sharedLayerPath(u.Path) || appLayerPath(u.Path, appIDs)
 }
 
 // IsBlobstoreHost reports a blobstore.discoverd request host (with or without

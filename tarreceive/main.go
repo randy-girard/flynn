@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -15,7 +16,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/controller/authorizer"
@@ -91,8 +94,13 @@ type server struct {
 	router *httprouter.Router
 	auth   *authorizer.Authorizer
 	client controller.Client
-	// fetchLayer reads a stored layer config; ct.ErrNotFound when absent.
-	fetchLayer func(id string) (*ct.ImageLayer, error)
+	// fetchLayer reads the layer config stored for app (EDGE-35; "" is the
+	// shared store); ct.ErrNotFound when absent.
+	fetchLayer func(app, id string) (*ct.ImageLayer, error)
+	// layerExists reports whether a layer squashfs is stored at url.
+	layerExists func(url string) (bool, error)
+	// createArtifact registers an artifact with the controller.
+	createArtifact func(*ct.Artifact) error
 	// maxLayerSize caps the layer tar a POST may send; 0 is no limit.
 	maxLayerSize int64
 	// sem bounds how many layers unpack and run mksquashfs at once; nil
@@ -110,10 +118,14 @@ func newServer(auth *authorizer.Authorizer, client controller.Client) *server {
 		auth:         auth,
 		client:       client,
 		fetchLayer:   blobstoreLayer,
+		layerExists:  blobstoreHas,
 		maxLayerSize: defaultMaxLayerSize,
 		sem:          make(chan struct{}, defaultLayerConcurrency),
 		squash:       mksquashfs,
 		upload:       upload,
+	}
+	if client != nil {
+		s.createArtifact = client.CreateArtifact
 	}
 	s.router.GET("/layer/:id", s.handleGetLayer)
 	s.router.POST("/layer/:id", s.handleCreateLayer)
@@ -139,24 +151,138 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(403)
 		return
 	}
-	s.router.ServeHTTP(w, r)
+	app, code, msg := requestApp(r, tok)
+	if code != 0 {
+		httphelper.JSON(w, code, httphelper.JSONError{Code: errorCodeFor(code), Message: msg})
+		return
+	}
+	s.router.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), appKey{}, app)))
+}
+
+type appKey struct{}
+
+// appOf is the app a request's layers and manifest are stored for.
+func appOf(r *http.Request) string {
+	app, _ := r.Context().Value(appKey{}).(string)
+	return app
+}
+
+var appIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// requestApp works out whose blobstore prefix a request stores layers and
+// manifests under (EDGE-35), from the app query parameter and the token: a
+// build token stores only under an app it has a grant for (the only one it
+// has when it names none), so every layer it pushes counts toward that app's
+// APP_QUOTA. The cluster key may name any app; naming none keeps the legacy
+// shared /tarreceive/layers store that no quota counts (older CLIs and
+// operator imports). A non-zero code refuses the request.
+func requestApp(r *http.Request, tok *authorizer.Token) (string, int, string) {
+	app := r.URL.Query().Get("app")
+	if app != "" && !appIDPattern.MatchString(app) {
+		return "", http.StatusBadRequest, fmt.Sprintf("invalid app %q", app)
+	}
+	if tok.HasClusterAdmin() {
+		return app, 0, ""
+	}
+	grants := make(map[string]struct{}, len(tok.AppGrants))
+	for _, g := range tok.AppGrants {
+		if g.AppID != "" {
+			grants[g.AppID] = struct{}{}
+		}
+	}
+	if app == "" {
+		if len(grants) != 1 {
+			return "", http.StatusBadRequest, "this token has grants for several apps; name the app with ?app=<app id>"
+		}
+		for id := range grants {
+			app = id
+		}
+		return app, 0, ""
+	}
+	if _, ok := grants[app]; !ok {
+		return "", http.StatusForbidden, fmt.Sprintf("this token may not push layers for app %s", app)
+	}
+	return app, 0, ""
+}
+
+func errorCodeFor(status int) httphelper.ErrorCode {
+	switch status {
+	case http.StatusBadRequest:
+		return httphelper.ValidationErrorCode
+	case http.StatusForbidden:
+		return httphelper.ForbiddenErrorCode
+	case http.StatusRequestEntityTooLarge:
+		return httphelper.RequestBodyTooBigErrorCode
+	case http.StatusInsufficientStorage:
+		return httphelper.InsufficientStorageErrorCode
+	}
+	return httphelper.UnknownErrorCode
 }
 
 func (s *server) handleGetLayer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	layer, err := s.fetchLayer(p.ByName("id"))
+	layer, err := s.storedLayer(appOf(r), p.ByName("id"))
 	if err == ct.ErrNotFound {
 		http.NotFound(w, r)
 		return
 	} else if err != nil {
-		httphelper.Error(w, err)
+		s.uploadError(w, err)
 		return
 	}
 	httphelper.JSON(w, http.StatusOK, layer)
 }
 
-// blobstoreLayer reads the layer config tarreceive stored for id.
-func blobstoreLayer(id string) (*ct.ImageLayer, error) {
-	req, err := http.NewRequest("GET", utils.ConfigURL(id), nil)
+// storedLayer is the layer id already stored for app, ready to reuse.
+// Reusing a layer re-puts its config, which restarts the layer GC's grace
+// period (flynn-blobstore cleanup-layers), and then checks that the squashfs
+// is still there: a GC run that removed it first makes the layer missing, so
+// the client uploads it again instead of naming a deleted object.
+func (s *server) storedLayer(app, id string) (*ct.ImageLayer, error) {
+	layer, err := s.fetchLayer(app, id)
+	if err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(layer)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.upload(bytes.NewReader(data), utils.ConfigURLFor(app, id)); err != nil {
+		return nil, err
+	}
+	ok, err := s.layerExists(utils.LayerURLFor(app, id))
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		log.Printf("layer %s (app %q) has a config but no squashfs, storing it again", id, app)
+		return nil, ct.ErrNotFound
+	}
+	return layer, nil
+}
+
+// blobstoreHas reports whether the blobstore holds an object at url.
+func blobstoreHas(url string) (bool, error) {
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return false, err
+	}
+	blobstoreauth.Apply(req)
+	res, err := httphelper.RetryClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	res.Body.Close()
+	switch res.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	}
+	return false, fmt.Errorf("unexpected blobstore response to HEAD %s: %s", url, res.Status)
+}
+
+// blobstoreLayer reads the layer config tarreceive stored for app and id.
+func blobstoreLayer(app, id string) (*ct.ImageLayer, error) {
+	req, err := http.NewRequest("GET", utils.ConfigURLFor(app, id), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -210,13 +336,16 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 	// The layer is named by the SHA256 of its tar. Once its config is
 	// stored, keep it: rebuilding can produce different squashfs bytes, and
 	// images that already name the old hash would no longer verify (NEW-05).
-	if existing, err := s.fetchLayer(id); err == nil {
+	// Only this app's copy is reused (EDGE-35): a layer another app stored
+	// is stored again here and counts toward this app's quota.
+	app := appOf(r)
+	if existing, err := s.storedLayer(app, id); err == nil {
 		// Read the upload so the client sees the answer, not a reset.
 		io.Copy(ioutil.Discard, body)
 		httphelper.JSON(w, http.StatusOK, existing)
 		return
 	} else if err != ct.ErrNotFound {
-		httphelper.Error(w, err)
+		s.uploadError(w, err)
 		return
 	}
 
@@ -302,7 +431,7 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		if _, err := layerFile.Seek(0, os.SEEK_SET); err != nil {
 			return nil, err
 		}
-		if err := s.upload(layerFile, utils.LayerURL(id)); err != nil {
+		if err := s.upload(layerFile, utils.LayerURLFor(app, id)); err != nil {
 			return nil, err
 		}
 
@@ -318,7 +447,7 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		if err != nil {
 			return nil, err
 		}
-		if err := s.upload(bytes.NewReader(layerData), utils.ConfigURL(id)); err != nil {
+		if err := s.upload(bytes.NewReader(layerData), utils.ConfigURLFor(app, id)); err != nil {
 			return nil, err
 		}
 
@@ -329,10 +458,26 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		return
 	}
 	if err != nil {
-		httphelper.Error(w, err)
+		s.uploadError(w, err)
 		return
 	}
 	httphelper.JSON(w, http.StatusOK, layer)
+}
+
+// uploadError answers a failed request. A blobstore refusal because of a
+// limit (413 MAX_OBJECT_SIZE, 507 APP_QUOTA) is passed on with the
+// blobstore's message, which names the setting.
+func (s *server) uploadError(w http.ResponseWriter, err error) {
+	var be *blobstoreError
+	if errors.As(err, &be) && (be.Status == http.StatusRequestEntityTooLarge || be.Status == http.StatusInsufficientStorage) {
+		log.Printf("blobstore refused a layer upload: %s", be.Message)
+		httphelper.JSON(w, be.Status, httphelper.JSONError{
+			Code:    errorCodeFor(be.Status),
+			Message: "blobstore refused the upload: " + be.Message,
+		})
+		return
+	}
+	httphelper.Error(w, err)
 }
 
 func (s *server) handleCreateArtifact(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
@@ -342,9 +487,12 @@ func (s *server) handleCreateArtifact(w http.ResponseWriter, r *http.Request, p 
 		return
 	}
 	rawManifest := image.RawManifest()
-	imageURL := fmt.Sprintf("http://blobstore.discoverd/tarreceive/images/%s.json", image.ID())
+	// the manifest and the layer template follow the app the layers were
+	// stored for (EDGE-35); no app is the legacy shared store
+	app := appOf(r)
+	imageURL := blobstoreauth.TarreceiveImageURL(app, image.ID())
 	if err := s.upload(bytes.NewReader(rawManifest), imageURL); err != nil {
-		httphelper.Error(w, err)
+		s.uploadError(w, err)
 		return
 	}
 	artifact := &ct.Artifact{
@@ -354,9 +502,9 @@ func (s *server) handleCreateArtifact(w http.ResponseWriter, r *http.Request, p 
 		RawManifest:      rawManifest,
 		Hashes:           image.Hashes(),
 		Size:             int64(len(rawManifest)),
-		LayerURLTemplate: utils.LayerURLTemplate,
+		LayerURLTemplate: utils.LayerURLTemplateFor(app),
 	}
-	if err := s.client.CreateArtifact(artifact); err != nil {
+	if err := s.createArtifact(artifact); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
@@ -368,14 +516,34 @@ func upload(data io.Reader, url string) error {
 	if err != nil {
 		return err
 	}
+	if f, ok := data.(*os.File); ok {
+		// send the length so the blobstore refuses a layer over
+		// MAX_OBJECT_SIZE or APP_QUOTA before it is stored
+		if info, err := f.Stat(); err == nil {
+			if pos, err := f.Seek(0, io.SeekCurrent); err == nil && pos <= info.Size() {
+				req.ContentLength = info.Size() - pos
+			}
+		}
+	}
 	blobstoreauth.Apply(req)
 	res, err := httphelper.RetryClient.Do(req)
 	if err != nil {
 		return err
 	}
-	res.Body.Close()
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected HTTP status: %s", res.Status)
+		msg, _ := ioutil.ReadAll(io.LimitReader(res.Body, 4096))
+		return &blobstoreError{Status: res.StatusCode, Message: strings.TrimSpace(string(msg))}
 	}
 	return nil
+}
+
+// blobstoreError is a blobstore answer other than 200 to a PUT.
+type blobstoreError struct {
+	Status  int
+	Message string
+}
+
+func (e *blobstoreError) Error() string {
+	return fmt.Sprintf("unexpected HTTP status: %d %s: %s", e.Status, http.StatusText(e.Status), e.Message)
 }

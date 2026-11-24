@@ -401,6 +401,9 @@ func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 
+	// store the layers and manifest under the app's blobstore prefix,
+	// where they count toward its APP_QUOTA (EDGE-35)
+	tarClient.App = app.ID
 	artifact, build, err := dockerimage.PushFromSaveDir(tarClient, tmpDir)
 	if err != nil {
 		return err

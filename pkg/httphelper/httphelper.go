@@ -104,24 +104,28 @@ const (
 	RatelimitedErrorCode        ErrorCode = "ratelimited"
 	ServiceUnavailableErrorCode ErrorCode = "service_unavailable"
 	RequestBodyTooBigErrorCode  ErrorCode = "request_body_too_big"
+	// InsufficientStorageErrorCode is a refusal because a storage quota
+	// (the blobstore APP_QUOTA) is used up (HTTP 507).
+	InsufficientStorageErrorCode ErrorCode = "insufficient_storage"
 )
 
 var ErrRequestBodyTooBig = errors.New("httphelper: request body too big")
 
 var errorResponseCodes = map[ErrorCode]int{
-	NotFoundErrorCode:           404,
-	ObjectNotFoundErrorCode:     404,
-	ObjectExistsErrorCode:       409,
-	ConflictErrorCode:           409,
-	PreconditionFailedErrorCode: 412,
-	SyntaxErrorCode:             400,
-	ValidationErrorCode:         400,
-	RequestBodyTooBigErrorCode:  400,
-	UnauthorizedErrorCode:       401,
-	ForbiddenErrorCode:          403,
-	UnknownErrorCode:            500,
-	RatelimitedErrorCode:        429,
-	ServiceUnavailableErrorCode: 503,
+	NotFoundErrorCode:            404,
+	ObjectNotFoundErrorCode:      404,
+	ObjectExistsErrorCode:        409,
+	ConflictErrorCode:            409,
+	PreconditionFailedErrorCode:  412,
+	SyntaxErrorCode:              400,
+	ValidationErrorCode:          400,
+	RequestBodyTooBigErrorCode:   400,
+	UnauthorizedErrorCode:        401,
+	ForbiddenErrorCode:           403,
+	UnknownErrorCode:             500,
+	RatelimitedErrorCode:         429,
+	ServiceUnavailableErrorCode:  503,
+	InsufficientStorageErrorCode: 507,
 }
 
 type JSONError struct {

@@ -57,7 +57,12 @@ func TestCreateLayerKeepsExistingLayer(t *testing.T) {
 	const id = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
 	existing := &ct.ImageLayer{ID: id, Type: ct.ImageLayerTypeSquashfs, Length: 42, Hashes: map[string]string{"sha512_256": "old"}}
 	var lookups int
-	s.fetchLayer = func(got string) (*ct.ImageLayer, error) {
+	s.layerExists = func(string) (bool, error) { return true, nil }
+	s.upload = func(r io.Reader, url string) error {
+		_, err := io.Copy(ioutil.Discard, r)
+		return err
+	}
+	s.fetchLayer = func(app, got string) (*ct.ImageLayer, error) {
 		lookups++
 		if got != id {
 			return nil, ct.ErrNotFound
@@ -99,6 +104,13 @@ func TestCreateLayerKeepsExistingLayer(t *testing.T) {
 // buildServer returns a tarreceive server and a build:artifacts token for it.
 func buildServer(t *testing.T) (*server, string) {
 	t.Helper()
+	return buildServerFor(t, "app-1")
+}
+
+// buildServerFor returns a tarreceive server and a build:artifacts token
+// with grants on apps.
+func buildServerFor(t *testing.T, apps ...string) (*server, string) {
+	t.Helper()
 	pubKey, privKey, err := tokensigner.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
@@ -112,17 +124,22 @@ func buildServer(t *testing.T) (*server, string) {
 		t.Fatal(err)
 	}
 	now := time.Now()
+	grants := make([]*api.AppGrant, len(apps))
+	for i, app := range apps {
+		grants[i] = &api.AppGrant{AppId: app, Permissions: []string{"app:write"}}
+	}
 	tok, err := sign.Sign(&api.AccessToken{
 		IssueTime:  timestamppb.New(now),
 		ExpireTime: timestamppb.New(now.Add(10 * time.Minute)),
 		Scopes:     []string{authz.ScopeBuildArtifacts},
-		AppGrants:  []*api.AppGrant{{AppId: "app-1", Permissions: []string{"app:write"}}},
+		AppGrants:  grants,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := newServer(authorizer.New([]string{"tar-secret"}, nil, pk, time.Hour), nil)
-	s.fetchLayer = func(string) (*ct.ImageLayer, error) { return nil, ct.ErrNotFound }
+	s.fetchLayer = func(string, string) (*ct.ImageLayer, error) { return nil, ct.ErrNotFound }
+	s.layerExists = func(string) (bool, error) { return true, nil }
 	s.upload = func(r io.Reader, url string) error {
 		_, err := io.Copy(ioutil.Discard, r)
 		return err
@@ -163,7 +180,7 @@ func TestCreateLayerRejectsOversizeBody(t *testing.T) {
 		return ioutil.WriteFile(dst, []byte("squashfs"), 0644)
 	}
 	var lookups int32
-	s.fetchLayer = func(string) (*ct.ImageLayer, error) {
+	s.fetchLayer = func(string, string) (*ct.ImageLayer, error) {
 		atomic.AddInt32(&lookups, 1)
 		return nil, ct.ErrNotFound
 	}

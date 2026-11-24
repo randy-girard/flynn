@@ -13,8 +13,9 @@ import (
 // register artifact a, or "" when it may. Only a build:artifacts token reaches
 // POST /artifacts without being a cluster admin. Hosts fetch artifact layers
 // with the cluster key, so every URL in the artifact must stay inside the
-// token's own app prefix (or the shared tarreceive layer store); otherwise a
-// compile could register another app's slug and deploy it (NEW-05).
+// token's own app prefix (its tarreceive layers included) or the shared
+// tarreceive layer store; otherwise a compile could register another app's
+// slug and deploy it (NEW-05).
 func buildArtifactURLError(tok *authorizer.Token, a *ct.Artifact) string {
 	if tok == nil || tok.HasClusterAdmin() {
 		return ""

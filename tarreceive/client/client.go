@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -22,6 +23,19 @@ type Config struct {
 
 type Client struct {
 	*httpclient.Client
+	// App is the ID of the app the layers and image manifests are for.
+	// tarreceive stores them under that app's blobstore prefix, where they
+	// count toward its APP_QUOTA (EDGE-35). Empty sends no app: a build
+	// token then uses its only app, the cluster key the shared store.
+	App string
+}
+
+// path adds the app to a request path.
+func (c *Client) path(p string) string {
+	if c.App == "" {
+		return p
+	}
+	return p + "?app=" + url.QueryEscape(c.App)
 }
 
 func NewClient(url, key string) *Client {
@@ -68,7 +82,7 @@ func newClient(url, key string, httpClient *http.Client) *Client {
 
 func (c *Client) GetLayer(id string) (*ct.ImageLayer, error) {
 	var layer ct.ImageLayer
-	return &layer, c.Get("/layer/"+id, &layer)
+	return &layer, c.Get(c.path("/layer/"+id), &layer)
 }
 
 func (c *Client) CreateLayer(id string, src io.Reader) (*ct.ImageLayer, error) {
@@ -93,7 +107,7 @@ func (c *Client) createLayer(id string, src io.Reader, flat bool) (*ct.ImageLaye
 		// before the upload (EDGE-08)
 		body = httpclient.SizedBody{Reader: src, Size: size}
 	}
-	return &layer, c.PostWithHeader("/layer/"+id, header, body, &layer)
+	return &layer, c.PostWithHeader(c.path("/layer/"+id), header, body, &layer)
 }
 
 // remaining is the number of bytes left to read in a regular file.
@@ -115,5 +129,5 @@ func remaining(src io.Reader) (int64, bool) {
 
 func (c *Client) CreateArtifact(manifest *ct.ImageManifest) (*ct.Artifact, error) {
 	var artifact ct.Artifact
-	return &artifact, c.Post("/artifact", manifest, &artifact)
+	return &artifact, c.Post(c.path("/artifact"), manifest, &artifact)
 }

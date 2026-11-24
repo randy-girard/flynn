@@ -18,9 +18,10 @@ type ImportOptions struct {
 	}
 	ArtifactID   string
 	ArtifactMeta map[string]string
-	// AppID puts the image manifest under that app's blobstore prefix when
-	// ControllerClient registers the artifact (a build token reaches no
-	// other). Empty keeps the legacy shared path.
+	// AppID puts the image manifest and its layers under that app's
+	// blobstore prefix (a build token reaches no other), where the layers
+	// count toward the app's APP_QUOTA. Empty keeps the legacy shared path
+	// unless TarClient names an app itself.
 	AppID string
 }
 
@@ -58,7 +59,7 @@ func ImportSaveDir(saveDir string, opts ImportOptions) (*ImportResult, error) {
 	if opts.TarClient == nil {
 		return nil, fmt.Errorf("missing tarreceive client")
 	}
-	build, err := BuildFromSaveDir(opts.TarClient, saveDir)
+	build, err := BuildFromSaveDir(opts.tarClient(), saveDir)
 	if err != nil {
 		return nil, err
 	}
@@ -71,9 +72,11 @@ func ImportSaveDir(saveDir string, opts ImportOptions) (*ImportResult, error) {
 		if opts.ArtifactID == "" {
 			return nil, fmt.Errorf("missing artifact ID")
 		}
-		artifact, err = CreateArtifact(opts.ControllerClient, build, opts.ArtifactID, meta, opts.AppID)
+		// the prefix the layers went to (tarClient names opts.AppID
+		// when it is set)
+		artifact, err = CreateArtifact(opts.ControllerClient, build, opts.ArtifactID, meta, opts.tarClient().App)
 	} else {
-		artifact, err = opts.TarClient.CreateArtifact(build.Manifest)
+		artifact, err = opts.tarClient().CreateArtifact(build.Manifest)
 		if err == nil && len(meta) > 0 {
 			artifact.Meta = meta
 		}
@@ -82,4 +85,16 @@ func ImportSaveDir(saveDir string, opts ImportOptions) (*ImportResult, error) {
 		return nil, err
 	}
 	return &ImportResult{Artifact: artifact, Build: build}, nil
+}
+
+// tarClient is the tarreceive client for the import: with an AppID, a copy
+// that names the app, so the layers go under the same prefix as the
+// manifest and the artifact's layer template (EDGE-35).
+func (o ImportOptions) tarClient() *tarclient.Client {
+	if o.AppID == "" || o.TarClient == nil || o.TarClient.App == o.AppID {
+		return o.TarClient
+	}
+	c := *o.TarClient
+	c.App = o.AppID
+	return &c
 }
