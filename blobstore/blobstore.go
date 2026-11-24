@@ -22,6 +22,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/uploadlimit"
 	"github.com/randy-girard/flynn/pkg/version"
 )
 
@@ -90,9 +91,9 @@ func handler(r *data.FileRepo, lim putLimits) http.Handler {
 						return
 					}
 				}
-				var idle *idleBody
+				var idle *uploadlimit.IdleBody
 				if lim.idleTimeout > 0 {
-					idle = newIdleBody(w, req.Body, lim.idleTimeout)
+					idle = uploadlimit.NewIdleBody(w, req.Body, lim.idleTimeout)
 					req.Body = idle
 				}
 				var handled bool
@@ -100,8 +101,8 @@ func handler(r *data.FileRepo, lim putLimits) http.Handler {
 					return r.Put(path, body, offset, req.Header.Get("Content-Type"))
 				})
 				if idle != nil {
-					idle.done()
-					if idle.timedOut {
+					idle.Done()
+					if idle.TimedOut() {
 						// nothing was stored; an overwritten object is intact
 						log.Printf("PUT %s: %s (%s), the upload was discarded", path, errBodyIdle, lim.idleTimeout)
 						w.Header().Set("Connection", "close")

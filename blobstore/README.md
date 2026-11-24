@@ -76,7 +76,8 @@ and an overwritten object keeps its old content. A body that keeps sending,
 however slowly, is not cut off. The value is a duration (`90s`, `5m`) or a
 number of seconds; `0` or `off` turns the timeout off. The server also gives
 clients 30 seconds to send request headers and closes idle keep-alive
-connections after 2 minutes.
+connections after 2 minutes. tarreceive and gitreceive use the same timeouts
+(`pkg/uploadlimit`).
 
 A DELETE marks the objects deleted, then removes them from their backend. If a
 backend delete fails, or a backend named by a row is no longer configured, the
