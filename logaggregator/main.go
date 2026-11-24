@@ -7,7 +7,6 @@ import (
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/discoverd/client"
-	"github.com/randy-girard/flynn/logaggregator/client"
 	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 
@@ -58,30 +57,53 @@ func main() {
 	srv := NewServer(conf)
 	shutdown.BeforeExit(srv.Shutdown)
 
-	// get leader for snapshot (if any)
-	leader, err := conf.Discoverd.Service(conf.ServiceName).Leader()
-	if err == nil {
-		host, _, _ := net.SplitHostPort(leader.Addr)
-		log15.Info("loading snapshot from leader", "leader", host)
-
-		c, _ := client.New("http://" + host)
-		snapshot, err := c.GetSnapshot()
-		if err == nil {
-			if err := srv.LoadSnapshot(snapshot); err != nil {
-				log15.Error("error receiving snapshot from leader", "error", err)
-			}
-			snapshot.Close()
-		} else {
-			log15.Error("error getting snapshot from leader", "error", err)
-		}
-	} else {
-		log15.Info("error finding leader for snapshot", "error", err)
+	// load the running instances' buffered logs (leader first) before
+	// registering; bounded, see loadSnapshotFromPeers
+	if sources := snapshotSources(conf.Discoverd.Service(conf.ServiceName)); len(sources) > 0 {
+		srv.loadSnapshotFromPeers(snapshotLoader{
+			Sources:       sources,
+			Key:           appliancehttp.ClientKey(),
+			HTTP:          snapshotHTTPClient(defaultSnapshotDial),
+			IdleTimeout:   defaultSnapshotIdle,
+			SourceTimeout: defaultSnapshotSource,
+			TotalTimeout:  defaultSnapshotTotal,
+		})
 	}
 
 	if err := srv.Start(); err != nil {
 		shutdown.Fatal(err)
 	}
 	<-make(chan struct{})
+}
+
+// snapshotSources returns the API URLs of the registered instances, leader
+// first. Instances register their syslog address; the API is on port 80 of
+// the same host.
+func snapshotSources(svc discoverd.Service) []string {
+	var hosts []string
+	seen := make(map[string]bool)
+	add := func(addr string) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil || host == "" || seen[host] {
+			return
+		}
+		seen[host] = true
+		hosts = append(hosts, "http://"+host)
+	}
+	if leader, err := svc.Leader(); err == nil {
+		add(leader.Addr)
+	} else {
+		log15.Info("error finding leader for snapshot", "error", err)
+	}
+	if insts, err := svc.Instances(); err == nil {
+		for _, inst := range insts {
+			add(inst.Addr)
+		}
+	}
+	if len(hosts) > 0 {
+		log15.Info("loading snapshot", "sources", hosts)
+	}
+	return hosts
 }
 
 // parseBufferTTL reads LOG_BUFFER_TTL (a Go duration such as 72h). Empty or

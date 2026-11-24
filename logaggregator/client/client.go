@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -111,6 +112,13 @@ type Message struct {
 func (c *Client) GetCursors() (map[string]utils.HostCursor, error) {
 	var res map[string]utils.HostCursor
 	return res, c.Get("/cursors", &res)
+}
+
+// GetSnapshotWithContext is GetSnapshot returning the whole response, so the
+// caller can read its Flynn-Snapshot-Count trailer once the body is read.
+// ctx bounds the request and the body read.
+func (c *Client) GetSnapshotWithContext(ctx context.Context) (*http.Response, error) {
+	return c.RawReqWithContext(ctx, "GET", "/snapshot", nil, nil, nil)
 }
 
 func (c *Client) GetSnapshot() (io.ReadCloser, error) {

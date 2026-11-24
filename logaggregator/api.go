@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/randy-girard/flynn/logaggregator/client"
@@ -25,8 +26,8 @@ import (
 
 // apiHandler serves the log API. Buffered logs of every app (and the host
 // cursors) are behind the cluster key; only the health check is public.
-func apiHandler(agg *Aggregator, cursors *HostCursors, keys []string) http.Handler {
-	api := aggregatorAPI{agg, cursors}
+func apiHandler(agg *Aggregator, cursors *HostCursors, keys []string, snaps *snapshotTracker) http.Handler {
+	api := aggregatorAPI{agg, cursors, snaps}
 	r := httprouter.New()
 
 	r.Handler("GET", status.Path, status.HealthyHandler)
@@ -42,6 +43,16 @@ func apiHandler(agg *Aggregator, cursors *HostCursors, keys []string) http.Handl
 type aggregatorAPI struct {
 	agg     *Aggregator
 	cursors *HostCursors
+	snaps   *snapshotTracker
+}
+
+// snapshotTracker counts the snapshot responses being written, so a
+// stopping instance can let them finish (Server.Shutdown).
+type snapshotTracker struct {
+	wg sync.WaitGroup
+	// hook, when set (tests), runs after the snapshot is taken and before
+	// it is written.
+	hook func()
 }
 
 func (a *aggregatorAPI) GetCursors(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -116,8 +127,25 @@ func (a *aggregatorAPI) GetLog(ctx context.Context, w http.ResponseWriter, req *
 }
 
 func (a *aggregatorAPI) GetSnapshot(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	a.snaps.wg.Add(1)
+	defer a.snaps.wg.Done()
 	w.Header().Set("Content-Type", "application/vnd.flynn.logaggregator-snapshot")
-	snapshot.WriteTo(a.agg.ReadAll(), w)
+	// the count goes in a trailer once every message is written, so a
+	// reader can tell a whole snapshot from one that ended early
+	w.Header().Set("Trailer", snapshotCountTrailer)
+	buffers := a.agg.ReadAll()
+	if a.snaps.hook != nil {
+		a.snaps.hook()
+	}
+	if err := snapshot.WriteTo(buffers, w); err != nil {
+		log15.Error("error writing snapshot", "client_ip", req.RemoteAddr, "err", err)
+		return
+	}
+	n := 0
+	for _, buf := range buffers {
+		n += len(buf)
+	}
+	w.Header().Set(snapshotCountTrailer, strconv.Itoa(n))
 }
 
 func writeMessages(ctx context.Context, w http.ResponseWriter, msgc <-chan *rfc5424.Message) {

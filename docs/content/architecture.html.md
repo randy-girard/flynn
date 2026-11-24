@@ -483,7 +483,18 @@ a deleted app's ring at once, refusing its late lines for `LOG_BUFFER_TTL`.
 A ring that has had no line for `LOG_BUFFER_TTL` (a Go duration in the
 logaggregator release env, default `168h`) and has no follower is dropped
 too. A new aggregator instance loads the leader's snapshot, which leaves out
-empty and expired rings, so dropped apps are not copied forward on deploy. Each host also keeps about 200MB of
+empty and expired rings, so dropped apps are not copied forward on deploy.
+The load happens before the instance registers and is bounded: a read with
+no data for 10 seconds, or one source taking over 60 seconds, fails that
+source, and the whole load stops after 90 seconds. A failed source (a
+connection cut mid-record, a stall, or fewer messages than the
+`Flynn-Snapshot-Count` trailer the sender writes after the last one) is
+logged, its lines are kept, and the next registered instance is tried. Host
+cursors are only taken from a snapshot read to the end; after a partial or
+failed load each host resends the lines it still has on disk, and the ring
+drops the duplicates. A stopping aggregator waits up to 10 seconds for the
+snapshots it is still sending, because a deploy stops the old jobs as soon
+as the new ones are up. Each host also keeps about 200MB of
 log files per app. A cluster that needs to keep logs adds a syslog sink
 with `flynn-host log-sink:add`. Hosted and self-hosted clusters use that
 same path.
