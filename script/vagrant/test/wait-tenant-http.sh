@@ -86,6 +86,36 @@ if grep -Fq "has no route" "${tmp}/out"; then
 fi
 grep -Fq "tenant HTTP ok: flap-app=200" "${tmp}/out" || fail "flapping app must end ok"
 
+# A single health sample (TRIES=1, the chaos and monitor tenants section)
+# starts the GONE_TRIES count at zero every time, so a deleted app that a
+# host still lists stayed "down" for the whole 300 s chaos baseline
+# (EDGE-99). With ROUTER_IPS (every running node), no route on every router
+# is enough in one round. A 404 from only some routers is not.
+cat > "${tmp}/bin/curl" <<'SH'
+#!/bin/bash
+url="${!#}" resolve=""
+while [[ $# -gt 0 ]]; do [[ "$1" == --resolve ]] && resolve="$2"; shift; done
+ip="${resolve##*:}"
+if [[ "${url}" == https://* ]]; then printf 000; exit 35; fi
+var="STUB_HTTP_${ip//./_}"
+printf '%s' "${!var:-404}"
+SH
+if ! TENANT_APPS="gone-app" ROUTER_IPS="10.0.0.1 10.0.0.2 10.0.0.3" TRIES=1 GONE_TRIES=6 \
+  PATH="${tmp}/bin:${PATH}" HOST_JSON="${tmp}/host.json" CLUSTER_DOMAIN=test.local SLEEP=0 bash "${guest}" > "${tmp}/out" 2>&1; then
+  fail "one sample must drop an app that has no route on every router"
+fi
+grep -Fq "gone-app has no route on 3 routers (deleted?); not waiting for it" "${tmp}/out" || fail "must say the app has no route on every router"
+if TENANT_APPS="gone-app" ROUTER_IPS="10.0.0.1 10.0.0.2 10.0.0.3" STUB_HTTP_10_0_0_2=000 TRIES=1 GONE_TRIES=6 \
+  PATH="${tmp}/bin:${PATH}" HOST_JSON="${tmp}/host.json" CLUSTER_DOMAIN=test.local SLEEP=0 bash "${guest}" > "${tmp}/out" 2>&1; then
+  fail "an app with a route left on one router must still fail a single sample"
+fi
+grep -Fq "tenant HTTP still down: gone-app=000" "${tmp}/out" || fail "must report the app as down"
+# Without ROUTER_IPS one sample is not enough (unchanged).
+if TENANT_APPS="gone-app" TRIES=1 GONE_TRIES=6 \
+  PATH="${tmp}/bin:${PATH}" HOST_JSON="${tmp}/host.json" CLUSTER_DOMAIN=test.local SLEEP=0 bash "${guest}" > "${tmp}/out" 2>&1; then
+  fail "without ROUTER_IPS a single sample must not drop the app"
+fi
+
 # LIST_ONLY=1 is the pre-reload snapshot. It must fail, not print an empty
 # list, when discoverd or a host cannot be read: rolling reload would otherwise
 # take the list again after the crash and miss apps whose jobs died with it.

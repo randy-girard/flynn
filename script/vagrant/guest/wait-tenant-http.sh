@@ -7,6 +7,9 @@
 # A pinned app that has no route any more (deleted while the snapshot was
 # taken: the router fails TLS for its hostname and answers HTTP with 404) is
 # dropped after GONE_TRIES consecutive rounds instead of timing out the wait.
+# ROUTER_IPS (space or comma separated node IPs) drops it in the first round
+# when every one of those routers answers HTTP with 404, so a single health
+# sample (TRIES=1, chaos and monitor) does not report a deleted app as down.
 set -euo pipefail
 DOMAIN="${CLUSTER_DOMAIN:-1.localflynn.com}"
 IP="${CLUSTER_IP:-}"
@@ -111,13 +114,14 @@ def curl_app(app):
     ok = code.isdigit() and 200 <= int(code) < 500 and code not in ("502", "503")
     return ok, code
 
-def no_route(app):
+def no_route(app, ip=None):
     # The router refuses TLS for a hostname it has no route for, so a
     # deleted app is 000 over HTTPS forever. Plain HTTP then gets the
     # router's 404.
+    ip = ip or cluster_ip
     cmd = ["curl", "-s", "--max-time", "10", "-o", "/dev/null", "-w", "%{http_code}"]
-    if cluster_ip:
-        cmd += ["--resolve", "%s.%s:80:%s" % (app, domain, cluster_ip)]
+    if ip:
+        cmd += ["--resolve", "%s.%s:80:%s" % (app, domain, ip)]
     cmd.append("http://%s.%s/" % (app, domain))
     try:
         out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=15)
@@ -136,6 +140,7 @@ else:
         print("cannot list tenant apps: %s" % e, file=sys.stderr)
         raise SystemExit(1)
 gone_tries = int(os.environ["GONE_TRIES"])
+routers = [r for r in os.environ.get("ROUTER_IPS", "").replace(",", " ").split() if r]
 pause = float(os.environ["SLEEP"])
 if list_only:
     for a in apps:
@@ -154,6 +159,10 @@ for i in range(1, tries + 1):
         last[app] = code
         if ok:
             gone[app] = 0
+            continue
+        if code == "000" and routers and all(no_route(app, r) for r in routers):
+            print("%s has no route on %d routers (deleted?); not waiting for it" % (app, len(routers)))
+            apps.remove(app)
             continue
         if code == "000" and no_route(app):
             gone[app] = gone.get(app, 0) + 1
