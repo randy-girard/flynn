@@ -164,21 +164,7 @@ func tagsMatchHost(tags map[string]string, host *Host) bool {
 	if host == nil {
 		return false
 	}
-	if !ct.HostIDsTagMatches(tags, host.ID) {
-		return false
-	}
-	if !ct.AvoidHostIDsTagMatches(tags, host.ID) {
-		return false
-	}
-	for k, v := range tags {
-		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag || k == ct.FormationMaxProcessesSourceTag || k == ct.FormationMaxPersistentSingletonsTag {
-			continue
-		}
-		if w, ok := host.Tags[k]; !ok || v != w {
-			return false
-		}
-	}
-	return true
+	return ct.PlacementTagsMatchHost(tags, host.ID, host.Tags)
 }
 
 func (s *Scheduler) placementTags(j *Job) map[string]string {

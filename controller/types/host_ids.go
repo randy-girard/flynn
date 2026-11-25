@@ -72,6 +72,26 @@ func AvoidHostIDsTagMatches(tags map[string]string, hostID string) bool {
 	return true
 }
 
+// PlacementTagsMatchHost reports whether a job with these placement tags
+// (formation tags merged with runtime profile tags) may run on the host:
+// flynn-host-ids and flynn-avoid-host-ids against its ID, every other tag
+// except the process caps against its tags. The scheduler places with it,
+// and the deployer uses it to know which hosts an omni process must cover.
+func PlacementTagsMatchHost(tags map[string]string, hostID string, hostTags map[string]string) bool {
+	if !HostIDsTagMatches(tags, hostID) || !AvoidHostIDsTagMatches(tags, hostID) {
+		return false
+	}
+	for k, v := range tags {
+		if k == FormationHostIDsTag || k == FormationAvoidHostIDsTag || k == FormationMaxProcessesTag || k == FormationMaxProcessesSourceTag || k == FormationMaxPersistentSingletonsTag {
+			continue
+		}
+		if w, ok := hostTags[k]; !ok || v != w {
+			return false
+		}
+	}
+	return true
+}
+
 func uniqueHostIDs(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
 	out := make([]string, 0, len(ids))

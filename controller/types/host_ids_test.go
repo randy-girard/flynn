@@ -46,3 +46,25 @@ func TestAvoidHostIDsTagMatches(t *testing.T) {
 		t.Fatal("other hosts must still match")
 	}
 }
+
+func TestPlacementTagsMatchHost(t *testing.T) {
+	host := map[string]string{"disk": "ssd"}
+	if !PlacementTagsMatchHost(nil, "host1", nil) {
+		t.Fatal("no tags match every host")
+	}
+	if !PlacementTagsMatchHost(map[string]string{"disk": "ssd", FormationMaxProcessesTag: "3"}, "host1", host) {
+		t.Fatal("a matching host tag matches, and process caps are not host tags")
+	}
+	if PlacementTagsMatchHost(map[string]string{"disk": "hdd"}, "host1", host) {
+		t.Fatal("a different host tag value must not match")
+	}
+	if PlacementTagsMatchHost(map[string]string{"gpu": "yes"}, "host1", host) {
+		t.Fatal("a missing host tag must not match")
+	}
+	if PlacementTagsMatchHost(map[string]string{FormationHostIDsTag: "host2"}, "host1", host) {
+		t.Fatal("flynn-host-ids is matched against the host ID")
+	}
+	if PlacementTagsMatchHost(map[string]string{FormationAvoidHostIDsTag: "host1"}, "host1", host) {
+		t.Fatal("flynn-avoid-host-ids excludes the host")
+	}
+}
