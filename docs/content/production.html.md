@@ -1106,6 +1106,24 @@ does not need to be the same, but the `--min-hosts` flag and cluster discovery
 flag should be specified. The `CLUSTER_DOMAIN` variable is ignored, the domain
 of the previous cluster will be used.
 
+A backup taken before system releases carried their keys is filled on
+restore, before the blobstore starts and before the scheduler starts the
+rest. A blobstore release with no `AUTH_KEY`/`CONTROLLER_KEY` gets `AUTH_KEY`
+set to the restored controller key, and a missing `ACCESS_TOKEN_KEY` is copied
+from the controller release (it is the public half of the cluster's
+access-token keypair, so a new random value would verify nothing). Router and
+logaggregator releases without a cluster key get `CONTROLLER_KEY`, and
+tarreceive gets missing `CONTROLLER_KEY`, `AUTH_KEY`, and `ACCESS_TOKEN_KEY`
+the same way. Each change is a new release, and the restore prints the key
+names it filled, never the values. A key present in the backup is never
+replaced, except an `ACCESS_TOKEN_KEY` that does not parse (the app ignores or
+rejects it), which is replaced with the controller's and reported as a
+warning. When the controller release has no valid `ACCESS_TOKEN_KEY` either,
+the restore warns and keeps going (the cluster key still works; run
+`flynn-host update` to generate the keypair). When it has no cluster key to
+copy, the restore stops before starting the blobstore and names the missing
+key.
+
 Restoring a singleton backup onto `--min-hosts 3` keeps the backup's
 `SINGLETON` flag and process counts so the platform Postgres appliance can
 elect a leader during wait/dump. After the controller is up, the scheduler

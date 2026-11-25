@@ -616,6 +616,22 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	state.SetControllerKey(controllerKey)
 	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
 
+	// A backup from before these releases carried keys restores a blobstore
+	// that refuses every object request (EDGE-12) and router/logaggregator
+	// APIs that refuse every caller (EDGE-04). Fill the missing keys from the
+	// restored controller release, as new releases, before the blobstore
+	// starts and before the scheduler starts the others (EDGE-43).
+	meta = bootstrap.StepMeta{ID: "restore-keys", Action: "fill-restored-keys"}
+	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "start", Timestamp: time.Now().UTC()}
+	keySources := restoreKeySourcesFrom(controllerApp.Release.Env)
+	for _, name := range restoreKeyApps {
+		if err := restoreFillAppKeys(client, name, keySources, os.Stderr); err != nil {
+			ch <- &bootstrap.StepInfo{StepMeta: meta, State: "error", Error: err.Error(), Err: err, Timestamp: time.Now().UTC()}
+			return err
+		}
+	}
+	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
+
 	// Plugin appliance images live in blobstore, not the Flynn tarball.
 	// Start blobstore before restoring mysql/mongodb dumps so run-app can pull layers.
 	blobstoreRelease, err := client.GetAppRelease("blobstore")
