@@ -813,7 +813,11 @@ not receive `CONTROLLER_KEY`, `AUTH_KEY`, or access-token signing keys.
 Each new database gets its own `APPLIANCE_KEY` for appliance admin HTTP
 (backup, restore, status, scale). The plugin API job still holds the
 cluster controller key and reads `APPLIANCE_KEY` from the instance
-release when it calls that admin API. Replicas of a new database share
+release when it calls that admin API. The controller's sirenia deploy
+(rolling upgrades and any deploy of an instance app) also sends the
+release's `APPLIANCE_KEY` (the new release's, then the old one's) and never
+the cluster key to an app whose release has one. Members refuse the
+cluster key and requests without a key. Replicas of a new database share
 that appliance key. An instance created before this change still has
 `CONTROLLER_KEY` in its release. Adding a follower to that database does
 not copy the cluster key onto the new process, so peer admin calls

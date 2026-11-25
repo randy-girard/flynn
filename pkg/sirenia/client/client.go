@@ -71,6 +71,9 @@ type Status struct {
 
 type Client struct {
 	c *httpclient.Client
+	// keys, when set, are the only credentials sent to the peer, tried in
+	// order on a 401 (NewClientWithKeys). Empty means the cluster key.
+	keys []string
 }
 
 // httpClient is used for sirenia /status polls. WaitFor* already retries
@@ -112,11 +115,100 @@ func (c *Client) Status() (*Status, error) {
 	return res, c.c.Get("/status", res)
 }
 
+// NewClientWithKeys is a client that authenticates with keys instead of the
+// cluster key. An isolated database instance accepts only its own
+// APPLIANCE_KEY (from its release env); pass that key, or the old and new
+// release keys during a deploy that changes it. Each key is tried in order
+// and the next one only after a 401. The cluster key is never sent.
+func NewClientWithKeys(addr string, keys ...string) *Client {
+	var ks []string
+	for _, k := range keys {
+		if k = strings.TrimSpace(k); k != "" {
+			ks = append(ks, k)
+		}
+	}
+	if len(ks) == 0 {
+		return NewClient(addr)
+	}
+	c := NewClientWithHTTP(addr, keyedHTTPClient(httpClient, ks))
+	c.c.Key = ""
+	c.keys = ks
+	return c
+}
+
+// peerClient is a client for another peer of the same cluster, with the same
+// credentials.
+func (c *Client) peerClient(addr string) *Client {
+	if len(c.keys) > 0 {
+		return NewClientWithKeys(addr, c.keys...)
+	}
+	return NewClient(addr)
+}
+
+func keyedHTTPClient(base *http.Client, keys []string) *http.Client {
+	tr := base.Transport
+	if tr == nil {
+		tr = http.DefaultTransport
+	}
+	return &http.Client{Timeout: base.Timeout, Transport: keyedTransport{base: tr, keys: keys}}
+}
+
+// keyedTransport sets HTTP basic auth to each key in turn and moves to the
+// next key only when the peer answers 401.
+type keyedTransport struct {
+	base http.RoundTripper
+	keys []string
+}
+
+func (t keyedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for i, k := range t.keys {
+		r := req.Clone(req.Context())
+		if i > 0 && req.Body != nil && req.Body != http.NoBody {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			r.Body = body
+		}
+		r.Header.Del("Authorization")
+		r.SetBasicAuth("", k)
+		res, err := t.base.RoundTrip(r)
+		last := i == len(t.keys)-1
+		// A body that cannot be sent again ends the fallback here.
+		replayable := req.Body == nil || req.Body == http.NoBody || req.GetBody != nil
+		if err != nil || res.StatusCode != http.StatusUnauthorized || last || !replayable {
+			return res, err
+		}
+		io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
+		res.Body.Close()
+	}
+	return nil, errors.New("sirenia client: no keys")
+}
+
+// IsUnauthorized reports whether err is the peer refusing the credentials
+// (401 or 403). It is never transient: retrying with the same key cannot
+// succeed, so callers must surface it.
+func IsUnauthorized(err error) bool {
+	if err == nil {
+		return false
+	}
+	var je httphelper.JSONError
+	if errors.As(err, &je) {
+		return je.Code == httphelper.UnauthorizedErrorCode || je.Code == httphelper.ForbiddenErrorCode
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "unexpected status 401") || strings.Contains(msg, "unexpected status 403")
+}
+
 func (c *Client) Stop() error {
+	stopHTTP := stopHTTPClient
+	if len(c.keys) > 0 {
+		stopHTTP = keyedHTTPClient(stopHTTPClient, c.keys)
+	}
 	stopClient := &httpclient.Client{
 		URL:  c.c.URL,
 		Key:  c.c.Key,
-		HTTP: stopHTTPClient,
+		HTTP: stopHTTP,
 	}
 	return stopClient.Post("/stop", nil, nil)
 }
@@ -161,7 +253,7 @@ func (c *Client) WaitForReplSync(downstream *discoverd.Instance, idKey string, t
 	if downstream == nil {
 		return fmt.Errorf("nil downstream peer")
 	}
-	dclient := NewClient(downstream.Addr)
+	dclient := c.peerClient(downstream.Addr)
 	return c.WaitUntil(func(up *Status) bool {
 		return replSyncCaughtUp(up, dclient, downstream, idKey)
 	}, timeout)
@@ -340,7 +432,9 @@ func (c *Client) waitFor(expected func(*Status) bool, timeout time.Duration) err
 	for {
 		status, err := c.Status()
 		if err != nil {
-			if !isNetError(err) {
+			// A refused key is not a "not ready yet": fail now instead of
+			// polling until the timeout.
+			if IsUnauthorized(err) || !isNetError(err) {
 				return err
 			}
 		} else if expected(status) {

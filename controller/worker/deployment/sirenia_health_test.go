@@ -195,7 +195,7 @@ func TestFindSireniaPeerByRelease(t *testing.T) {
 }
 
 func TestSireniaProgressMessageWithoutAddrs(t *testing.T) {
-	if got := sireniaProgressMessage("replication sync", nil, nil); got != "replication sync" {
+	if got := sireniaProgressMessage("replication sync", nil, nil, nil); got != "replication sync" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -229,14 +229,14 @@ func TestSireniaProgressMessagePercent(t *testing.T) {
 		return &sireniaclient.Status{Peer: &state.PeerInfo{ID: "async-1", Role: state.RoleAsync}, Database: db}
 	})
 	tracker := &sireniaclient.CatchupTracker{}
-	got := sireniaProgressMessage("replication sync", []string{up, down}, tracker)
+	got := sireniaProgressMessage("replication sync", []string{up, down}, tracker, nil)
 	if !strings.Contains(got, "async: pg_basebackup 40% (4.0 GB of 10.0 GB)") {
 		t.Fatalf("basebackup: %q", got)
 	}
 	downXLog = "0/0800"
-	sireniaProgressMessage("replication sync", []string{up, down}, tracker)
+	sireniaProgressMessage("replication sync", []string{up, down}, tracker, nil)
 	downXLog = "0/0C00"
-	got = sireniaProgressMessage("replication sync", []string{up, down}, tracker)
+	got = sireniaProgressMessage("replication sync", []string{up, down}, tracker, nil)
 	if !strings.Contains(got, "catching up 50%, 1.0 KB behind") {
 		t.Fatalf("catch-up: %q", got)
 	}

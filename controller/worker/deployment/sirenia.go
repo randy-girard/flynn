@@ -272,7 +272,7 @@ waitCurrent:
 			}
 			log.Info("waiting for new sirenia peer to accept writes", "addr", inst.Addr)
 			if err := d.waitSireniaProgress(log, processType, "new peer read-write", []string{inst.Addr}, func() error {
-				if err := sireniaclient.NewClient(inst.Addr).WaitForReadWrite(syncTimeout); err != nil {
+				if err := d.sireniaClient(inst.Addr).WaitForReadWrite(syncTimeout); err != nil {
 					return fmt.Errorf("new sirenia peer did not become read-write: %s", err)
 				}
 				return nil
@@ -659,7 +659,7 @@ loop:
 			return nil
 		}
 
-		peer := sireniaclient.NewClient(inst.Addr)
+		peer := d.sireniaClient(inst.Addr)
 		log.Info("stopping peer")
 		*stoppedJobs = append(*stoppedJobs, inst.Meta["FLYNN_JOB_ID"])
 		if err := peer.Stop(); err != nil {
@@ -766,7 +766,7 @@ loop:
 	waitForSync := func(upstream, downstream *discoverd.Instance) error {
 		log.Info("waiting for replication sync", "upstream", upstream.Addr, "downstream", downstream.Addr)
 		return d.waitSireniaProgress(log, processType, "replication sync", []string{upstream.Addr, downstream.Addr}, func() error {
-			sc := sireniaclient.NewClient(upstream.Addr)
+			sc := d.sireniaClient(upstream.Addr)
 			if err := sc.WaitForReplSync(downstream, sireniaclient.ProcessIDKey(processType), syncTimeout); err != nil {
 				log.Error("error waiting for replication sync", "err", err)
 				return err
@@ -777,7 +777,7 @@ loop:
 	waitForReadWrite := func(inst *discoverd.Instance) error {
 		log.Info("waiting for read-write", "inst", inst.Addr)
 		return d.waitSireniaProgress(log, processType, "read-write", []string{inst.Addr}, func() error {
-			sc := sireniaclient.NewClient(inst.Addr)
+			sc := d.sireniaClient(inst.Addr)
 			if err := sc.WaitForReadWrite(syncTimeout); err != nil {
 				log.Error("error waiting for read-write", "err", err)
 				return err
@@ -792,7 +792,7 @@ loop:
 			primaryAddr = state.Primary.Addr
 		}
 		return d.waitSireniaProgress(log, processType, what, []string{primaryAddr}, func() error {
-			sc := sireniaclient.NewClient(state.Primary.Addr)
+			sc := d.sireniaClient(state.Primary.Addr)
 			if err := sc.WaitUntil(pred, syncTimeout); err != nil {
 				if st, serr := sc.Status(); serr == nil && st != nil && st.Peer != nil && st.Peer.State != nil {
 					log.Error("error waiting for sirenia topology", "what", what, "err", err, "asyncs", len(st.Peer.State.Async))
@@ -807,7 +807,7 @@ loop:
 	waitForReplica := func(inst, upstream *discoverd.Instance, what string) error {
 		log.Info("waiting for replica to follow upstream", "what", what, "inst", inst.Addr, "upstream", upstream.Addr)
 		return d.waitSireniaProgress(log, processType, what, []string{upstream.Addr, inst.Addr}, func() error {
-			sc := sireniaclient.NewClient(inst.Addr)
+			sc := d.sireniaClient(inst.Addr)
 			if err := sc.WaitUntil(sireniaclient.ReplicaOf(upstream, idKey), syncTimeout); err != nil {
 				log.Error("error waiting for replica to follow upstream", "what", what, "err", err)
 				return err
@@ -824,7 +824,7 @@ loop:
 	waitForSyncPeer := func(upstream, successor *discoverd.Instance) error {
 		log.Info("waiting for successor to become the synchronous peer", "upstream", upstream.Addr, "successor", successor.Addr)
 		return d.waitSireniaProgress(log, processType, "successor is recorded sync", []string{upstream.Addr}, func() error {
-			sc := sireniaclient.NewClient(upstream.Addr)
+			sc := d.sireniaClient(upstream.Addr)
 			deadline := time.After(syncTimeout)
 			poll := time.NewTicker(time.Second)
 			defer poll.Stop()

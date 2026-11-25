@@ -34,7 +34,7 @@ func (d *DeployJob) waitSireniaProgress(log log15.Logger, processType, what stri
 }
 
 func (d *DeployJob) emitSireniaProgress(log log15.Logger, processType, what string, addrs []string, tracker *sireniaclient.CatchupTracker) {
-	msg := sireniaProgressMessage(what, addrs, tracker)
+	msg := sireniaProgressMessage(what, addrs, tracker, d.sireniaClient)
 	log.Info("sirenia wait progress", "what", what, "status", msg)
 	if d.deployEvents == nil {
 		return
@@ -50,10 +50,13 @@ func (d *DeployJob) emitSireniaProgress(log log15.Logger, processType, what stri
 	}
 }
 
-func sireniaProgressMessage(what string, addrs []string, tracker *sireniaclient.CatchupTracker) string {
+func sireniaProgressMessage(what string, addrs []string, tracker *sireniaclient.CatchupTracker, newClient func(string) *sireniaclient.Client) string {
+	if newClient == nil {
+		newClient = sireniaclient.NewClient
+	}
 	if len(addrs) == 2 && addrs[0] != "" && addrs[1] != "" {
-		up, upErr := sireniaclient.NewClient(addrs[0]).Status()
-		down, downErr := sireniaclient.NewClient(addrs[1]).Status()
+		up, upErr := newClient(addrs[0]).Status()
+		down, downErr := newClient(addrs[1]).Status()
 		return what + ": " + tracker.FormatReplSync(up, down, upErr, downErr)
 	}
 	parts := make([]string, 0, len(addrs))
@@ -61,7 +64,7 @@ func sireniaProgressMessage(what string, addrs []string, tracker *sireniaclient.
 		if addr == "" {
 			continue
 		}
-		st, err := sireniaclient.NewClient(addr).Status()
+		st, err := newClient(addr).Status()
 		parts = append(parts, addr+": "+sireniaclient.FormatReplicationProgress(st, err))
 	}
 	if len(parts) == 0 {
