@@ -1178,6 +1178,7 @@ func (s *Scheduler) installHost(host *Host, volumes map[string]*Volume, jobs map
 		s.handleActiveJob(&job)
 	}
 	s.triggerSyncFormations()
+	s.triggerRebalance()
 }
 
 func (s *Scheduler) followHostSync(h utils.HostClient) (*Host, error) {
@@ -1244,6 +1245,7 @@ func (s *Scheduler) applyHostChecks(results []hostCheckResult) {
 			hlog.Info("host is now healthy")
 			host.Healthy = true
 			host.Checks = 0
+			s.triggerRebalance()
 			// The host was excluded from the last sample. Refresh now so
 			// a reserving job does not wait out the rest of the 10s period
 			// on 0/0 totals.

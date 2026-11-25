@@ -166,6 +166,12 @@ type Scheduler struct {
 
 	routerBackends map[string]*RouterBackend
 
+	// rebalance is the replica move in flight, rebalanceNext the earliest
+	// time for the next one, and rebalanceCh triggers a check (rebalance.go).
+	rebalance     *rebalanceMove
+	rebalanceNext time.Time
+	rebalanceCh   chan struct{}
+
 	// reserveResources, when true on a runtime, only places jobs using
 	// that runtime on a host that still has the requested CPU and memory
 	// free. Off by default per runtime.
@@ -287,6 +293,7 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		hostChecks:               make(chan struct{}, 1),
 		rectifyBatch:             make(map[utils.FormationKey]struct{}),
 		rectify:                  make(chan struct{}, 1),
+		rebalanceCh:              make(chan struct{}, 1),
 		sendTelemetry:            make(chan struct{}, 1),
 		formationEvents:          make(chan *ct.ExpandedFormation, eventBufferSize),
 		hostEvents:               make(chan *discoverd.Event, eventBufferSize),
@@ -718,6 +725,7 @@ func (s *Scheduler) Run() {
 	s.tickSyncSinks(time.Minute)
 	s.tickSyncVolumes(time.Minute)
 	s.tickSyncHosts(10 * time.Second)
+	s.tickRebalance(rebalanceInterval)
 	s.tickSendTelemetry()
 
 	// Startup sync above ran before this flag, on this goroutine. Later
@@ -803,6 +811,8 @@ func (s *Scheduler) Run() {
 			fn()
 		case <-s.rectify:
 			s.HandleRectify()
+		case <-s.rebalanceCh:
+			s.maybeRebalance()
 		case <-s.stop:
 			log.Info("stopping scheduler loop")
 			s.drainDownPersistResults()
@@ -1231,6 +1241,7 @@ func (s *Scheduler) RectifyFormation(key utils.FormationKey) {
 		}
 	}
 
+	s.cancelRebalanceOnScale(formation)
 	diff := s.formationDiff(formation)
 	if diff.IsEmpty() {
 		return
@@ -1361,6 +1372,9 @@ func (s *Scheduler) formationDiff(formation *Formation) Processes {
 	}
 	key := formation.key()
 	actual := s.jobs.GetProcesses(key)
+	for typ := range actual {
+		actual[typ] -= s.movingOut(key, typ)
+	}
 	diff := formation.Diff(actual)
 	for typ, n := range s.restartsExhausted[key] {
 		if diff[typ] > 0 {
@@ -2113,6 +2127,8 @@ func (s *Scheduler) ControllerPersistLoop() {
 func (s *Scheduler) HandleLeaderChange(isLeader bool) {
 	log := s.logger.New("fn", "HandleLeaderChange")
 	s.isLeader = &isLeader
+	// A move belongs to the leader that started it.
+	s.rebalance = nil
 	if !isLeader {
 		log.Info("handling leader demotion")
 		s.pendingLeader = nil
@@ -2964,6 +2980,7 @@ func (s *Scheduler) handleJobStatus(job *Job, status host.JobStatus) {
 		log.Info("handling job status change", "from", previousState, "to", job.State)
 		s.persistJob(job)
 	}
+	s.noteRebalanceJobState(job, previousState)
 	if ct.IsBuilderProcessType(job.Type) && (job.State == JobStateStopped || job.State == JobStateStopping) && s.buildStarting != nil {
 		delete(s.buildStarting, job.ID)
 	}

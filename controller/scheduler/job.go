@@ -81,6 +81,13 @@ type Job struct {
 	// reads or writes it.
 	addJobFailedHost string
 
+	// addJobFailures counts AddJob refusals in a row by addJobFailedHost.
+	addJobFailures int
+
+	// rebalanceOf is the ID of the stacked replica this job replaces
+	// (see rebalance.go). Only the loop reads or writes it.
+	rebalanceOf string
+
 	// HostID is the ID of the host the job has been placed on, and is set
 	// when a StartJob goroutine makes a placement request to the scheduler
 	// loop

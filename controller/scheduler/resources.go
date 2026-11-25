@@ -507,13 +507,35 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	// A retry after AddJob failed prefers any other eligible host. A random
 	// pick between two hosts kept choosing the refusing one for eleven
 	// retries in CI. The refusing host is still used if nothing else fits.
-	if job.addJobFailedHost != "" {
-		if h := s.pickHostExcept(job, counts, job.addJobFailedHost); h != nil {
+	//
+	// A replica that spreads across hosts goes back to the refusing host
+	// while that host is the only one with fewer replicas, for up to
+	// maxSpreadRetriesOnRefusingHost refusals in a row. A single
+	// "ratelimited" refusal (flynn-host runs a bounded number of AddJob
+	// calls at once) otherwise put both controller web jobs on one host
+	// when another host was lost (EDGE-112).
+	if failed := job.addJobFailedHost; failed != "" {
+		alt := s.pickHostExcept(job, counts, failed)
+		if alt == nil {
+			return s.pickHostExcept(job, counts, "")
+		}
+		if !job.spreadsAcrossHosts() || job.isPersistentSingleton() || job.addJobFailures >= maxSpreadRetriesOnRefusingHost ||
+			hostJobCount(counts, alt.ID) <= hostJobCount(counts, failed) {
+			return alt
+		}
+		if h := s.pickHostExcept(job, counts, ""); h != nil {
 			return h
 		}
+		return alt
 	}
 	return s.pickHostExcept(job, counts, "")
 }
+
+// maxSpreadRetriesOnRefusingHost is how many AddJob refusals in a row a
+// spreading replica takes from the only host without a replica before it is
+// placed next to another replica. StartJob waits 0.5 s, 1 s and 1.5 s
+// between them.
+const maxSpreadRetriesOnRefusingHost = 3
 
 // noteAddJobFailure runs on the loop after hostID refused AddJob for job, so
 // the next placement of the job tries another host first.
@@ -521,7 +543,29 @@ func (s *Scheduler) noteAddJobFailure(job *Job, hostID string) {
 	if job == nil {
 		return
 	}
+	if job.addJobFailedHost == hostID {
+		job.addJobFailures++
+	} else {
+		job.addJobFailures = 1
+	}
 	job.addJobFailedHost = hostID
+}
+
+// hostActiveJobCounts counts pending (placed), starting and running jobs per
+// host, of every app. A spreading replica uses it to break ties between
+// hosts with the same number of replicas.
+func (s *Scheduler) hostActiveJobCounts() map[string]int {
+	counts := make(map[string]int)
+	for _, j := range s.jobs {
+		if j == nil || j.HostID == "" {
+			continue
+		}
+		switch j.State {
+		case JobStatePending, JobStateStarting, JobStateRunning:
+			counts[j.HostID]++
+		}
+	}
+	return counts
 }
 
 func (s *Scheduler) pickHostExcept(job *Job, counts map[string]int, skip string) *Host {
@@ -535,6 +579,11 @@ func (s *Scheduler) pickHostExcept(job *Job, counts map[string]int, skip string)
 	var fit *Host
 	var fitCount int
 	var fitPack int
+	var fitLoad int
+	var spreadLoad map[string]int
+	if !spreadPersist && !omni && job.spreadsAcrossHosts() {
+		spreadLoad = s.hostActiveJobCounts()
+	}
 	for _, h := range s.ShuffledHosts() {
 		if h.ID == skip || !hostCanPlace(h) || !s.jobMatchesHost(job, h) || !s.hostAllowsRole(job, h) {
 			continue
@@ -556,6 +605,15 @@ func (s *Scheduler) pickHostExcept(job *Job, counts map[string]int, skip string)
 			pack := s.hostPersistentSingletonCount(h.ID)
 			if fit == nil || pack < fitPack || (pack == fitPack && count < fitCount) {
 				fit, fitCount, fitPack = h, count, pack
+			}
+			continue
+		}
+		if spreadLoad != nil {
+			// Replicas of this app and type first, then the host's load.
+			// Hosts come shuffled, so equal hosts are picked at random.
+			load := spreadLoad[h.ID]
+			if fit == nil || count < fitCount || (count == fitCount && load < fitLoad) {
+				fit, fitCount, fitLoad = h, count, load
 			}
 			continue
 		}
