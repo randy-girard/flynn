@@ -693,7 +693,10 @@ func TestReplaceHostInfraJobsMovesAppToPulledImageRelease(t *testing.T) {
 	assertHostRunsRelease(t, h1, newID)
 	assertHostRunsRelease(t, h2, newID)
 
+	// The new formation is written on no host before any job stops, so a
+	// scheduler sync read during the swap lists it (EDGE-116).
 	want := []string{
+		newID + " staged",
 		"rel-old avoid=n1", newID + " hosts=n1",
 		"rel-old avoid=n1,n2", newID + " hosts=n1,n2",
 		newID + " all", "rel-old zero",
@@ -701,9 +704,12 @@ func TestReplaceHostInfraJobsMovesAppToPulledImageRelease(t *testing.T) {
 	var got []string
 	for _, f := range c.puts {
 		tags := f.Tags["app"]
+		hostIDs, pinned := tags[ct.FormationHostIDsTag]
 		switch {
 		case f.Processes["app"] == 0:
 			got = append(got, f.ReleaseID+" zero")
+		case pinned && hostIDs == "":
+			got = append(got, f.ReleaseID+" staged")
 		case tags[ct.FormationAvoidHostIDsTag] != "":
 			got = append(got, f.ReleaseID+" avoid="+tags[ct.FormationAvoidHostIDsTag])
 		case tags[ct.FormationHostIDsTag] != "":

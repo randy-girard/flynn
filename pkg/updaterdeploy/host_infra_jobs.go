@@ -254,6 +254,15 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 				if externalStops >= hostInfraMaxExternalStops {
 					return fmt.Errorf("%s on %s: %d started jobs were stopped right away (the scheduler may hold a stale formation for release %s)", name, h.ID(), externalStops, release)
 				}
+				if switching {
+					// The scheduler stopped it as scale-down: make it apply
+					// the formation again, then give it the grace to start
+					// the job itself before starting another.
+					if err := r.restore(log); err != nil {
+						return err
+					}
+					adoptedAt = time.Now()
+				}
 				time.Sleep(hostInfraRestartBackoff << uint(externalStops-1))
 			}
 			pendingID = ""
@@ -564,6 +573,8 @@ type hostInfraRollout struct {
 	// zeroed holds releases this run scaled to zero because they were
 	// superseded; their jobs are stopped where a current job already runs.
 	zeroed map[string]bool
+	// restores counts restore writes, so each one's tags differ.
+	restores int
 }
 
 func (r *hostInfraRollout) switching() bool {
@@ -650,7 +661,26 @@ func prepareHostInfraRollout(client HostInfraController, name string, image *ct.
 		log.Info("moving host-infra app to pulled image release", "app", name,
 			"old_release", current.ID, "new_release", next.ID, "switching", r.switching())
 	}
+	if r.switching() {
+		if err := r.stage(log); err != nil {
+			return nil, err
+		}
+	}
 	return r, nil
+}
+
+// stage writes the new release's formation, on the hosts already moved (none
+// on a first run), before any job is stopped (EDGE-116). Replacing discoverd
+// moves the scheduler leader, and a v20261114.0 scheduler's promotion sync
+// (NEW-04, fixed in head's scheduler) zeroes every formation missing from the
+// active list it read at promotion, stopping its jobs as scale-down. Written
+// here, the formation is active in every list read during the swap: a
+// present but empty flynn-host-ids matches no host, so nothing starts yet.
+func (r *hostInfraRollout) stage(log log15.Logger) error {
+	if log != nil {
+		log.Info("staging host-infra formation before the swap", "app", r.appID, "release", r.newRelease.ID, "hosts", r.newHosts)
+	}
+	return r.putFormation(r.newRelease.ID, r.processes, r.newHostTags(0), log)
 }
 
 // releaseHost stops the old release from scheduling onto hostID.
@@ -662,11 +692,32 @@ func (r *hostInfraRollout) releaseHost(hostID string, log log15.Logger) error {
 // adoptHost lets the new release schedule onto hostID.
 func (r *hostInfraRollout) adoptHost(hostID string, log log15.Logger) error {
 	r.newHosts = appendHostID(r.newHosts, hostID)
+	return r.putFormation(r.newRelease.ID, r.processes, r.newHostTags(0), log)
+}
+
+// restore writes the new release's formation again with tags that differ
+// from every earlier write but place the same hosts. A v20261114.0 scheduler
+// that zeroed the formation (NEW-04) ignores a write with the same counts and
+// tags, so restarting the job alone was stopped every time; changed tags make
+// it apply the formation again (EDGE-116).
+func (r *hostInfraRollout) restore(log log15.Logger) error {
+	r.restores++
+	if log != nil {
+		log.Warn("rewriting host-infra formation so the scheduler applies it again", "app", r.appID, "release", r.newRelease.ID, "hosts", r.newHosts, "attempt", r.restores)
+	}
+	return r.putFormation(r.newRelease.ID, r.processes, r.newHostTags(r.restores), log)
+}
+
+// newHostTags pins every process type to newHosts. pad appends that many
+// commas to the host list: every reader parses the same IDs, but a scheduler
+// comparing tag strings sees a change.
+func (r *hostInfraRollout) newHostTags(pad int) map[string]map[string]string {
+	ids := ct.EncodeHostIDsTag(r.newHosts) + strings.Repeat(",", pad)
 	tags := make(map[string]map[string]string, len(r.processes))
 	for typ := range r.processes {
-		tags[typ] = map[string]string{ct.FormationHostIDsTag: ct.EncodeHostIDsTag(r.newHosts)}
+		tags[typ] = map[string]string{ct.FormationHostIDsTag: ids}
 	}
-	return r.putFormation(r.newRelease.ID, r.processes, tags, log)
+	return tags
 }
 
 // finish runs the new release on every host, scales the old release to zero,

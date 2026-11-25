@@ -324,7 +324,11 @@ answer that a retry would not change (a 404 for a deleted app or release,
 scale request that was written and then failed (a job did not start, the
 scale timed out) is the scale's outcome and is not retried. When `flynn-host
 update` replaces a host-infra job, a failed job list from the host while the
-replacement starts is also a missed poll until the replacement's deadline.
+replacement starts is also a missed poll until the replacement's deadline. The new
+release's host-infra formation is written before the first job stops, with an
+empty `flynn-host-ids` (no host), so a scheduler that resyncs its formations
+when discoverd's replacement moves its leader already lists it and does not
+scale it down.
 
 A deploy that fails is rolled back by the controller worker. The rollback
 restores the old release's process counts and tags, which also removes the
