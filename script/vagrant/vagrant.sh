@@ -95,8 +95,18 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
              degraded cluster. Fails too when every round was
              skipped, more than CHAOS_MAX_SKIPPED were skipped, a recovery
              took longer than CHAOS_TIMEOUT, or a round broke CHAOS_BUDGET
-             (<fault>:<check>=<max> failed samples; default
-             tenant-job:tenants=0 datastore-replica:tenants=0). CHAOS_APP (e.g. kafka) limits the
+             (<fault>:<check>=<max> failed samples of a health section;
+             <fault>:ingress=<max> failed probe seconds and
+             <fault>:ingress-longest=<max> seconds in a row from the ingress
+             prober; default tenant-job:tenants=0
+             datastore-replica:tenants=0, <fault>:ingress=0 for every
+             fault but node-reboot:ingress=10 node-reboot:ingress-longest=5). A tenant app needs web=2 for tenant-job rounds
+             (flynn -a <app> scale web=2). The ingress prober asks the
+             router, the controller and each tenant app that answered at
+             baseline on every node IP once a second (CHAOS_INGRESS_NODES,
+             CHAOS_INGRESS_TIMEOUT default 1.5, CHAOS_INGRESS=0 off) into
+             ingress.tsv; a second fails only when no node answers.
+             CHAOS_APP (e.g. kafka) limits the
              datastore kinds to apps whose name contains it. CHAOS_SEED repeats a run,
              CHAOS_SETTLE (default 20) and CHAOS_NODE_DOWN (default 60) are
              seconds. The monitor runs in the background for the whole run
@@ -380,14 +390,27 @@ run_as_root() {
   vagrant ssh "${DEV_MACHINE}" -c "sudo -n bash -lc $(printf '%q' "$1")"
 }
 
+# run_as_root_on runs a root command on a VM. One `vagrant status` can fail
+# right after `vagrant up` (VirtualBox busy, the machine lock), so an unknown
+# state is asked again VAGRANT_STATUS_TRIES times (default 4, 3 s apart)
+# before the node counts as not running; a clear state such as poweroff
+# fails at once.
 run_as_root_on() {
   local vm="$1"
   local cmd="$2"
   need_vagrant
-  local state
+  local state try tries="${VAGRANT_STATUS_TRIES:-4}"
   state="$(machine_state "${vm}")"
+  for ((try = 2; try <= tries; try++)); do
+    [[ "${state}" == "unknown" ]] || break
+    sleep 3
+    state="$(machine_state "${vm}")"
+  done
   if [[ "${state}" != "running" ]]; then
     echo "${vm} is not running (${state})" >&2
+    if [[ "${state}" == "unknown" ]]; then
+      echo "vagrant status ${vm} (after ${tries} tries): $(vagrant status --machine-readable "${vm}" 2>&1 | grep -v '^[[:space:]]*$' | tail -3 | paste -sd ';' - | cut -c1-300 || true)" >&2
+    fi
     exit 1
   fi
   vagrant ssh "${vm}" -c "sudo -n bash -lc $(printf '%q' "${cmd}")"
