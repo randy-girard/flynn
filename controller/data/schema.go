@@ -1630,6 +1630,20 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 			expires_at timestamptz NOT NULL
 		)`,
 	)
+
+	// Leases not owned by one app (EDGE-40), keyed by a namespaced name
+	// such as "pipeline:shop": gitreceive holds a pipeline's lease around a
+	// push to its preview remote, whose repo cache is the pipeline's, not
+	// any one app's. Same expiry rules as app_build_locks.
+	migrations.Add(102,
+		`CREATE TABLE build_locks (
+			lock_key text PRIMARY KEY,
+			holder text NOT NULL,
+			description text NOT NULL DEFAULT '',
+			acquired_at timestamptz NOT NULL DEFAULT now(),
+			expires_at timestamptz NOT NULL
+		)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

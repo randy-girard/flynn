@@ -152,3 +152,59 @@ func TestNilLeaseIsSafe(t *testing.T) {
 		t.Fatal("nil lease has a holder")
 	}
 }
+
+// keyStore is the controller's keyed leases in memory (EDGE-40).
+type keyStore struct {
+	m        *memStore
+	bareHeld bool
+}
+
+func (k *keyStore) AcquireKeyedBuildLock(key string, req *ct.BuildLock) (*ct.BuildLock, error) {
+	got, err := k.m.AcquireBuildLock(key, req)
+	var held *ct.BuildLockHeldError
+	if errors.As(err, &held) && k.bareHeld {
+		return nil, &ct.BuildLockHeldError{}
+	}
+	if got != nil {
+		got.Key, got.AppID = key, ""
+	}
+	return got, err
+}
+
+func (k *keyStore) ReleaseKeyedBuildLock(key, holder string) error {
+	return k.m.ReleaseBuildLock(key, holder)
+}
+
+// TestKeyedLeaseNamesThePipeline: a pipeline's lease refuses a second holder
+// with a message about the pipeline, even when the controller's 409 had no
+// lease detail; an old controller's 404 is ErrUnsupported.
+func TestKeyedLeaseNamesThePipeline(t *testing.T) {
+	if Keyed(nil) != nil {
+		t.Fatal("Keyed(nil) must be a nil Store")
+	}
+	for _, bare := range []bool{false, true} {
+		ks := &keyStore{m: newMemStore(), bareHeld: bare}
+		key := ct.PipelineBuildLockKey("shop")
+		first, err := Acquire(Keyed(ks), key, "a git push", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Acquire(Keyed(ks), key, "a git push", time.Minute)
+		var held *ct.BuildLockHeldError
+		if !errors.As(err, &held) {
+			t.Fatalf("second Acquire err = %v, want BuildLockHeldError", err)
+		}
+		if !strings.Contains(held.Error(), "to this pipeline is in progress") {
+			t.Fatalf("bare=%v: held error does not name the pipeline: %v", bare, held)
+		}
+		first.Release()
+		if _, ok := ks.m.locks[key]; ok {
+			t.Fatal("Release left the keyed lease")
+		}
+	}
+	ks := &keyStore{m: newMemStore()}
+	ks.m.err = ct.ErrNotFound
+	if _, err := Acquire(Keyed(ks), "pipeline:shop", "a git push", time.Minute); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("old controller = %v, want ErrUnsupported", err)
+	}
+}

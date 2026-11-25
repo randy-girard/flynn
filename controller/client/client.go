@@ -33,6 +33,8 @@ type Client interface {
 	UpdateAppMeta(app *ct.App) error
 	AcquireBuildLock(appID string, lock *ct.BuildLock) (*ct.BuildLock, error)
 	ReleaseBuildLock(appID, holder string) error
+	AcquireKeyedBuildLock(key string, lock *ct.BuildLock) (*ct.BuildLock, error)
+	ReleaseKeyedBuildLock(key, holder string) error
 	DeleteApp(appID string) (*ct.AppDeletion, error)
 	CreateProvider(provider *ct.Provider) error
 	UpdateProvider(provider *ct.Provider) error

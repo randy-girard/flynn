@@ -194,6 +194,9 @@ var preparedStatements = map[string]string{
 	"app_build_lock_acquire":                   appBuildLockAcquireQuery,
 	"app_build_lock_select":                    appBuildLockSelectQuery,
 	"app_build_lock_release":                   appBuildLockReleaseQuery,
+	"build_lock_acquire":                       buildLockAcquireQuery,
+	"build_lock_select":                        buildLockSelectQuery,
+	"build_lock_release":                       buildLockReleaseQuery,
 }
 
 // PreparedSQL is the SQL text of a prepared statement, "" if the name is
@@ -232,6 +235,24 @@ RETURNING app_id, holder, description, acquired_at, expires_at`
 SELECT app_id, holder, description, acquired_at, expires_at FROM app_build_locks
 WHERE app_id = $1 AND expires_at > now()`
 	appBuildLockReleaseQuery = `DELETE FROM app_build_locks WHERE app_id = $1 AND holder = $2`
+
+	// keyed build locks (EDGE-40): the same lease for a name that is not an
+	// app, such as a pipeline's preview repo cache
+	buildLockAcquireQuery = `
+INSERT INTO build_locks (lock_key, holder, description, acquired_at, expires_at)
+VALUES ($1, $2, $3, now(), now() + $4::int * interval '1 second')
+ON CONFLICT (lock_key) DO UPDATE SET
+	holder = EXCLUDED.holder,
+	description = EXCLUDED.description,
+	acquired_at = CASE WHEN build_locks.holder = EXCLUDED.holder AND build_locks.expires_at > now()
+		THEN build_locks.acquired_at ELSE now() END,
+	expires_at = EXCLUDED.expires_at
+WHERE build_locks.holder = EXCLUDED.holder OR build_locks.expires_at <= now()
+RETURNING lock_key, holder, description, acquired_at, expires_at`
+	buildLockSelectQuery = `
+SELECT lock_key, holder, description, acquired_at, expires_at FROM build_locks
+WHERE lock_key = $1 AND expires_at > now()`
+	buildLockReleaseQuery = `DELETE FROM build_locks WHERE lock_key = $1 AND holder = $2`
 	// apps
 	appListQuery = `
 SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by

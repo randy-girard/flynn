@@ -36,6 +36,44 @@ type Store interface {
 	ReleaseBuildLock(appID, holder string) error
 }
 
+// KeyStore is the controller client subset for keyed leases (EDGE-40), such
+// as "pipeline:shop" for a pipeline's preview remote.
+type KeyStore interface {
+	AcquireKeyedBuildLock(key string, lock *ct.BuildLock) (*ct.BuildLock, error)
+	ReleaseKeyedBuildLock(key, holder string) error
+}
+
+// Keyed lets Acquire take a keyed lease: the id Acquire is given is the key.
+// A controller from before keyed leases answers 404, which Acquire reports
+// as ErrUnsupported like an old controller's missing app lease.
+func Keyed(store KeyStore) Store {
+	if store == nil {
+		return nil
+	}
+	return keyedStore{store}
+}
+
+type keyedStore struct{ KeyStore }
+
+func (k keyedStore) AcquireBuildLock(key string, lock *ct.BuildLock) (*ct.BuildLock, error) {
+	got, err := k.AcquireKeyedBuildLock(key, lock)
+	var held *ct.BuildLockHeldError
+	if errors.As(err, &held) {
+		// name the key so the refusal says what is locked
+		if held.Lock == nil {
+			held.Lock = &ct.BuildLock{}
+		}
+		if held.Lock.Key == "" {
+			held.Lock.Key = key
+		}
+	}
+	return got, err
+}
+
+func (k keyedStore) ReleaseBuildLock(key, holder string) error {
+	return k.ReleaseKeyedBuildLock(key, holder)
+}
+
 // Lease is a held build lock. It renews itself until Release.
 type Lease struct {
 	store  Store
@@ -109,7 +147,7 @@ func (l *Lease) renew() {
 			if err := l.acquire(); err != nil {
 				// A held error here means the lease ran out (the controller
 				// was unreachable for a whole TTL) and someone else took it.
-				log.Printf("buildlock: renewing the lease on app %s: %v", l.appID, err)
+				log.Printf("buildlock: renewing the lease on %s: %v", l.appID, err)
 			}
 		}
 	}
@@ -133,7 +171,7 @@ func (l *Lease) Release() {
 		close(l.stop)
 		<-l.done
 		if err := l.store.ReleaseBuildLock(l.appID, l.holder); err != nil {
-			log.Printf("buildlock: releasing the lease on app %s: %v (it expires in %s)", l.appID, err, l.ttl)
+			log.Printf("buildlock: releasing the lease on %s: %v (it expires in %s)", l.appID, err, l.ttl)
 		}
 	})
 }

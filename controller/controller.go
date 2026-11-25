@@ -344,6 +344,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.POST("/apps/:apps_id/meta", httphelper.WrapHandler(api.appLookup(api.UpdateApp)))
 	httpRouter.PUT("/apps/:apps_id/build-lock", httphelper.WrapHandler(api.appLookup(api.AcquireBuildLock)))
 	httpRouter.DELETE("/apps/:apps_id/build-lock/:holder", httphelper.WrapHandler(api.appLookup(api.ReleaseBuildLock)))
+	httpRouter.PUT("/build-locks/:key", httphelper.WrapHandler(api.AcquireKeyedBuildLock))
+	httpRouter.DELETE("/build-locks/:key/:holder", httphelper.WrapHandler(api.ReleaseKeyedBuildLock))
 
 	httpRouter.GET("/events", httphelper.WrapHandler(api.Events))
 	httpRouter.GET("/events/:id", httphelper.WrapHandler(api.GetEvent))

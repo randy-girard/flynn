@@ -21,18 +21,31 @@ func (c *controllerAPI) AcquireBuildLock(ctx context.Context, w http.ResponseWri
 		respondWithError(w, err)
 		return
 	}
+	ttl, err := validateBuildLock(&body)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	lock, held, err := c.buildLockRepo.Acquire(c.getApp(ctx).ID, body.Holder, body.Description, ttl)
+	respondWithBuildLock(w, lock, held, err)
+}
+
+// validateBuildLock checks a lease request: a holder and a bounded TTL.
+func validateBuildLock(body *ct.BuildLock) (time.Duration, error) {
 	body.Holder = strings.TrimSpace(body.Holder)
 	if body.Holder == "" {
-		respondWithError(w, ct.ValidationError{Field: "holder", Message: "must not be empty"})
-		return
+		return 0, ct.ValidationError{Field: "holder", Message: "must not be empty"}
 	}
 	ttl := time.Duration(body.TTLSeconds) * time.Second
 	if body.TTLSeconds <= 0 || ttl > ct.MaxBuildLockTTL {
-		respondWithError(w, ct.ValidationError{Field: "ttl_seconds", Message: "must be between 1 and " + ct.MaxBuildLockTTL.String()})
-		return
+		return 0, ct.ValidationError{Field: "ttl_seconds", Message: "must be between 1 and " + ct.MaxBuildLockTTL.String()}
 	}
-	app := c.getApp(ctx)
-	lock, held, err := c.buildLockRepo.Acquire(app.ID, body.Holder, body.Description, ttl)
+	return ttl, nil
+}
+
+// respondWithBuildLock answers an acquire: the lease, or 409 with the other
+// holder's lease in the error detail.
+func respondWithBuildLock(w http.ResponseWriter, lock, held *ct.BuildLock, err error) {
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -54,6 +67,44 @@ func (c *controllerAPI) AcquireBuildLock(ctx context.Context, w http.ResponseWri
 func (c *controllerAPI) ReleaseBuildLock(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
 	if err := c.buildLockRepo.Release(c.getApp(ctx).ID, params.ByName("holder")); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	w.WriteHeader(200)
+}
+
+// AcquireKeyedBuildLock is AcquireBuildLock for a lease that is not one
+// app's (EDGE-40), named by a namespaced key such as "pipeline:shop".
+func (c *controllerAPI) AcquireKeyedBuildLock(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	params, _ := ctxhelper.ParamsFromContext(ctx)
+	key := params.ByName("key")
+	if !ct.BuildLockKeyPattern.MatchString(key) {
+		respondWithError(w, ct.ValidationError{Field: "key", Message: "must be <namespace>:<id>, for example pipeline:shop"})
+		return
+	}
+	var body ct.BuildLock
+	if err := httphelper.DecodeJSON(req, &body); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	ttl, err := validateBuildLock(&body)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	lock, held, err := c.buildLockRepo.AcquireKey(key, body.Holder, body.Description, ttl)
+	respondWithBuildLock(w, lock, held, err)
+}
+
+// ReleaseKeyedBuildLock drops a keyed lease if the named holder has it.
+func (c *controllerAPI) ReleaseKeyedBuildLock(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	params, _ := ctxhelper.ParamsFromContext(ctx)
+	key := params.ByName("key")
+	if !ct.BuildLockKeyPattern.MatchString(key) {
+		respondWithError(w, ct.ValidationError{Field: "key", Message: "must be <namespace>:<id>, for example pipeline:shop"})
+		return
+	}
+	if err := c.buildLockRepo.ReleaseKey(key, params.ByName("holder")); err != nil {
 		respondWithError(w, err)
 		return
 	}

@@ -1729,8 +1729,29 @@ func (c *Client) DeployAppGitHub(appID string, req *ct.GitHubDeployRequest) (*ct
 // (EDGE-09). Another holder's live lease is a *ct.BuildLockHeldError naming
 // it.
 func (c *Client) AcquireBuildLock(appID string, lock *ct.BuildLock) (*ct.BuildLock, error) {
+	return c.putBuildLock(fmt.Sprintf("/apps/%s/build-lock", appID), lock)
+}
+
+// ReleaseBuildLock drops the app's build lease if holder still has it.
+func (c *Client) ReleaseBuildLock(appID, holder string) error {
+	return c.Delete(fmt.Sprintf("/apps/%s/build-lock/%s", appID, url.PathEscape(holder)), nil)
+}
+
+// AcquireKeyedBuildLock takes or renews a lease that is not one app's, such
+// as "pipeline:shop" (EDGE-40). A controller from before keyed leases
+// answers 404 (ct.ErrNotFound).
+func (c *Client) AcquireKeyedBuildLock(key string, lock *ct.BuildLock) (*ct.BuildLock, error) {
+	return c.putBuildLock("/build-locks/"+url.PathEscape(key), lock)
+}
+
+// ReleaseKeyedBuildLock drops a keyed lease if holder still has it.
+func (c *Client) ReleaseKeyedBuildLock(key, holder string) error {
+	return c.Delete("/build-locks/"+url.PathEscape(key)+"/"+url.PathEscape(holder), nil)
+}
+
+func (c *Client) putBuildLock(path string, lock *ct.BuildLock) (*ct.BuildLock, error) {
 	out := &ct.BuildLock{}
-	err := c.Put(fmt.Sprintf("/apps/%s/build-lock", appID), lock, out)
+	err := c.Put(path, lock, out)
 	if jsonErr, ok := err.(httphelper.JSONError); ok && jsonErr.Code == httphelper.ConflictErrorCode {
 		held := &ct.BuildLock{}
 		if len(jsonErr.Detail) > 0 && json.Unmarshal(jsonErr.Detail, held) == nil && held.Holder != "" {
@@ -1742,11 +1763,6 @@ func (c *Client) AcquireBuildLock(appID string, lock *ct.BuildLock) (*ct.BuildLo
 		return nil, err
 	}
 	return out, nil
-}
-
-// ReleaseBuildLock drops the app's build lease if holder still has it.
-func (c *Client) ReleaseBuildLock(appID, holder string) error {
-	return c.Delete(fmt.Sprintf("/apps/%s/build-lock/%s", appID, url.PathEscape(holder)), nil)
 }
 
 func (c *Client) Put(path string, in, out interface{}) error {

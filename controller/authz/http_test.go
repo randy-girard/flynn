@@ -668,6 +668,9 @@ func TestBuildLockIsClusterOnly(t *testing.T) {
 	for _, req := range []struct{ method, path string }{
 		{http.MethodPut, "/apps/app-a/build-lock"},
 		{http.MethodDelete, "/apps/app-a/build-lock/holder-1"},
+		// keyed leases (EDGE-40): a pipeline's preview remote
+		{http.MethodPut, "/build-locks/pipeline:shop"},
+		{http.MethodDelete, "/build-locks/pipeline:shop/holder-1"},
 	} {
 		if HTTPAllowed(owner, req.method, req.path) || HTTPAllowed(receive, req.method, req.path) {
 			t.Fatalf("%s %s is open to an app grant", req.method, req.path)
