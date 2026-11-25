@@ -561,6 +561,11 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 	if args != nil && args.Bool["--auto-failover"] {
 		jobArgs = append(jobArgs, "--auto-failover")
 	}
+	// pg:promote / mysql:promote --force: promote although the primary
+	// cannot be read. The plugin task warns and decides.
+	if args != nil && args.Bool["--force"] {
+		jobArgs = append(jobArgs, "--force")
+	}
 
 	env := make(map[string]string, len(action.Env)+6)
 	for k, v := range action.Env {

@@ -1330,3 +1330,54 @@ func TestPluginAPITaskCopiesControllerKey(t *testing.T) {
 		t.Fatal("psql must not receive the controller key")
 	}
 }
+
+// DATA-03: pg:promote <follower> --force reaches the plugin task; without
+// the flag nothing extra is appended.
+func TestPluginPromoteForwardsForce(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "shop"
+	instance := "postgresql-reef-55266"
+	client := fakeRedisReleaseClient{
+		releases: map[string]*ct.Release{
+			"shop":            {Env: map[string]string{"FLYNN_POSTGRES": instance}},
+			instance:          {ID: "inst-rel", Env: map[string]string{"FLYNN_POSTGRES": instance}},
+			"postgres-plugin": {ID: "plugin-rel"},
+		},
+		resources: map[string][]*ct.Resource{
+			"shop": {{Env: map[string]string{"FLYNN_POSTGRES": instance}}},
+		},
+	}
+	spec := &plugin.CLI{
+		Command:     "pg",
+		App:         "postgres-plugin",
+		ResourceEnv: "FLYNN_POSTGRES",
+		Actions: []plugin.CLIAction{{
+			Name: "promote",
+			Args: []string{"/bin/flynn-postgres-api", "task", "promote", "${resource}"},
+		}},
+	}
+	usage := `usage: flynn pg:promote [--force] <follower>
+       flynn pg promote [--force] <follower>
+`
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"pg", "promote", instance}, "/bin/flynn-postgres-api task promote " + instance},
+		{[]string{"pg", "promote", instance, "--force"}, "/bin/flynn-postgres-api task promote " + instance + " --force"},
+		{[]string{"pg", "promote", "--force", instance}, "/bin/flynn-postgres-api task promote " + instance + " --force"},
+	} {
+		parsed, err := docopt.Parse(usage, tc.argv, true, "", false)
+		if err != nil {
+			t.Fatalf("%v: %v", tc.argv, err)
+		}
+		cfg, err := pluginJobConfig(client, spec, spec.Action("promote"), parsed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(cfg.Args, " "); got != tc.want {
+			t.Fatalf("%v: args %q, want %q", tc.argv, got, tc.want)
+		}
+	}
+}
