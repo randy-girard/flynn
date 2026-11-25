@@ -73,7 +73,7 @@ flynn addons:create mysql --follow <resource>
 flynn mysql:follow <resource>
 flynn mysql:follow <resource> --auto-failover
 flynn mysql:wait <follower>
-flynn mysql:promote <follower>
+flynn mysql:promote [--force] <follower>
 flynn mysql:unfollow <follower>
 ```
 
@@ -88,12 +88,28 @@ with all of them before the old primary is stopped and the name moves. Any
 failure before that point lifts the fence, deletes the new follower, and
 leaves the old primary serving.
 
+`flynn mysql:promote <follower>` (and the dashboard Promote button) restarts
+the follower's job as a primary; rewriting its release alone would leave the
+running server read-only and still replicating. The primary is fenced
+read-only and the follower must apply its final GTID within 20 seconds, or
+the promote is refused, the fence lifted and nothing else changed (run
+`mysql:wait` first). If the primary cannot be read, the promote is refused
+unless you pass `--force`, which loses any transaction the follower has not
+received. For an auto-failover follower the old primary is stopped and marked
+deposed, and the promoted server keeps `leader.<original>.discoverd`. The
+restarted server clears its old replica configuration (`RESET SLAVE ALL`) and
+must be writable, with the final GTID, and accept a write from its own login
+within 3 minutes; otherwise the follower goes back to its previous release
+and the old primary serves writes again. Only a verified promote changes the
+roles the plugin reports. A plain follower's old primary stays its own
+writable resource. `flynn mysql:unfollow <follower>` restarts the follower
+the same way as a standalone copy and leaves the old primary untouched.
+
 `--auto-failover` places the replica on another host. If the primary job
 stays down for 30 seconds, Flynn promotes that follower, fences the old
 primary, and starts a replacement replica. One node, with no follower, does
 not fail over. The dashboard Followers tab can remove a follower while it is
-still replicating. Remove stops replication and deletes the replica. Unfollow
-leaves a standalone writable copy.
+still replicating. Remove stops replication and deletes the replica.
 
 `flynn-host mysql:availability` is `manual` or `system` for the whole cluster.
 Hosted and self-hosted use the same values. `manual` is the self-hosted
