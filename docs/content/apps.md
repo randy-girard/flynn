@@ -258,9 +258,26 @@ A push whose branch moved after git read it (another push landed between
 the two requests of one push) is refused the same way, with `another push
 landed first`. Pull, then push again. Other apps are not affected.
 
-The lock is a lease in the controller (`PUT /apps/:app/build-lock`). Its
-holder renews it every 40 seconds, so a gitreceive or taffy job that dies
-frees the app within two minutes.
+A pipeline's preview remote (`git push preview <branch>`, see the pipeline
+plugin) builds one push at a time for the whole pipeline, because every
+branch pushed there shares one repo cache. While a push to it is building,
+a push of any branch to the same remote is refused:
+
+```
+remote: -----> Push refused: a git push to this pipeline is in progress (started 14:02:11 UTC). Wait for it to finish, then pull and push again.
+```
+
+A branch that moved after git read it is refused with `another push landed
+first`, before any preview app is created. Each preview app is also locked
+like any other app, so a GitHub preview deploy and a push of the same
+branch do not build at once.
+
+The lock is a lease in the controller (`PUT /apps/:app/build-lock` for an
+app, `PUT /build-locks/pipeline:<pipeline>` for a preview remote; both take
+the cluster key only). Its holder renews it every 40 seconds, so a
+gitreceive or taffy job that dies frees the app or pipeline within two
+minutes. During a rolling update a gitreceive that is newer than the
+controller pushes to a preview remote without the pipeline lease, as before.
 
 ### Push limits
 

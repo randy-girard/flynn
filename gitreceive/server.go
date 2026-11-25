@@ -88,6 +88,7 @@ func main() {
 
 	h := newGitHandler(cc, auth)
 	h.locks = cc
+	h.keyLocks = cc
 	h.signer = receiveSigner()
 	if err := h.configure(); err != nil {
 		log.Fatalln(err)
@@ -165,6 +166,9 @@ type gitHandler struct {
 	// unlocked. lockTTL is the lease length, renewed while the push runs.
 	locks   buildlock.Store
 	lockTTL time.Duration
+	// keyLocks holds a pipeline's lease for a push to its preview remote
+	// (EDGE-40); nil pushes unlocked.
+	keyLocks buildlock.KeyStore
 }
 
 // defaultMaxPushSize caps one push (the pack git sends) unless MAX_PUSH_SIZE
@@ -372,6 +376,20 @@ func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *a
 	}
 
 	cacheKey := "preview-" + pipeline
+	env := gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize, MaxDrain: h.maxPushDrain, IdleTimeout: h.idleTimeout}
+	// EDGE-40: every branch pushed here shares the pipeline's repo cache,
+	// which no app lease covers (a push can create and deploy several
+	// preview apps). The receive RPC holds the pipeline's lease from before
+	// the cache download until after the upload, as ServeHTTP does for an
+	// app; flynn-receiver still takes each preview app's own lease.
+	var lease *buildlock.Lease
+	if g.rpc == "git-receive-pack" {
+		var refusal string
+		lease, refusal = h.lockPipelinePush(w, pipeline)
+		defer lease.Release()
+		env.Refusal = refusal
+	}
+
 	prepare := h.prepare
 	if prepare == nil {
 		prepare = prepareRepo
@@ -395,23 +413,67 @@ func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *a
 			fail500(w, "dropPreviewBranch", err)
 			return
 		}
-		if pruned {
-			upload := h.upload
-			if upload == nil {
-				upload = uploadRepo
-			}
-			if err := upload(repoPath, cacheKey); err != nil {
+		if pruned && env.Refusal == "" {
+			if err := h.storePrunedPreview(w, repoPath, cacheKey, pipeline, g.rpc == "git-receive-pack"); err != nil {
 				fail500(w, "uploadRepo", err)
 				return
 			}
 		}
 	}
 
-	success := g.handleFunc(gitEnv{Pipeline: pipeline, MaxBody: h.maxPushSize, MaxDrain: h.maxPushDrain, IdleTimeout: h.idleTimeout}, g.rpc, repoPath, w, r)
-	if success && g.rpc == "git-receive-pack" {
+	success := g.handleFunc(env, g.rpc, repoPath, w, r)
+	if success && g.rpc == "git-receive-pack" && env.Refusal == "" {
 		if err := h.storeRepo(repoPath, cacheKey); err != nil {
 			logError(w, "uploadRepo", err, "pipeline", pipeline)
 		}
+	}
+}
+
+// storePrunedPreview uploads a preview cache whose deleted branches were
+// just dropped. A receive RPC already holds the pipeline lease (locked);
+// any other request takes it for the upload, and skips the upload while a
+// push holds it: the advertisement is pruned anyway, and that push stores
+// the cache it pruned itself (EDGE-40).
+func (h *gitHandler) storePrunedPreview(w http.ResponseWriter, repoPath, cacheKey, pipeline string, locked bool) error {
+	upload := h.upload
+	if upload == nil {
+		upload = uploadRepo
+	}
+	if !locked && h.keyLocks != nil {
+		lease, err := buildlock.Acquire(buildlock.Keyed(h.keyLocks), ct.PipelineBuildLockKey(pipeline), "a git push", h.lockTTL)
+		switch {
+		case err == nil:
+			defer lease.Release()
+		case errors.Is(err, buildlock.ErrUnsupported):
+		default:
+			logError(w, "buildLock", err, "pipeline", pipeline, "skipped", "pruned cache upload")
+			return nil
+		}
+	}
+	return upload(repoPath, cacheKey)
+}
+
+// lockPipelinePush takes pipeline's lease for one receive RPC to its preview
+// remote (EDGE-40). Like lockPush, it returns the lease (nil when the
+// controller has no keyed lease API) or the message the hook prints.
+func (h *gitHandler) lockPipelinePush(w http.ResponseWriter, pipeline string) (*buildlock.Lease, string) {
+	if h.keyLocks == nil {
+		return nil, ""
+	}
+	lease, err := buildlock.Acquire(buildlock.Keyed(h.keyLocks), ct.PipelineBuildLockKey(pipeline), "a git push", h.lockTTL)
+	if err == nil {
+		return lease, ""
+	}
+	var held *ct.BuildLockHeldError
+	switch {
+	case errors.As(err, &held):
+		return nil, fmt.Sprintf("-----> Push refused: %s. Wait for it to finish, then pull and push again.", held)
+	case errors.Is(err, buildlock.ErrUnsupported):
+		logError(w, "buildLock", err, "pipeline", pipeline)
+		return nil, ""
+	default:
+		logError(w, "buildLock", err, "pipeline", pipeline)
+		return nil, fmt.Sprintf("-----> Push refused: could not take the build lock for pipeline %s: %s. Try the push again.", pipeline, err)
 	}
 }
 

@@ -152,11 +152,23 @@ func runEnsurePreview(args []string) error {
 	return nil
 }
 
+// The preview hook declines a push gitreceive refused (FLYNN_PUSH_REFUSED:
+// another push holds the pipeline's lease, EDGE-40) and, per branch, a push
+// whose old rev is no longer that branch's tip in the cache (the EDGE-09
+// stale advertisement check), before a preview app is created.
 var previewPrereceiveHook = []byte(`#!/bin/bash
 set -eo pipefail;
 
+if [[ -n "${FLYNN_PUSH_REFUSED}" ]]; then
+	printf '%s\n' "${FLYNN_PUSH_REFUSED}"
+	exit 1
+fi
+
 ` + archiveTreeFunc + `
 
+# Check every ref before anything is created or deployed, so a stale branch
+# does not leave the push half deployed.
+updates=()
 while read oldrev newrev refname; do
 	if [[ $refname != refs/heads/* ]]; then
 		echo "Ignored push to $refname; push a branch to create a preview app."
@@ -167,9 +179,20 @@ while read oldrev newrev refname; do
 		echo "Ignored delete of $branch."
 		continue
 	fi
+	current="$(git rev-parse --verify -q "$refname" || true)"
+	if { [[ -z "$current" ]] && [[ ! $oldrev =~ ^0+$ ]]; } || { [[ -n "$current" ]] && [[ "$current" != "$oldrev" ]]; }; then
+		echo "-----> Push refused: $branch changed since this push started (another push landed first). Pull, then push again."
+		exit 1
+	fi
+	updates+=("$newrev $branch")
+done
+
+for update in "${updates[@]}"; do
+	newrev="${update%% *}"
+	branch="${update#* }"
 	echo "-----> Creating preview app for $branch..."
-	app=$(/bin/gitreceived -ensure-preview "$RECEIVE_PIPELINE" "$branch" "$newrev")
+	app=$("${FLYNN_GITRECEIVED:-/bin/gitreceived}" -ensure-preview "$RECEIVE_PIPELINE" "$branch" "$newrev")
 	echo "-----> Deploying $branch to $app..."
-	git-archive-all $newrev "$app" | stdbuf -oL -eL /bin/flynn-receiver "$app" "$newrev" --meta git=true --meta "git.commit=$newrev" --meta "git.branch=$branch" --meta flynn-preview=true | sed -u "s/^/"$'\e[1G\e[K'"/"
+	git-archive-all $newrev "$app" | stdbuf -oL -eL "${FLYNN_RECEIVER:-/bin/flynn-receiver}" "$app" "$newrev" --meta git=true --meta "git.commit=$newrev" --meta "git.branch=$branch" --meta flynn-preview=true | sed -u "s/^/"$'\e[1G\e[K'"/"
 done
 `)

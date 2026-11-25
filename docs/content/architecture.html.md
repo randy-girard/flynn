@@ -448,7 +448,11 @@ has been pushed before, a cached archive of the repo will be downloaded from the
 *blobstore* before receiving the git push. gitreceive holds the app's build
 lease in the controller from before that download until it stores the repo
 again, so a second push to the app is refused instead of building beside it
-(see [Apps](apps.md#one-build-at-a-time)). A failed download of the cached
+(see [Apps](apps.md#one-build-at-a-time)). A push to a pipeline's preview
+remote (`_preview/<pipeline>.git`) shares one repo cache for every branch, so
+gitreceive holds the pipeline's lease (`pipeline:<pipeline>`, a keyed lease
+in the controller) around it instead; flynn-receiver still takes each
+preview app's own lease. A failed download of the cached
 repo fails the push with a 500 and leaves no temporary directory behind.
 After a push, the repo is stored back; a transport error or a 5xx is retried
 twice, and a refusal (for example a 401 or 413) is not. A final failure is
