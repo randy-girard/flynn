@@ -110,6 +110,14 @@ previous voter is committed, so create does not overlap an env flip.
 * Scaling down removes only async peers, never the primary or the sync peer.
   Each removed node is taken out of the replica set with `replSetReconfig`
   before it stops.
+* The plugin reads each member's role and drains it through the member's
+  admin API, authenticated with that resource's own `APPLIANCE_KEY` (never the
+  cluster key). If a member refuses the key or cannot be reached,
+  `mongodb:scale` fails with a message that names the resource, the member and
+  the endpoint, for example `mongodb instance mongodb-harbor-48291: GET
+  /status on member 10.0.0.5:27017: HTTP 401: authentication required`. It
+  does not wait it out as "not ready". Rolling upgrades and an `env:set` on the
+  resource app use the same key.
 
 `DATABASE_URL` does not change when you scale.
 
