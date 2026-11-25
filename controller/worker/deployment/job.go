@@ -28,6 +28,11 @@ type DeployJob struct {
 	sireniaEngine *ct.Formation
 	timeout       time.Duration
 	stop          chan struct{}
+	// omniUpSince is when the omni roll first saw each new job up, and
+	// omniKnownHosts the hosts that ran a job of either release during the
+	// roll (EDGE-42, omni_serving.go).
+	omniUpSince    map[string]time.Time
+	omniKnownHosts map[string]struct{}
 }
 
 func (d *DeployJob) Perform() error {

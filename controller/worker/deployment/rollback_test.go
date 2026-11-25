@@ -232,6 +232,17 @@ func (f *fakeFormationCluster) JobList(appID string) ([]*ct.Job, error) {
 	return jobs, nil
 }
 
+// HostList is the cluster's host list (GET /hosts).
+func (f *fakeFormationCluster) HostList() ([]*ct.HostInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*ct.HostInfo, 0, len(f.hosts))
+	for _, h := range f.hosts {
+		out = append(out, &ct.HostInfo{ID: h})
+	}
+	return out, nil
+}
+
 func (f *fakeFormationCluster) schedulerHosts() map[string][]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

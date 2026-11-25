@@ -247,6 +247,34 @@ against one, a deployment with `finished_at` and no outcome is waited on for
 two minutes, then counts as a success only if the app's current release is
 the deployment's new release, and fails otherwise.
 
+An omni process type (the `router` app's `app` and flannel, which use the
+host network, and the controller's `scheduler`) runs one job per host, so the
+one-by-one and one-down-one-up strategies roll it one host at a time by
+pinning each release's formation to a list of hosts. For a host-network type
+the worker stops the old job on a host first, because the new one needs the
+same ports, then starts the new job there. It moves on to the next host only
+once that new job serves: the controller reports it `up` (not `pending` or
+`starting`), it has stayed up for the stabilization window (5 seconds by
+default), and, when the process type declares a discoverd service, an
+instance of that service carries the job's ID (the router registers
+`router-api` after its listeners are bound). So while the router rolls,
+every host but the one being swapped keeps serving. A job that goes down
+inside the window starts it again. The window is per host, so a three-host
+roll takes about 15 seconds longer; set `FLYNN_OMNI_STABILIZE` on the
+controller app (a duration such as `10s`, or seconds; `0` turns it off) to
+change it. The list of hosts comes from the cluster's current host list,
+read again on every poll: a host with no job of either release gets its new
+job on the first step, a host that leaves or is draining is no longer waited
+for, and one that joins is covered. The deploy is complete only when every host that may
+run the process type (by its formation and runtime profile tags) runs an up
+job of the new release; if one does not within 60 seconds of the last step,
+the deploy fails, names the host, and is rolled back. The controller's
+`scheduler` uses the overlay network, so on the last host the new job starts
+and serves before the old one stops, and only hosts that ran a job of either
+release during the roll must be covered (a host that is still joining is
+left to the scheduler). Deploys of one app are queued, so a deploy started
+during another one's roll waits until that roll is complete.
+
 A deploy talks to the controller the whole time it rolls the app, and for
 the controller app that is the controller being replaced. A transient error
 from the controller API (a timed-out request, a refused or reset connection,
