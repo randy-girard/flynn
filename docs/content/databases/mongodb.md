@@ -218,6 +218,13 @@ Metrics, Databases, Users, and Backup.
 
 ## Safety
 
+Every member runs with authorization and authenticates to the other members
+with a shared keyfile; mongod never runs with authorization off. While a
+member starts, setup (creating the first user, repairing its own replica-set
+address) runs on a mongod that listens on the job's loopback address only, and
+the member's network address refuses connections until the serving mongod is
+up.
+
 A one-node resource does not fail over. After `mongodb:scale` above 1, or
 after the scheduler has promoted the resource on a three-host cluster, loss of
 the primary can elect another member. The replica
