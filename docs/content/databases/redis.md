@@ -94,7 +94,21 @@ flynn addons:create redis --follow <primary> --auto-failover
 ```
 
 `redis:wait` prints live copy progress (full resync, then streaming catch-up).
-The dashboard Followers tab has **Add follower** and the same progress.
+The dashboard Followers tab has **Add follower** and the same progress. A
+follower is ready only when its own `INFO` was read and shows the link up, no
+sync in progress, the dataset loaded, and a replication offset that has
+reached the primary's. A follower whose `INFO` cannot be read (connection
+refused, wrong password, timeout) is still starting, even once it is
+registered in discoverd.
+
+`redis:upgrade`, `redis:maintenance` and image refresh replace a primary only
+through such a caught-up follower. The old primary is fenced with
+`CLIENT PAUSE WRITE` (reads continue, writes wait), the follower reaches the
+fenced primary's offset, and the follower is restarted as a primary and
+checked with a `SET`/`GET`/`DEL` roundtrip before the old primary is stopped
+and the name moves. Any failure before that point lifts the pause, deletes the
+new follower, and leaves the old primary serving. Image refresh deletes the
+old primary only after the switch succeeded.
 
 `flynn-host redis:availability` is `manual` or `system` for the whole cluster.
 Hosted and self-hosted use the same values. `manual` is the self-hosted
