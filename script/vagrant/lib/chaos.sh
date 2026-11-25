@@ -593,8 +593,10 @@ chaos_ingress_rounds() {
       if (e > emax) emax = e
       next
     }
+    function isort(a, n,   i, j, v) { for (i = 2; i <= n; i++) { v = a[i]; for (j = i - 1; j >= 1 && a[j] > v; j--) a[j + 1] = a[j]; a[j + 1] = v } }
+    nt && !sorted { isort(nord, nn); isort(tord, nt); sorted = 1 }
     nt { stats($1, $2, $4 + 0, $5 + 0) }
-    END { if (nt) stats("all", "-", emin, emax) }
+    END { if (nt && !sorted) { isort(nord, nn); isort(tord, nt) }; if (nt) stats("all", "-", emin, emax) }
   ' "${dir}/ingress.tsv" "${dir}/rounds.tsv"
 }
 
