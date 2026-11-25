@@ -133,5 +133,17 @@ need "${userland}" 'libpcre2-8-0:amd64' \
   "aarch64 heroku-24 must install amd64 libpcre2 for the staticfile nginx"
 need "${userland}" 'libcrypt1:amd64' \
   "aarch64 heroku-24 must install amd64 libcrypt for the staticfile nginx"
+# Multi-Arch: same packages (libsqlite3-0, libssl3t64, ...) must be the same
+# version for arm64 and amd64. arm64 comes from ports.ubuntu.com, so amd64
+# must come from archive.ubuntu.com, which Canonical publishes in the same
+# sync. A third-party mirror (mirrors.edge.kernel.org) can lag ports by days
+# and then apt refuses the amd64 install ("python3 : Depends ... generated
+# breaks"), which fails every fresh aarch64 heroku-24 build.
+need "${userland}" 'URIs: http://archive.ubuntu.com/ubuntu' \
+  "aarch64 heroku-24 amd64 sources must use archive.ubuntu.com (same sync as ports.ubuntu.com)"
+if grep -qE '^[^#]*mirrors\.edge\.kernel\.org' "${userland}"; then
+  echo "amd64-qemu-userland.sh must not take amd64 packages from mirrors.edge.kernel.org: it lags ports.ubuntu.com and breaks Multi-Arch: same versions" >&2
+  exit 1
+fi
 
 echo "ok aarch64 qemu-user binfmt + heroku-24 amd64 userland"

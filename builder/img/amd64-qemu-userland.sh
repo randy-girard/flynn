@@ -76,9 +76,13 @@ if [[ -f /etc/apt/sources.list ]]; then
   sed -i -E '/^deb \[arch=/! s|^deb |deb [arch='"${native_arch}"'] |' /etc/apt/sources.list
 fi
 
+# amd64 comes from archive.ubuntu.com, not a third-party mirror: Multi-Arch:
+# same packages (libsqlite3-0, libssl3t64, ...) must match the arm64 version
+# from ports.ubuntu.com, which Canonical publishes in the same sync. A lagging
+# mirror (mirrors.edge.kernel.org was days behind) makes apt refuse the install.
 cat >/etc/apt/sources.list.d/ubuntu-amd64.sources <<EOF
 Types: deb
-URIs: http://mirrors.edge.kernel.org/ubuntu
+URIs: http://archive.ubuntu.com/ubuntu
 Suites: noble noble-updates noble-backports
 Components: main universe
 Architectures: amd64
