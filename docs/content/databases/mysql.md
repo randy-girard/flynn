@@ -152,7 +152,11 @@ Plaintext is still accepted inside the cluster for replication and older
 clients.
 The plugin's own connections to an instance (dashboard, dump and restore,
 metrics, failover checks) verify the server against that instance's
-`MYSQL_TLS_CA_CERT` and host name. An instance whose release has no CA is
+`MYSQL_TLS_CA_CERT` and host name. The dashboard Databases, Users, Metrics
+and Backup (dump and restore) pages act only on the signed-in app's own
+instances: each connects to that instance's service with that instance's
+admin login, never to the shared `leader.mysql.discoverd`. Restore needs a
+writable instance; with two primaries pick one with `?instance=<name>`. An instance whose release has no CA is
 reached with encryption only until `MYSQL_TLS_*` is set on its release.
 
 The server private key is never published in discoverd metadata (only the
