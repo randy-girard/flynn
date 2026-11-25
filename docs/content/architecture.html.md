@@ -217,8 +217,39 @@ is missing, the loop resets or blocks the job only if it is still the pending
 job that was sent. A job the loop has already stopped is not placed again.
 When a host refuses to start a job for another reason, the retry goes to a
 different eligible host if one exists. The refusing host is used again only
-when no other host can take the job. A
+when no other host can take the job, or, for a replica of a process type
+with two or more jobs, while it is the only host with fewer replicas, for
+up to three refusals in a row (a host that is briefly busy says
+`ratelimited`). A
 slow host API stalls that host's call.
+
+A non-omni process type with two or more jobs spreads across hosts: a new
+job goes to the healthy, eligible host (tags, role, process cap, reserved
+capacity) that runs the fewest pending, starting or running jobs of that app
+and type; stopped and stopping jobs do not count. Among those hosts the one
+running the fewest jobs in total wins, and equal hosts are picked at random.
+A host that is unhealthy or shutting down is not used. Two replicas share a
+host only when no other eligible host can take one, for example while a host
+is down. Once another healthy eligible host runs none of them, the leader
+moves one: it starts a new job on that host and stops the stacked one
+(deregistered and drained, like a scale down) only when the new job is
+running, which for a routed service means up in the routers. One move runs at
+a time across the cluster, 30 seconds apart, and only while every replica of
+the type is running, the app runs a single release and no scale request is
+pending. A new job that stops, or is not running within three minutes,
+cancels the move. Only types that register a discoverd service are moved;
+workers without one, types with persistent volumes and database (sirenia)
+releases stay where they are.
+
+A host that stops answering is first marked unhealthy, when its discoverd
+registration expires (about ten seconds after a power-off), and is no longer
+used for placement. Its jobs are marked down, and replaced elsewhere, when the
+host comes back without them or after ten failed status checks in a row
+(each up to the 10 s client timeout, one second apart). On the 3-node dev
+cluster that was about 75 s after a power-off, and about 90 s when the
+scheduler leader was on the powered-off host and discoverd first had to
+elect a new one. A process type that keeps a job on another host keeps
+serving during that time.
 Placement onto other hosts continues. This is the same process on a hosted
 cluster and a self-hosted one. Writes back to the controller stay on a
 separate persistence loop. A write that is still failing after one minute is
