@@ -285,6 +285,13 @@ func (h *Handler) serveGetServiceMeta(w http.ResponseWriter, r *http.Request, pa
 	// Read path parameter.
 	service := params.ByName("service")
 
+	// A store still re-applying its log may not have the meta yet. A 404
+	// made a v20261114.0 sirenia primary republish at index 0 and stall
+	// (EDGE-119); a 503 makes the client ask another peer.
+	if h.storeCatchingUp(w) {
+		return
+	}
+
 	// Read meta from the store.
 	meta := h.Store.ServiceMeta(service)
 	if meta == nil {
