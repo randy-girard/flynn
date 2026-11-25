@@ -225,7 +225,8 @@ The MongoDB data source page has the tabs Overview (attached apps and Nodes),
 Metrics, Databases, Users, and Backup.
 
 The Overview's Provision, Detach and Destroy buttons go through the
-controller, the same as `flynn addons:create mongodb`, `flynn addons:detach`
+controller as you (with your own dashboard sign-in, not the plugin's key), the
+same as `flynn addons:create mongodb`, `flynn addons:detach`
 and `flynn addons:destroy`. Provision (Manage or Admin on the app) creates a
 database owned by the app and sets its connection env on the app. An app that
 is only attached to another app's database gets Detach (Manage or Admin), which
