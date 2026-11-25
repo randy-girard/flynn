@@ -11,12 +11,7 @@ import (
 )
 
 // HostInfo represents basic information about a host in the cluster
-type HostInfo struct {
-	ID           string            `json:"id"`
-	Tags         map[string]string `json:"tags"`
-	Addr         string            `json:"addr"`
-	MaxProcesses *int              `json:"max_processes,omitempty"`
-}
+type HostInfo = ct.HostInfo
 
 func hostInfoFrom(h interface {
 	ID() string
@@ -27,6 +22,9 @@ func hostInfoFrom(h interface {
 	info := HostInfo{ID: h.ID(), Tags: tags, Addr: h.Addr()}
 	if n, ok := ct.ParseHostMaxProcesses(tags); ok {
 		info.MaxProcesses = &n
+	}
+	if s, ok := h.(interface{ ShuttingDown() bool }); ok {
+		info.Shutdown = s.ShuttingDown()
 	}
 	return info
 }

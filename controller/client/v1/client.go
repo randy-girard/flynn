@@ -1609,6 +1609,12 @@ func (c *Client) UpdateDBRuntimeSettings(allowCustomSizes bool) (*dbruntime.Cata
 	return cat, c.Put("/cluster/db-runtime-settings", map[string]bool{"allow_custom_sizes": allowCustomSizes}, cat)
 }
 
+// HostList returns the cluster's hosts (GET /hosts).
+func (c *Client) HostList() ([]*ct.HostInfo, error) {
+	var list []*ct.HostInfo
+	return list, c.Get("/hosts", &list)
+}
+
 func (c *Client) ListRuntimeProfiles() ([]*ct.RuntimeProfile, error) {
 	var list []*ct.RuntimeProfile
 	return list, c.Get("/runtimes", &list)

@@ -138,6 +138,7 @@ type Client interface {
 	DeleteDBRuntime(engine, name string) error
 	UpdateDBRuntimeSettings(allowCustomSizes bool) (*dbruntime.Catalog, error)
 	ListRuntimeProfiles() ([]*ct.RuntimeProfile, error)
+	HostList() ([]*ct.HostInfo, error)
 	GetRuntimeProfile(id string) (*ct.RuntimeProfile, error)
 	CreateRuntimeProfile(profile *ct.RuntimeProfile) error
 	UpdateRuntimeProfile(profile *ct.RuntimeProfile) error
