@@ -67,12 +67,13 @@ addr="127.0.0.1:$(cat "${tmp}/port")"
 #   pg_leader=500      discoverd fails the postgres leader lookup
 #   pg_instances=500   discoverd fails the postgres instances lookup
 #   mysql=1            add a mysql resource (leader 10.0.0.4, replica 10.0.0.5)
+#   tenant2=1          the tenant app runs a second web job
 routes() {
-  local ctl_instances=200 providers=200 first_ctl_down=0 pg_leader=200 pg_instances=200 mysql=0 kv
+  local ctl_instances=200 providers=200 first_ctl_down=0 pg_leader=200 pg_instances=200 mysql=0 tenant2=0 kv
   for kv in "$@"; do local "${kv}"; done
-  python3 - "${tmp}/routes.json" "${ctl_instances}" "${providers}" "${first_ctl_down}" "${pg_leader}" "${pg_instances}" "${mysql}" <<'PY'
+  python3 - "${tmp}/routes.json" "${ctl_instances}" "${providers}" "${first_ctl_down}" "${pg_leader}" "${pg_instances}" "${mysql}" "${tenant2}" <<'PY'
 import json, sys
-out, ctl_instances, providers, first_ctl_down, pg_leader, pg_instances, mysql = sys.argv[1:]
+out, ctl_instances, providers, first_ctl_down, pg_leader, pg_instances, mysql, tenant2 = sys.argv[1:]
 ctl = [{"addr": "@ADDR@"}]
 r = {}
 if first_ctl_down == "1":
@@ -104,6 +105,8 @@ jobs = [
     job("job-router", "router", "10.0.0.10", typ="app"),
     job("job-tenant", "tenant-app", "10.0.0.20", system=False),
 ]
+if tenant2 == "1":
+    jobs.append(job("job-tenant2", "tenant-app", "10.0.0.21", system=False))
 if mysql == "1":
     jobs += [job("job-my-leader", "mysql", "10.0.0.4", typ="mysql"),
              job("job-my-replica", "mysql", "10.0.0.5", typ="mysql")]
@@ -155,6 +158,15 @@ for seed in $(seq 1 16); do
   [[ "$(stopped)" == "job-tenant" ]] || fail "tenant-job must stop the tenant job, stopped $(stopped)"
 done
 grep -Fq "target kind=tenant-job app=tenant-app" "${tmp}/out" || fail "must print the target"
+# The target says how many jobs of that app and process type were running,
+# so the verdict can tell a single-web-job tenant app from a real regression.
+grep -Eq "target kind=tenant-job app=tenant-app type=web host=host1 job=job-tenant running=1$" "${tmp}/out" || fail "tenant-job target must end with running=<jobs of that app and type>"
+run system-job 1
+grep -Eq "target kind=system-job app=router type=app host=host1 job=job-router running=1$" "${tmp}/out" || fail "system-job target must end with running=<n>"
+routes tenant2=1
+run tenant-job 1
+grep -Eq "target kind=tenant-job app=tenant-app type=web host=host1 job=job-tenant2? running=2$" "${tmp}/out" || fail "a tenant app with two web jobs must report running=2"
+routes
 
 # Controller errors: no way to tell datastores apart, so no job is stopped.
 routes providers=500

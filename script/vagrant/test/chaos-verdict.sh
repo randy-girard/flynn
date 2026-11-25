@@ -101,6 +101,110 @@ verdict slow 0 "PASSED: 2 recovered, 0 skipped" CHAOS_TIMEOUT=1100
 { round 1 system-job recovered 30s; echo --; } | case_dir bad-budget
 verdict bad-budget 2 "bad CHAOS_BUDGET entry" "CHAOS_BUDGET=system-job:tenants"
 verdict bad-budget 2 "bad CHAOS_BUDGET entry" "CHAOS_BUDGET=system-job:tenants=x"
+verdict bad-budget 2 "bad CHAOS_BUDGET entry" "CHAOS_BUDGET=system-job:ingress-longest=x"
+verdict bad-budget 0 "PASSED: 1 recovered, 0 skipped" "CHAOS_BUDGET=system-job:ingress-longest=3 system-job:ingress=0"
+
+# Per-second ingress probes (ingress.tsv: epoch, node, target, HTTP status,
+# latency ms). A second fails only when no probed node answered the target
+# as expected (router: 404 for an unknown host, controller: 200 on /ping,
+# app:<name>: 200-499), so a node that is down while the others serve is
+# reported per node but does not fail the run. A probe belongs to a round
+# when its epoch is in [inject, recovered] from rounds.tsv.
+# wround <n> <kind> <start> <end> <target>: a recovered round with a window.
+wround() { printf '%s\t%s\t%s\t%s\t%s\trecovered\t30s\t5s\n' "$1" "$2" "$5" "$3" "$4"; }
+# probes <from> <to> <target> <code1> <code2> <code3>: one probe per second
+# per node (dev-node1..3) answering the given codes.
+probes() {
+  local e
+  for ((e = $1; e <= $2; e++)); do
+    printf '%s\tdev-node1\t%s\t%s\t12\n%s\tdev-node2\t%s\t%s\t12\n%s\tdev-node3\t%s\t%s\t1500\n' \
+      "${e}" "$3" "$4" "${e}" "$3" "$5" "${e}" "$3" "$6"
+  done
+}
+# ingress_case <name> <rounds...>: rounds from args, ingress.tsv from stdin.
+ingress_case() {
+  local d="${tmp}/$1"
+  shift
+  mkdir -p "${d}"
+  printf '%s' "$*" | tr '|' '\n' > "${d}/rounds.tsv"
+  : > "${d}/samples.tsv"
+  cat > "${d}/ingress.tsv"
+}
+web2="kind=tenant-job app=foo type=web host=h job=j running=2"
+web1="kind=tenant-job app=foo type=web host=h job=j running=1"
+
+# One second where no node served the tenant app during tenant-job: fails the
+# default budget.
+{ probes 100 104 app:foo 200 200 200; probes 105 105 app:foo 503 503 000; probes 106 150 app:foo 200 200 200; probes 100 150 router 404 404 404; } |
+  ingress_case ingress-lost "$(wround 1 tenant-job 100 150 "${web2}")"
+verdict ingress-lost 1 "FAILED: round 1 tenant-job had 1 failed ingress probe seconds (app:foo=1), budget 0"
+verdict ingress-lost 0 "PASSED: 1 recovered, 0 skipped" "CHAOS_BUDGET=tenant-job:ingress=1"
+verdict ingress-lost 0 "PASSED: 1 recovered, 0 skipped" CHAOS_BUDGET=
+
+# The same second lost on one node only: another node served it.
+{ probes 100 104 app:foo 200 200 200; probes 105 105 app:foo 200 200 000; probes 106 150 app:foo 200 200 200; } |
+  ingress_case ingress-one-node "$(wround 1 tenant-job 100 150 "${web2}")"
+verdict ingress-one-node 0 "PASSED: 1 recovered, 0 skipped"
+
+# A node down for a whole node-reboot round: per-node failures only.
+{ probes 100 220 controller 200 200 000; probes 100 220 router 404 404 000; } |
+  ingress_case ingress-reboot "$(wround 1 node-reboot 100 220 "node=dev-node3 power off 60s")"
+verdict ingress-reboot 0 "PASSED: 1 recovered, 0 skipped"
+verdict ingress-reboot 0 "PASSED: 1 recovered, 0 skipped" "CHAOS_BUDGET=node-reboot:ingress=0 node-reboot:ingress-longest=0"
+
+# A powered-off node does not reset its connections: a router holding a
+# pooled connection to a backend there waits up to its 5 s dead-peer bound
+# before it retries another backend, so every node can miss a probe for a
+# few seconds. The default node-reboot budget allows that (measured: 0 and 1
+# failed seconds), not more.
+{ probes 100 119 controller 200 200 000; probes 120 124 controller 000 000 000; probes 125 220 controller 200 200 000; } |
+  ingress_case ingress-reboot-blip "$(wround 1 node-reboot 100 220 "node=dev-node3 power off 60s")"
+verdict ingress-reboot-blip 0 "PASSED: 1 recovered, 0 skipped"
+{ probes 100 119 controller 200 200 000; probes 120 125 controller 000 000 000; probes 126 220 controller 200 200 000; } |
+  ingress_case ingress-reboot-long "$(wround 1 node-reboot 100 220 "node=dev-node3 power off 60s")"
+verdict ingress-reboot-long 1 "FAILED: round 1 node-reboot had a 6s ingress outage (controller), budget 5s"
+{ probes 100 104 controller 000 000 000; probes 105 109 controller 200 200 200; probes 110 113 controller 000 000 000
+  probes 114 120 controller 200 200 200; probes 121 123 controller 000 000 000; probes 124 220 controller 200 200 000; } |
+  ingress_case ingress-reboot-many "$(wround 1 node-reboot 100 220 "node=dev-node3 power off 60s")"
+verdict ingress-reboot-many 1 "FAILED: round 1 node-reboot had 12 failed ingress probe seconds (controller=12), budget 10"
+# Any other fault: not one failed second by default.
+{ probes 100 104 controller 200 200 200; probes 105 105 controller 000 000 000; probes 106 150 controller 200 200 200; } |
+  ingress_case ingress-host-restart "$(wround 1 host-restart 100 150 "node=dev-node2 systemctl restart flynn-host")"
+verdict ingress-host-restart 1 "FAILED: round 1 host-restart had 1 failed ingress probe seconds (controller=1), budget 0"
+
+# Outages before the first fault, between rounds and in the settle wait are
+# not charged to a round.
+{ probes 50 60 controller 503 503 503; probes 100 150 controller 200 200 200; probes 151 170 controller 000 000 000; } |
+  ingress_case ingress-outside "$(wround 1 system-job 100 150 "kind=system-job app=router")"
+verdict ingress-outside 0 "PASSED: 1 recovered, 0 skipped" "CHAOS_BUDGET=system-job:ingress=0"
+
+# Every target counts with its own expectation: the router must answer 404
+# for an unknown host, the controller 200; a controller 401 is a failure.
+{ probes 100 119 controller 200 200 200; probes 120 122 controller 503 000 401; probes 123 129 controller 200 200 200
+  probes 130 130 controller 000 000 000; probes 131 150 controller 200 200 200; probes 100 150 router 404 404 404; } |
+  ingress_case ingress-longest "$(wround 1 system-job 100 150 "kind=system-job app=controller")"
+verdict ingress-longest 1 "FAILED: round 1 system-job had a 3s ingress outage (controller), budget 2s" "CHAOS_BUDGET=system-job:ingress-longest=2"
+verdict ingress-longest 0 "PASSED: 1 recovered, 0 skipped" "CHAOS_BUDGET=system-job:ingress-longest=3"
+verdict ingress-longest 1 "round 1 system-job had 4 failed ingress probe seconds (controller=4), budget 3" "CHAOS_BUDGET=system-job:ingress=3"
+verdict ingress-longest 0 "PASSED: 1 recovered, 0 skipped" "CHAOS_BUDGET=system-job:ingress=4"
+{ probes 100 150 router 200 200 200; } | ingress_case ingress-router "$(wround 1 system-job 100 150 "kind=system-job app=router")"
+verdict ingress-router 1 "had 51 failed ingress probe seconds (router=51)" "CHAOS_BUDGET=system-job:ingress=0"
+
+# A tenant app with a single web job cannot serve while that job is stopped:
+# the failure must say so instead of only breaking the budget.
+hint="tenant app foo runs a single web job; scale web=2 or set CHAOS_BUDGET"
+{ probes 100 110 app:foo 503 503 503; probes 111 150 app:foo 200 200 200; } |
+  ingress_case ingress-web1 "$(wround 1 tenant-job 100 150 "${web1}")"
+verdict ingress-web1 1 "round 1 tenant-job had 11 failed ingress probe seconds (app:foo=11), budget 0: ${hint}"
+{ printf '1\ttenant-job\t%s\t100\t150\trecovered\t30s\t5s\n' "${web1}"; echo --; sample "round 1 tenant-job" UNHEALTHY tenants; } | case_dir tenants-web1
+verdict tenants-web1 1 "round 1 tenant-job had 1 failed tenants samples, budget 0: ${hint}"
+{ printf '1\ttenant-job\t%s\t100\t150\trecovered\t30s\t5s\n' "${web2}"; echo --; sample "round 1 tenant-job" UNHEALTHY tenants; } | case_dir tenants-web2
+verdict tenants-web2 1 "round 1 tenant-job had 1 failed tenants samples, budget 0"
+out="$(bash -c 'source "$1"; chaos_verdict "$2" 900' _ "${lib}" "${tmp}/tenants-web2" 2>&1 || true)"
+if grep -Fq "single web job" <<<"${out}"; then
+  echo "chaos-verdict: a tenant app with two web jobs must not get the single-web-job hint: ${out}" >&2
+  fail=1
+fi
 
 # chaos_cluster must use the verdict: an all-skipped run exits non-zero and
 # says so in report.txt.

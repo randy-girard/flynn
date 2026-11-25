@@ -1073,6 +1073,25 @@ if ! grep -Fq "MIN_HOSTS=3" <<<"${min_hosts}"; then
   printf '%s\n' "${min_hosts}" >&2
   exit 1
 fi
+# The tenants section drops an app with no route on every router in one
+# sample (EDGE-99); chaos_health gives it the running nodes' IPs, without
+# the node under fault.
+routers="$(bash -c 'set -euo pipefail
+SRC=/src
+flynn_vagrant_running_cluster_nodes() { printf "dev-node1\ndev-node2\ndev-node3\n"; }
+flynn_vagrant_node_ip() { echo "10.0.0.${1#dev-node}"; }
+flynn_vagrant_cluster_domain() { echo d; }
+flynn_vagrant_get_nodes() { echo 3; }
+CHAOS_BRIDGE_CHECK=0
+run_as_root_on() { printf "%s\n" "$2"; echo "ok cluster: x"; }
+source "$1"
+chaos_health dev-node2 || true
+printf "%s\n" "${CHAOS_HEALTH_OUT}"' _ "${mod}/lib/chaos.sh")"
+if ! grep -Fq "ROUTER_IPS=10.0.0.1\\ 10.0.0.3 " <<<"${routers}"; then
+  echo "chaos_health must pass ROUTER_IPS (running nodes but the one under fault) to the health check" >&2
+  printf '%s\n' "${routers}" >&2
+  exit 1
+fi
 # A check that cannot run (node unreachable) must still say why.
 health="$(bash -c "${chaos_stubs}"'
 run_as_root_on() { echo "ssh: connect to host dev-node1 port 22: Connection refused"; return 255; }

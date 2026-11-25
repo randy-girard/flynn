@@ -10,7 +10,9 @@
 #   tenant-job         a job of a user app
 # APP_MATCH (optional) limits the datastore kinds to apps whose name contains
 # it, e.g. kafka. SEED makes the pick repeatable. Prints "target ..." and exits 3 when no job
-# of that kind is running.
+# of that kind is running. The target line ends with running=<n>, the running
+# jobs of that app and process type including the one stopped, so the chaos
+# verdict can tell a tenant app with a single web job from a regression.
 #
 # It does not guess when a lookup fails. If no controller instance lists the
 # provider resources, datastore apps cannot be told apart from other system
@@ -149,7 +151,8 @@ if not pool:
     print("target kind=%s none running" % kind)
     raise SystemExit(3)
 t = random.choice(sorted(pool, key=lambda j: j["id"]))
-print("target kind=%s app=%s type=%s host=%s job=%s" % (kind, t["app"], t["type"], t["host"], t["id"]))
+running = sum(1 for j in jobs if j["app"] == t["app"] and j["type"] == t["type"])
+print("target kind=%s app=%s type=%s host=%s job=%s running=%d" % (kind, t["app"], t["type"], t["host"], t["id"], running))
 sys.stdout.flush()
 # Stop can sit behind the host state lock, and the cluster client gives up
 # after 10s of waiting for headers. Retry, and treat "already stopped" as

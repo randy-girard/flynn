@@ -52,8 +52,11 @@ chaos_exec_on() {
 }
 
 # chaos_health takes one health sample into CHAOS_HEALTH_OUT.
+# The tenants section gets ROUTER_IPS, the running nodes other than $1: an
+# app with no route on every one of them (deleted after the tenant list was
+# taken) is dropped in that sample instead of failing it (EDGE-99).
 chaos_health() {
-  local node ip st=0
+  local node ip st=0 name routers=""
   if declare -F flynn_vagrant_pin_nodes >/dev/null; then
     flynn_vagrant_pin_nodes
   fi
@@ -62,8 +65,13 @@ chaos_health() {
     return 1
   fi
   ip="$(flynn_vagrant_node_ip "${node}")"
+  while IFS= read -r name; do
+    if [[ -n "${name}" && "${name}" != "${1:-}" ]]; then
+      routers+="${routers:+ }$(flynn_vagrant_node_ip "${name}")"
+    fi
+  done < <(flynn_vagrant_running_cluster_nodes)
   set +e
-  CHAOS_HEALTH_OUT="$(chaos_exec_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=${ip} MIN_HOSTS=$(flynn_vagrant_get_nodes) BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} TENANT_APPS=$(printf '%q' "${CHAOS_TENANT_APPS:-}") EXPECT_RESOURCES=$(printf '%q' "${CHAOS_EXPECT_RESOURCES:-}") script/vagrant/guest/check-health.sh" 2>&1 | grep -v '^Connection to .* closed' | grep -v '^Warning: Permanently added')"
+  CHAOS_HEALTH_OUT="$(chaos_exec_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=${ip} MIN_HOSTS=$(flynn_vagrant_get_nodes) BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} TENANT_APPS=$(printf '%q' "${CHAOS_TENANT_APPS:-}") ROUTER_IPS=$(printf '%q' "${routers}") EXPECT_RESOURCES=$(printf '%q' "${CHAOS_EXPECT_RESOURCES:-}") script/vagrant/guest/check-health.sh" 2>&1 | grep -v '^Connection to .* closed' | grep -v '^Warning: Permanently added')"
   st=$?
   set -e
   if [[ "${st}" -ne 0 ]]; then
@@ -231,6 +239,68 @@ chaos_stop_monitor() {
     wait "${CHAOS_MONITOR_PID}" 2>/dev/null || true
     CHAOS_MONITOR_PID=""
   fi
+  chaos_stop_ingress
+}
+
+CHAOS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# chaos_start_ingress starts host/ingress-probe.sh in the background for the
+# run in CHAOS_RUN_DIR: every second, one request per target to every node
+# IP (CHAOS_INGRESS_NODES, default every pinned cluster node, the same list
+# the health check uses), CHAOS_INGRESS_TIMEOUT seconds each (default 1.5),
+# appended to ingress.tsv. The targets are the router itself, the
+# controller, and each tenant app in CHAOS_INGRESS_APPS (chaos_cluster sets
+# it to the apps that answered at baseline). CHAOS_INGRESS=0 turns it off.
+chaos_start_ingress() {
+  local dir="${CHAOS_RUN_DIR}" name ip pairs=() targets="router controller" app
+  CHAOS_INGRESS_PID=""
+  CHAOS_INGRESS_NODE_LIST=""
+  if [[ "${CHAOS_INGRESS:-1}" == 0 ]]; then
+    echo "ingress probe: off (CHAOS_INGRESS=0)"
+    return 0
+  fi
+  if ! declare -F flynn_vagrant_cluster_nodes >/dev/null; then
+    echo "ingress probe: off (no cluster node list)"
+    return 0
+  fi
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    ip="$(flynn_vagrant_node_ip "${name}")" || continue
+    pairs+=("${name}=${ip}")
+    CHAOS_INGRESS_NODE_LIST+="${CHAOS_INGRESS_NODE_LIST:+ }${name}"
+  done < <(if [[ -n "${CHAOS_INGRESS_NODES:-}" ]]; then printf '%s\n' ${CHAOS_INGRESS_NODES}; else flynn_vagrant_cluster_nodes; fi)
+  if [[ "${#pairs[@]}" -eq 0 ]]; then
+    echo "ingress probe: off (no nodes)"
+    return 0
+  fi
+  for app in ${CHAOS_INGRESS_APPS:-}; do
+    targets+=" app:${app}"
+  done
+  CHAOS_INGRESS_TARGETS="${targets}"
+  touch "${dir}/ingress.tsv" "${dir}/ingress.on"
+  INGRESS_TARGETS="${targets}" INGRESS_TIMEOUT="${CHAOS_INGRESS_TIMEOUT:-1.5}" \
+    bash "${CHAOS_LIB_DIR}/../host/ingress-probe.sh" "${dir}" "$(flynn_vagrant_cluster_domain)" "${pairs[@]}" \
+    < /dev/null >> "${dir}/ingress.log" 2>&1 &
+  CHAOS_INGRESS_PID=$!
+  echo "ingress probe: every 1s, ${targets} on ${CHAOS_INGRESS_NODE_LIST} (${dir}/ingress.tsv)"
+}
+
+# chaos_stop_ingress removes the flag file and waits for the prober to
+# finish the requests in flight (a few seconds at most), then kills it if it
+# is still there, so no prober or curl outlives the run.
+chaos_stop_ingress() {
+  local pid="${CHAOS_INGRESS_PID:-}" i
+  [[ -n "${pid}" ]] || return 0
+  rm -f "${CHAOS_RUN_DIR}/ingress.on"
+  for ((i = 0; i < 50; i++)); do
+    kill -0 "${pid}" 2>/dev/null || break
+    /bin/sleep 0.1
+  done
+  if kill -0 "${pid}" 2>/dev/null; then
+    kill -TERM "${pid}" 2>/dev/null || true
+  fi
+  wait "${pid}" 2>/dev/null || true
+  CHAOS_INGRESS_PID=""
 }
 
 # chaos_write_html renders $1/report.html, a self-contained page with the
@@ -363,8 +433,28 @@ EOF
           for (k = 1; k <= mm; k++) printf "<tr><td class=\"num\">%d</td><td class=\"msg\">%s</td></tr>\n", msgs[morder[k]], esc(morder[k])
           print "</table>"
         }
-        print "<footer>Raw data: <a href=\"samples.tsv\">samples.tsv</a> (one line per health sample), <a href=\"rounds.tsv\">rounds.tsv</a> (one line per fault), <a href=\"report.txt\">report.txt</a></footer>"
       }' "${dir}/samples.tsv" "${dir}/rounds.tsv"
+    chaos_ingress_rounds "${dir}" | awk -F'\t' -v timeout="${CHAOS_INGRESS_TIMEOUT:-1.5}" '
+      function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s); return s }
+      function nodefails(s,   n, i, a, out, q) { n = split(s, a, ","); out = ""; for (i = 1; i <= n; i++) { split(a[i], q, "="); if (q[2] !~ /^0\//) out = out "<span class=\"tag\">" esc(a[i]) "</span>" }; return (out != "" ? out : "-") }
+      $1 == "all" { all = $0; ap = $3; af = $4; al = $5; alt = $6; an = $8; next }
+      { r[++nr] = $0 }
+      END {
+        print "<h2>Ingress</h2>"
+        if (all == "") { print "<p>Not probed (<code>CHAOS_INGRESS=0</code> or no data in <code>ingress.tsv</code>).</p>"; exit }
+        gsub(/=/, " ", an); gsub(/,/, ", ", an)
+        printf "<div class=\"cards\"><div class=\"card\"><div class=\"k\">Probes</div><div class=\"v\">%d</div><div class=\"s\">every 1s, timeout %ss</div></div>", ap, esc(timeout)
+        printf "<div class=\"card\"><div class=\"k\">Cluster-level failures</div><div class=\"v\">%d</div><div class=\"s\">seconds x targets no node served</div></div>", af
+        printf "<div class=\"card\"><div class=\"k\">Longest outage</div><div class=\"v\">%ds</div><div class=\"s\">%s</div></div></div>\n", al, esc(alt)
+        printf "<p class=\"meta\">A second fails only when no node answers the target as expected (router 404 for an unknown host, controller 200 on <code>/ping</code>, tenant apps 200-499). Per node (failed probes, not part of the verdict): %s</p>\n", esc(an)
+        print "<table><tr><th>Round</th><th>Fault</th><th>Probes</th><th>Failed seconds</th><th>Longest</th><th>Failed targets</th><th>Node failures</th></tr>"
+        for (i = 1; i <= nr; i++) {
+          split(r[i], f, "\t")
+          printf "<tr><td class=\"num\">%s</td><td>%s</td><td class=\"num\">%d</td><td class=\"num\"><span class=\"badge %s\">%d</span></td><td class=\"num\">%ds</td><td class=\"msg\">%s</td><td>%s</td></tr>\n", esc(f[1]), esc(f[2]), f[3], (f[4] + 0 ? "bad" : "ok"), f[4], f[5], esc(f[7]), nodefails(f[8])
+        }
+        print "</table>"
+      }'
+    echo "<footer>Raw data: <a href=\"samples.tsv\">samples.tsv</a> (one line per health sample), <a href=\"rounds.tsv\">rounds.tsv</a> (one line per fault), <a href=\"ingress.tsv\">ingress.tsv</a> (one line per ingress probe), <a href=\"report.txt\">report.txt</a></footer>"
     echo "</main></body></html>"
   } > "${dir}/report.html"
 }
@@ -407,21 +497,41 @@ chaos_write_report() {
         for (k = 1; k <= mm; k++) printf "  %4d  %s\n", msgs[morder[k]], morder[k]
       }' "${dir}/samples.tsv"
     echo
-    echo "Raw data: ${dir}/samples.tsv, ${dir}/rounds.tsv"
+    chaos_ingress_rounds "${dir}" | awk -F'\t' -v timeout="${CHAOS_INGRESS_TIMEOUT:-1.5}" '
+      function nodefails(s,   n, i, a, out, q) { n = split(s, a, ","); out = ""; for (i = 1; i <= n; i++) { split(a[i], q, "="); if (q[2] !~ /^0\//) out = out (out != "" ? "," : "") a[i] }; return (out != "" ? out : "-") }
+      $1 == "all" { all = $0; ap = $3; af = $4; al = $5; alt = $6; an = $8; next }
+      { r[++nr] = $0 }
+      END {
+        if (all == "") { print "Ingress: not probed (CHAOS_INGRESS=0 or no data in ingress.tsv)"; exit }
+        gsub(/=/, " ", an); gsub(/,/, ", ", an)
+        printf "Ingress: %d probes, every 1s, timeout %ss; a second fails only when no node answers the target\n", ap, timeout
+        printf "  cluster level (no node answered): %d failed probe seconds, longest outage %ds%s\n", af, al, (al ? " (" alt ")" : "")
+        printf "  per node (failed probes, not part of the verdict): %s\n", an
+        printf "  %-5s %-18s %-7s %-7s %-8s %-24s %s\n", "ROUND", "FAULT", "PROBES", "FAILED", "LONGEST", "FAILED TARGETS", "NODE FAILURES"
+        for (i = 1; i <= nr; i++) { split(r[i], f, "\t"); printf "  %-5s %-18s %-7d %-7d %-8s %-24s %s\n", f[1], f[2], f[3], f[4], f[5] "s", f[7], nodefails(f[8]) }
+      }'
+    echo
+    echo "Raw data: ${dir}/samples.tsv, ${dir}/rounds.tsv, ${dir}/ingress.tsv"
     echo "HTML report: ${dir}/report.html"
   } > "${dir}/report.txt"
 }
 
 # CHAOS_DEFAULT_BUDGET: killing one tenant job or a datastore replica must not
-# cost a single failed tenant ingress sample.
-CHAOS_DEFAULT_BUDGET="tenant-job:tenants=0 datastore-replica:tenants=0"
+# cost a single failed tenant ingress sample, and no fault may cost a second
+# in which no node serves a probed target (ingress.tsv, cluster level), except
+# node-reboot: a powered-off node does not reset its connections, so a router
+# holding a pooled connection to a backend there waits up to its 5 s
+# dead-peer bound (router/proxy/transport.go) before it retries another
+# backend. Measured on the 3-node dev cluster: 0 and 1 failed seconds per
+# node-reboot round, 0 for every other fault.
+CHAOS_DEFAULT_BUDGET="tenant-job:tenants=0 datastore-replica:tenants=0 system-job:ingress=0 plugin-job:ingress=0 datastore-primary:ingress=0 datastore-replica:ingress=0 tenant-job:ingress=0 host-restart:ingress=0 node-reboot:ingress=10 node-reboot:ingress-longest=5"
 
 # chaos_check_budget prints a FAILED line and returns 1 when CHAOS_BUDGET or
 # CHAOS_MAX_SKIPPED cannot be parsed, so a typo fails before the first fault.
 chaos_check_budget() {
   local entry
   for entry in ${CHAOS_BUDGET-${CHAOS_DEFAULT_BUDGET}}; do
-    if [[ ! "${entry}" =~ ^[a-z-]+:[a-z]+=[0-9]+$ ]]; then
+    if [[ ! "${entry}" =~ ^[a-z-]+:[a-z]+(-[a-z]+)*=[0-9]+$ ]]; then
       echo "FAILED: bad CHAOS_BUDGET entry ${entry} (want <fault>:<check>=<max>)"
       return 1
     fi
@@ -434,6 +544,58 @@ chaos_check_budget() {
     echo "FAILED: bad CHAOS_SETTLE_TRIES ${CHAOS_SETTLE_TRIES} (want a number of tries, at least 1)"
     return 1
   fi
+}
+
+# chaos_ingress_rounds summarizes $1/ingress.tsv per round of $1/rounds.tsv
+# (a probe belongs to a round when its epoch is in [inject, end]) and once
+# for the whole run ("all"). Prints nothing when there is no probe data.
+# A probe is ok when the router answers 404 (unknown host), the controller
+# 200, a tenant app 200-499. A target fails a second only when no node
+# answered it as expected that second (cluster-level availability); probes
+# that failed on one node while another answered are counted per node only.
+# Columns: round, fault, probes, failed probe seconds (seconds x targets),
+# longest run of failed seconds of one target, that target, failed seconds
+# per target (t=n,...), failed/all probes per node (node=f/n,...), seconds
+# with data.
+chaos_ingress_rounds() {
+  local dir="$1"
+  [[ -s "${dir}/ingress.tsv" ]] || return 0
+  awk -F'\t' '
+    function iok(t, c) { c += 0; if (t == "router") return c == 404; if (t == "controller") return c == 200; return c >= 200 && c < 500 }
+    function stats(r, k, a, b,   e, i, j, t, run, tf, fail, longest, lt, probes, ftl, nodes, c, tot, secs) {
+      fail = 0; longest = 0; lt = "-"; probes = 0; ftl = ""; nodes = ""; secs = 0
+      for (e = a; e <= b; e++) if (e in n) { probes += n[e]; secs++ }
+      for (i = 1; i <= nt; i++) {
+        t = tord[i]; run = 0; tf = 0
+        for (e = a; e <= b; e++) {
+          if (!((e, t) in seen)) continue
+          if ((e, t) in good) { run = 0; continue }
+          tf++; run++
+          if (run > longest) { longest = run; lt = t }
+        }
+        if (tf) { fail += tf; ftl = ftl (ftl != "" ? "," : "") t "=" tf }
+      }
+      for (j = 1; j <= nn; j++) {
+        c = 0; tot = 0
+        for (e = a; e <= b; e++) { c += nf[e, nord[j]]; tot += np[e, nord[j]] }
+        nodes = nodes (nodes != "" ? "," : "") nord[j] "=" c "/" tot
+      }
+      printf "%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\t%d\n", r, k, probes, fail, longest, lt, (ftl != "" ? ftl : "-"), (nodes != "" ? nodes : "-"), secs
+    }
+    FILENAME == ARGV[1] {
+      if (NF < 5 || $1 !~ /^[0-9]+$/) next
+      e = $1 + 0; t = $3
+      if (!(t in tseen)) { tord[++nt] = t; tseen[t] = 1 }
+      if (!($2 in nseen)) { nord[++nn] = $2; nseen[$2] = 1 }
+      n[e]++; np[e, $2]++; seen[e, t] = 1
+      if (iok(t, $4)) good[e, t] = 1; else nf[e, $2]++
+      if (emin == "" || e < emin) emin = e
+      if (e > emax) emax = e
+      next
+    }
+    nt { stats($1, $2, $4 + 0, $5 + 0) }
+    END { if (nt) stats("all", "-", emin, emax) }
+  ' "${dir}/ingress.tsv" "${dir}/rounds.tsv"
 }
 
 # chaos_full_strength runs the gate reload and update use,
@@ -467,16 +629,21 @@ chaos_full_strength() {
   return "${st}"
 }
 
-# chaos_verdict prints the verdict of the run in $1 (rounds.tsv, samples.tsv)
-# and returns 0 for PASSED, 1 for FAILED and 2 for a bad CHAOS_BUDGET. It
-# fails when no round injected a fault, when more than CHAOS_MAX_SKIPPED
-# (unset: no limit) rounds were skipped, when a round took longer than $2
-# (CHAOS_TIMEOUT) seconds to recover, or when a round breaks a budget.
-# CHAOS_BUDGET (default CHAOS_DEFAULT_BUDGET, empty for none) is a list of
-# <fault>:<check>=<max>: <check> is a health section (cluster, tenants,
-# plugins, resources, orphans, bridge, monitor, nodes) and <max> the failed
-# samples of it allowed while that round runs, "unhealthy" counts every
-# failed sample, and "recovery" is the most seconds the round may take.
+# chaos_verdict prints the verdict of the run in $1 (rounds.tsv, samples.tsv,
+# ingress.tsv) and returns 0 for PASSED, 1 for FAILED and 2 for a bad
+# CHAOS_BUDGET. It fails when no round injected a fault, when more than
+# CHAOS_MAX_SKIPPED (unset: no limit) rounds were skipped, when a round took
+# longer than $2 (CHAOS_TIMEOUT) seconds to recover, or when a round breaks a
+# budget. CHAOS_BUDGET (default CHAOS_DEFAULT_BUDGET, empty for none) is a
+# list of <fault>:<check>=<max>: <check> is a health section (cluster,
+# tenants, plugins, resources, orphans, bridge, monitor, nodes) and <max> the
+# failed samples of it allowed while that round runs, "unhealthy" counts
+# every failed sample, "recovery" is the most seconds the round may take,
+# "ingress" the failed probe seconds (a second and target no node served,
+# see chaos_ingress_rounds) and "ingress-longest" the longest run of failed
+# seconds of one target. A round with no probe data is not checked for the
+# ingress budgets. When a tenant-job round that stopped the only web job of
+# its app breaks a budget, the message says so.
 chaos_verdict() {
   local dir="$1" timeout="$2" budget="${CHAOS_BUDGET-${CHAOS_DEFAULT_BUDGET}}"
   chaos_check_budget || return 2
@@ -493,6 +660,10 @@ chaos_verdict() {
       for (k = 1; k <= ns; k++) if (s[k] != "-") bad[p[2], s[k]]++
       next
     }
+    FILENAME == ARGV[2] {
+      ig[$1] = 1; igf[$1] = $4 + 0; igl[$1] = $5 + 0; iglt[$1] = $6; igt[$1] = $7
+      next
+    }
     {
       nr++
       if ($6 == "skipped") { skp++; next }
@@ -500,12 +671,19 @@ chaos_verdict() {
       rec++
       secs = $7; sub(/s$/, "", secs); secs += 0
       if (secs > timeout + 0) out = out "; round " $1 " " $2 " recovered in " secs "s, more than CHAOS_TIMEOUT=" timeout "s"
+      hint = ""
+      if ($2 == "tenant-job" && $3 ~ / type=web / && $3 ~ / running=1$/) {
+        app = $3; sub(/.* app=/, "", app); sub(/ .*/, "", app)
+        hint = ": tenant app " app " runs a single web job; scale web=2 or set CHAOS_BUDGET"
+      }
       nc = split(checks[$2], c, " ")
       for (k = 1; k <= nc; k++) {
         max = lim[$2, c[k]]
         if (c[k] == "recovery") { if (secs > max) out = out "; round " $1 " " $2 " recovered in " secs "s, budget " max "s"; continue }
+        if (c[k] == "ingress") { if (($1 in ig) && igf[$1] > max) out = out "; round " $1 " " $2 " had " igf[$1] " failed ingress probe seconds (" igt[$1] "), budget " max hint; continue }
+        if (c[k] == "ingress-longest") { if (($1 in ig) && igl[$1] > max) out = out "; round " $1 " " $2 " had a " igl[$1] "s ingress outage (" iglt[$1] "), budget " max "s" hint; continue }
         got = bad[$1, c[k]] + 0
-        if (got > max) out = out "; round " $1 " " $2 " had " got " " (c[k] == "unhealthy" ? "UNHEALTHY" : "failed " c[k]) " samples, budget " max
+        if (got > max) out = out "; round " $1 " " $2 " had " got " " (c[k] == "unhealthy" ? "UNHEALTHY" : "failed " c[k]) " samples, budget " max hint
       }
     }
     END {
@@ -513,7 +691,7 @@ chaos_verdict() {
       if (maxskip != "" && skp + 0 > maxskip + 0) out = out "; " skp " skipped rounds, more than CHAOS_MAX_SKIPPED=" maxskip
       if (out != "") { print "FAILED: " substr(out, 3); exit 1 }
       printf "PASSED: %d recovered, %d skipped\n", rec, skp
-    }' "${dir}/samples.tsv" "${dir}/rounds.tsv"
+    }' "${dir}/samples.tsv" <(chaos_ingress_rounds "${dir}") "${dir}/rounds.tsv"
 }
 
 # chaos_cluster runs CHAOS_ROUNDS faults (default 10) cycling through a
@@ -527,7 +705,9 @@ chaos_verdict() {
 # background monitor samples health for the whole run, and a report is
 # written to CHAOS_REPORT_DIR (default ./flynn-logs/chaos/<UTC time>). The
 # verdict is chaos_verdict's: all rounds skipped, a slow recovery or a broken
-# CHAOS_BUDGET fails the run too.
+# CHAOS_BUDGET fails the run too. From the baseline to the end a per-second
+# ingress prober (chaos_start_ingress) writes ingress.tsv for the ingress
+# budgets and the report's Ingress section.
 chaos_cluster() {
   require_cluster_nodes
   local rounds="${CHAOS_ROUNDS:-10}" timeout="${CHAOS_TIMEOUT:-900}" settle="${CHAOS_SETTLE:-20}"
@@ -564,6 +744,13 @@ chaos_cluster() {
   CHAOS_MONITOR_PID=$!
   trap 'chaos_stop_monitor' EXIT
   trap 'chaos_stop_monitor; exit 130' INT TERM
+  # Probe the tenant apps that answered at baseline ("ok tenants: tenant
+  # HTTP ok: app=200 ..."); one that was already down or deleted would fail
+  # every second.
+  if [[ -z "${CHAOS_INGRESS_APPS+x}" ]]; then
+    CHAOS_INGRESS_APPS="$(printf '%s\n' "${CHAOS_HEALTH_OUT}" | sed -n 's/^ok tenants: tenant HTTP ok: //p' | head -1 | tr ' ' '\n' | sed -n 's/=.*//p' | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  fi
+  chaos_start_ingress
   verdict=""
   CHAOS_SETTLE_SUMMARY=""
   for ((i = 1; i <= rounds; i++)); do
