@@ -77,6 +77,17 @@ flynn mysql:promote <follower>
 flynn mysql:unfollow <follower>
 ```
 
+`mysql:wait` reads the follower itself. A follower still restoring its
+backup is not ready; it is ready when both replica threads run with no error,
+its lag is at most 30 seconds, and its GTID position covers the primary's.
+
+Maintenance and image refresh replace a primary only through such a caught-up
+follower. The old primary is fenced read-only, the follower applies its last
+transactions, and the follower is restarted as a primary and checked writable
+with all of them before the old primary is stopped and the name moves. Any
+failure before that point lifts the fence, deletes the new follower, and
+leaves the old primary serving.
+
 `--auto-failover` places the replica on another host. If the primary job
 stays down for 30 seconds, Flynn promotes that follower, fences the old
 primary, and starts a replacement replica. One node, with no follower, does
