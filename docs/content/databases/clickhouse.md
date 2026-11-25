@@ -239,6 +239,15 @@ any node is unhealthy.
 The ClickHouse data source page has the tabs Overview (with the Nodes
 control), Metrics, Databases, and Backup.
 
+The Overview's Provision, Detach and Destroy buttons go through the
+controller, the same as `flynn addons:create clickhouse`, `flynn addons:detach`
+and `flynn addons:destroy`. Provision (Manage or Admin on the app) creates a
+cluster owned by the app and sets its connection env on the app. An app that
+is only attached to another app's cluster gets Detach (Manage or Admin), which
+unbinds it and removes the env from that app; the cluster keeps running. The
+owning app gets Destroy instead (Admin on the app), which asks you to type the
+resource name and then deletes the cluster for every attached app.
+
 ## Safety
 
 The ClickHouse appliance stores data on a persistent volume attached to each
