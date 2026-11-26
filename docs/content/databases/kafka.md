@@ -143,8 +143,9 @@ its partition, timestamp, headers, and its key and value as bytes, with a
 null key or a tombstone kept apart from an empty one. A restore writes
 records with new offsets, so it refuses any topic that already has records
 (checked for every topic before anything is written). Delete those topics
-with `flynn kafka:topics:destroy` first. The plugin API and dashboard can
-force the restore to append instead. Brokers on an image from before this
+with `flynn kafka:topics:destroy` first, or append anyway with
+`flynn kafka:restore [<resource>] [<timestamp>] --force` (the plugin API and
+the dashboard have the same switch). Brokers on an image from before this
 change must be upgraded with `flynn kafka:maintenance` before a dump or
 restore.
 
@@ -206,6 +207,9 @@ flynn kafka:topics:configure events --retention 30d --config cleanup.policy=comp
 # Delete a topic and all of its data
 flynn kafka:topics:destroy events
 ```
+
+These commands run in a cluster job as the resource's SASL user, over its
+client certificate, from the app's `FLYNN_KAFKA_*` attachment env.
 
 The `--retention` flag accepts a duration such as `168h` or `7d` and is
 translated into the `retention.ms` topic config. Any Kafka topic setting can be
@@ -279,9 +283,26 @@ are posted once per UTC minute per resource per attached app. See
 
 ## Upgrades
 
-A plugin update rolls the cluster one broker at a time. Each step waits until
-all brokers are live with zero under-replicated partitions. The first plugin
-start after this update rolls every existing cluster once.
+Maintenance rolls the cluster one broker at a time. Each step waits until all
+brokers are live with zero under-replicated partitions. A plugin update does
+not roll existing clusters by itself unless `MAINTENANCE_AUTO=true` is set on
+`kafka-plugin`; run maintenance as below.
+
+### Maintenance
+
+`flynn kafka:maintenance [--all] [<instances>]` moves the resources attached to
+the current app onto the plugin's current image and engine. With one attached
+resource the name is optional; otherwise pass a name, a comma-separated list,
+or `--all`. A resource that is already current is reported as
+`already current` and left running. `flynn-host kafka:maintenance
+<name>|<list>|--all` does the same for any resource on the cluster.
+
+Both run `/bin/flynn-kafka-api task maintenance` in the plugin's current image with only the plugin's
+API key: the `flynn` form on your app (it reads the key from the `kafka-plugin`
+release, so it needs a cluster admin login), the `flynn-host` form on
+`kafka-plugin`. The task asks `leader.kafka-plugin.discoverd`, the only instance that
+starts maintenance. Set `MAINTENANCE_AUTO=true` on the plugin app to run
+maintenance when the plugin starts.
 
 ## Dashboard
 

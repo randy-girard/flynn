@@ -234,6 +234,22 @@ samples once per minute. See
 A plugin update rolls the cluster one node at a time and refuses to start while
 any node is unhealthy.
 
+### Maintenance
+
+`flynn clickhouse:maintenance [--all] [<instances>]` moves the resources attached to
+the current app onto the plugin's current image and engine. With one attached
+resource the name is optional; otherwise pass a name, a comma-separated list,
+or `--all`. A resource that is already current is reported as
+`already current` and left running. `flynn-host clickhouse:maintenance
+<name>|<list>|--all` does the same for any resource on the cluster.
+
+Both run `/bin/flynn-clickhouse-api task maintenance` in the plugin's current image with only the plugin's
+API key: the `flynn` form on your app (it reads the key from the `clickhouse-plugin`
+release, so it needs a cluster admin login), the `flynn-host` form on
+`clickhouse-plugin`. The task asks `leader.clickhouse-plugin.discoverd`, the only instance that
+starts maintenance. Set `MAINTENANCE_AUTO=true` on the plugin app to run
+maintenance when the plugin starts.
+
 ## Dashboard
 
 The ClickHouse data source page has the tabs Overview (with the Nodes

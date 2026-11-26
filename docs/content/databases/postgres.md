@@ -357,6 +357,21 @@ Additionally, the following full text search dictionaries are installed:
 | swedish\_stem    | snowball stemmer for swedish language                     |
 | turkish\_stem    | snowball stemmer for turkish language                     |
 
+### Maintenance
+
+`flynn pg:maintenance [--all] [<instances>]` moves the resources attached to
+the current app onto the plugin's current image and engine. With one attached
+resource the name is optional; otherwise pass a name, a comma-separated list,
+or `--all`. A resource that is already current is reported as
+`already current` and left running. `flynn-host pg:maintenance
+<name>|<list>|--all` does the same for any resource on the cluster.
+
+Both run `/bin/flynn-postgres-api task maintenance` in the plugin's current image with only the plugin's
+API key: the `flynn` form on your app (it reads the key from the `postgres-plugin`
+release, so it needs a cluster admin login), the `flynn-host` form on
+`postgres-plugin`. Set `MAINTENANCE_AUTO=true` on the plugin app to run
+maintenance when the plugin starts.
+
 ## Safety
 
 This appliance is designed to provide full consistency and partition tolerance

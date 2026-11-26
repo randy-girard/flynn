@@ -74,7 +74,7 @@ cd flynn && go build -mod=vendor -o /tmp/flynn-cli ./cli
 
 Point plugin e2e at the binary you built: `FLYNN=/tmp/flynn-cli cluster/run.sh --cli-only`. Web Playwright needs the live dashboard password. `flynn-dev` is not that password, and the dashboard app env does not store it. A 401 on `POST /api/session` is a missing password, not a failed CLI test.
 
-Plugin API tasks (`/bin/flynn-*-api task ...`) run on the user app. Copy `CONTROLLER_KEY` from the plugin app's release into that task env only. Do not put the cluster controller key on an isolated database release. `flynn run` on a datastore app (`postgres-plugin`, `mysql-plugin`, and the other `*-plugin` datastore apps) stays refused.
+Plugin API tasks (`/bin/flynn-*-api task ...`) run on the user app. Copy `CONTROLLER_KEY` from the plugin app's release into that task env only. An `owned` action (`<plugin>:maintenance`) runs on the user app too, in the plugin app's current release, with only that key; `flynn-host <plugin>:...` gives a `/bin/flynn-*-api` job on the plugin app the same key (`plugin.APIAuthEnv`). Do not put the cluster controller key on an isolated database release. `flynn run` on a datastore app (`postgres-plugin`, `mysql-plugin`, and the other `*-plugin` datastore apps) stays refused.
 
 ## Git and Actions
 
