@@ -1,7 +1,8 @@
 #!/bin/bash
 # After a node crash/reboot, wait until tenant HTTP apps answer again.
 # Platform status can be "healthy" while app-one still has no web job (503).
-# LIST_ONLY=1 prints app names (snapshot before a crash) and exits non-zero
+# LIST_ONLY=1 prints app names (snapshot before a crash; apps with a job
+# that listens on a port, so worker-only apps are left out) and exits non-zero
 # when discoverd or any host cannot be read. TENANT_APPS pins
 # that list so wait still covers apps whose jobs died with the host.
 # A pinned app that has no route any more (deleted while the snapshot was
@@ -94,6 +95,11 @@ def tenant_apps(env, strict=False):
                 continue
             name = (md.get("flynn-controller.app_name") or "").strip()
             if not name or name in SYSTEM or name.endswith("-plugin"):
+                continue
+            # Only jobs that listen on a port serve HTTP. A worker-only app
+            # answers 503 on its route forever and would fail every reload
+            # wait (EDGE-121).
+            if not ((j.get("config") or {}).get("ports") or []):
                 continue
             names.add(name)
     return sorted(names)

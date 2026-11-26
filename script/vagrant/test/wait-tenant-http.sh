@@ -138,7 +138,12 @@ class H(http.server.BaseHTTPRequestHandler):
             body = json.dumps(hosts).encode()
         elif self.path.startswith("/host/jobs"):
             body = json.dumps({
-                "a": {"job": {"metadata": {"flynn-controller.app_name": "app-one"}}},
+                "a": {"job": {"metadata": {"flynn-controller.app_name": "app-one"},
+                              "config": {"ports": [{"port": 8080, "proto": "tcp"}]}}},
+                # A worker-only app (no web process, no port) answers 503 on
+                # its route forever; reload must not wait for it (EDGE-121).
+                "w": {"job": {"metadata": {"flynn-controller.app_name": "worker-only", "flynn-controller.type": "worker"},
+                              "config": {"ports": None}}},
                 "b": {"job": {"metadata": {"flynn-controller.app_name": "router", "flynn-system-app": "true"}}},
             }).encode()
         else:
@@ -162,7 +167,7 @@ list_with() {
   return "${st}"
 }
 list_with ok || fail "LIST_ONLY must succeed when discoverd and every host answer"
-[[ "$(cat "${tmp}/out")" == "app-one" ]] || fail "LIST_ONLY must print only tenant apps"
+[[ "$(cat "${tmp}/out")" == "app-one" ]] || fail "LIST_ONLY must print only tenant apps that serve a port (not worker-only apps)"
 if list_with discoverd-down; then
   fail "LIST_ONLY must fail when discoverd cannot be read"
 fi
