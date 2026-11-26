@@ -625,13 +625,11 @@ func copyPluginAPIAuth(client pluginJobClient, spec *plugin.CLI, args []string, 
 		return
 	}
 	rel, err := client.GetAppRelease(app)
-	if err != nil || rel == nil || rel.Env == nil {
+	if err != nil {
 		return
 	}
-	for _, key := range []string{"CONTROLLER_KEY", "AUTH_KEY"} {
-		if v := strings.TrimSpace(rel.Env[key]); v != "" {
-			env[key] = v
-		}
+	for k, v := range plugin.APIAuthEnv(rel) {
+		env[k] = v
 	}
 }
 
@@ -709,9 +707,14 @@ func ownedPluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plug
 	if err != nil {
 		return nil, err
 	}
+	cmd := plugin.ColonName(spec.Command, action.Name)
 	pluginRel, err := client.GetAppRelease(pluginApp)
 	if err != nil || pluginRel == nil || pluginRel.ID == "" {
-		return nil, fmt.Errorf("error getting %s release", spec.Command)
+		reason := "no release"
+		if err != nil {
+			reason = err.Error()
+		}
+		return nil, fmt.Errorf("%s reads the %s release, which needs a cluster admin login (%s); an operator can run flynn-host %s %s", cmd, pluginApp, reason, cmd, strings.Join(names, ","))
 	}
 	jobArgs, err := plugin.InterpolateAll(action.Args, plugin.Interp{AppName: pluginApp})
 	if err != nil {
@@ -719,9 +722,19 @@ func ownedPluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plug
 	}
 	jobArgs = compactPluginArgs(jobArgs)
 	jobArgs = append(jobArgs, strings.Join(names, ","))
+	// The plugin app is a datastore app: the CLI and the controller refuse
+	// a job on it (NEW-11, DATA-69). An owned action is a call to the plugin
+	// API, so it runs on the user app in the plugin's current image (not
+	// the resource's possibly older one) with only the plugin's API key,
+	// like the other plugin API tasks.
+	env := plugin.APIAuthEnv(pluginRel)
+	if len(env) == 0 {
+		return nil, fmt.Errorf("%s: the %s release has no API key; an operator can run flynn-host %s %s", cmd, pluginApp, cmd, strings.Join(names, ","))
+	}
 	return &runConfig{
-		App:        pluginApp,
+		App:        appName,
 		Release:    pluginRel.ID,
+		Env:        env,
 		Args:       jobArgs,
 		DisableLog: true,
 		Exit:       true,

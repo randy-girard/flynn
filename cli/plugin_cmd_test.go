@@ -996,7 +996,7 @@ func TestOwnedMaintenanceStaysOnAttachedResources(t *testing.T) {
 	client := fakeRedisReleaseClient{
 		releases: map[string]*ct.Release{
 			"shop":            {Env: map[string]string{"FLYNN_POSTGRES": primary}},
-			"postgres-plugin": {ID: "plugin-rel"},
+			"postgres-plugin": {ID: "plugin-rel", Env: map[string]string{"CONTROLLER_KEY": "plugin-key", "DATABASE_URL": "plugin-db"}},
 		},
 		resources: map[string][]*ct.Resource{
 			"shop": {
@@ -1026,8 +1026,20 @@ func TestOwnedMaintenanceStaysOnAttachedResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.App != "postgres-plugin" || cfg.Release != "plugin-rel" {
-		t.Fatalf("job must run in the plugin image: %+v", cfg)
+	// NEW-11/DATA-69: the plugin app is a datastore app, so a job on it is
+	// refused by the CLI and the controller. The task runs on the user app
+	// in the plugin's current image and carries only the plugin API key.
+	if cfg.App != "shop" || cfg.Release != "plugin-rel" {
+		t.Fatalf("job must run on the user app in the plugin image: %+v", cfg)
+	}
+	if err := errIfDatastoreApp(&ct.App{Name: cfg.App}); err != nil {
+		t.Fatalf("owned job app refused: %v", err)
+	}
+	if cfg.Env["CONTROLLER_KEY"] != "plugin-key" {
+		t.Fatalf("owned job must carry the plugin API key, env %v", cfg.Env)
+	}
+	if _, leaked := cfg.Env["DATABASE_URL"]; leaked || cfg.ReleaseEnv {
+		t.Fatalf("owned job must not get the plugin release env: %+v", cfg)
 	}
 	if got := cfg.Args[len(cfg.Args)-1]; got != primary+","+"postgresql-meadow-10001" && got != "postgresql-meadow-10001,"+primary {
 		t.Fatalf("owned list %q args %q", got, cfg.Args)
@@ -1378,6 +1390,38 @@ func TestPluginPromoteForwardsForce(t *testing.T) {
 		}
 		if got := strings.Join(cfg.Args, " "); got != tc.want {
 			t.Fatalf("%v: args %q, want %q", tc.argv, got, tc.want)
+		}
+	}
+}
+
+// A caller who cannot read the plugin release (no cluster admin login) or a
+// plugin release without a key gets a message naming the operator command.
+func TestOwnedMaintenanceWithoutPluginKeyNamesFlynnHost(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "shop"
+	primary := "kafka-amber-12345"
+	spec := &plugin.CLI{
+		Command:     "kafka",
+		App:         "kafka-plugin",
+		ResourceEnv: "FLYNN_KAFKA",
+		Actions: []plugin.CLIAction{{
+			Name: "maintenance", Args: []string{"/bin/flynn-kafka-api", "task", "maintenance"}, Owned: true, Scope: plugin.CLIScopeApp,
+		}},
+	}
+	action := spec.MatchScopedAction(map[string]bool{"maintenance": true}, plugin.CLIScopeApp, plugin.CLIScopeAccount)
+	for name, plugRel := range map[string]*ct.Release{"unreadable": nil, "keyless": {ID: "plugin-rel"}} {
+		releases := map[string]*ct.Release{"shop": {Env: map[string]string{"FLYNN_KAFKA": primary}}}
+		if plugRel != nil {
+			releases["kafka-plugin"] = plugRel
+		}
+		client := fakeRedisReleaseClient{
+			releases:  releases,
+			resources: map[string][]*ct.Resource{"shop": {{Env: map[string]string{"FLYNN_KAFKA": primary}}}},
+		}
+		_, err := pluginJobConfig(client, spec, action, &docopt.Args{Bool: map[string]bool{}, String: map[string]string{}})
+		if err == nil || !strings.Contains(err.Error(), "flynn-host kafka:maintenance") {
+			t.Fatalf("%s: %v", name, err)
 		}
 	}
 }

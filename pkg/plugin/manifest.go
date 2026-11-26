@@ -207,7 +207,9 @@ type CLIAction struct {
 	// cluster:true with no scope is treated as scope:cluster.
 	Cluster bool `json:"cluster,omitempty"`
 	// Owned limits an app-scoped action to resources attached to the current
-	// app. The job still runs in the plugin image.
+	// app. The job runs on the current app in the plugin app's current
+	// release, with only the plugin API key (APIAuthEnv) in its env, and
+	// gets the attached resource names as its last argument.
 	Owned bool `json:"owned,omitempty"`
 }
 
