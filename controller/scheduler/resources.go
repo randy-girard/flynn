@@ -52,29 +52,45 @@ func jobHoldsReservation(job *Job) bool {
 
 // schedulerTenancyHosted matches controller/tenancy.ModeHosted. This package
 // does not import tenancy; that package pulls scrypt into the scheduler binary.
-const schedulerTenancyHosted = "hosted"
+const schedulerTenancyHosted = placement.TenancyHosted
 
-func hostedBuiltinProfile(name string) bool {
-	switch name {
-	case resource.ProfileSmall, resource.ProfileMedium, resource.ProfileLarge:
-		return true
-	default:
-		return false
-	}
+func (s *Scheduler) reservations() placement.Reservations {
+	return placement.Reservations{TenancyMode: s.tenancyMode, ProfileReserve: s.profileReserve}
 }
 
+// jobReservesResources is placement.Reservations.Reserves for this job. In
+// hosted mode a platform app (controller, router, plugin apps, ...) never
+// reserves (NEW-45).
 func (s *Scheduler) jobReservesResources(job *Job) bool {
 	if s == nil {
 		return false
 	}
-	name := jobRuntimeProfileName(job)
-	if name == "" {
+	proc, app, ok := jobProcess(job)
+	if !ok {
 		return false
 	}
-	if s.profileReserve[name] {
-		return true
+	return s.reservations().Reserves(app, proc)
+}
+
+func jobProcess(job *Job) (ct.ProcessType, *ct.App, bool) {
+	if job == nil || job.Formation == nil || job.Formation.Release == nil {
+		return ct.ProcessType{}, nil, false
 	}
-	return s.tenancyMode == schedulerTenancyHosted && hostedBuiltinProfile(name)
+	t, ok := job.Formation.Release.Processes[job.Type]
+	if !ok {
+		return ct.ProcessType{}, nil, false
+	}
+	return t, job.Formation.App, true
+}
+
+// jobReservedRequest is what a reserving job holds on its host (the Request,
+// or the Limit when no Request was copied onto the process).
+func (s *Scheduler) jobReservedRequest(job *Job) (mem, cpu int64) {
+	proc, _, ok := jobProcess(job)
+	if !ok {
+		return 0, 0
+	}
+	return placement.Request(proc, s.jobReservesResources(job))
 }
 
 func (s *Scheduler) hostReservedResources(hostID string) (mem, cpu int64) {
@@ -88,21 +104,7 @@ func (s *Scheduler) hostReservedResources(hostID string) (mem, cpu int64) {
 		if !s.jobReservesResources(job) {
 			continue
 		}
-		m, c := jobResourceRequest(job)
-		if m <= 0 && c <= 0 {
-			// Guaranteed runtime whose Request was not copied onto the
-			// process: count the cap so the host still cannot overbook.
-			if job.Formation != nil && job.Formation.Release != nil {
-				if t, ok := job.Formation.Release.Processes[job.Type]; ok {
-					if spec, ok := t.Resources[resource.TypeMemory]; ok && spec.Limit != nil {
-						m = *spec.Limit
-					}
-					if spec, ok := t.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
-						c = *spec.Limit
-					}
-				}
-			}
-		}
+		m, c := s.jobReservedRequest(job)
 		mem += m
 		cpu += c
 	}
@@ -113,40 +115,19 @@ func (s *Scheduler) hostHasCapacity(h *Host, job *Job) bool {
 	if h == nil {
 		return false
 	}
-	needMem, needCPU := jobResourceRequest(job)
-	if needMem <= 0 && needCPU <= 0 && s.jobReservesResources(job) {
-		if job.Formation != nil && job.Formation.Release != nil {
-			if t, ok := job.Formation.Release.Processes[job.Type]; ok {
-				if spec, ok := t.Resources[resource.TypeMemory]; ok && spec.Limit != nil {
-					needMem = *spec.Limit
-				}
-				if spec, ok := t.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
-					needCPU = *spec.Limit
-				}
-			}
-		}
-	}
+	needMem, needCPU := s.jobReservedRequest(job)
 	if needMem <= 0 && needCPU <= 0 {
 		return true
 	}
 	// Both totals unset means this process has never read the host. A
 	// reserving job must not treat that as infinite capacity. Shared jobs
-	// still place. A single zero field skips that dimension below, and a
+	// still place. A single zero field skips that dimension, and a
 	// failed refresh leaves the last good sample in place.
-	if h.MemoryTotalBytes == 0 && h.CPUMilli == 0 {
-		if s.jobReservesResources(job) {
-			return false
-		}
+	if h.MemoryTotalBytes == 0 && h.CPUMilli == 0 && !s.jobReservesResources(job) {
 		return true
 	}
 	usedMem, usedCPU := s.hostReservedResources(h.ID)
-	if h.MemoryTotalBytes > 0 && needMem > 0 && uint64(usedMem+needMem) > h.MemoryTotalBytes {
-		return false
-	}
-	if h.CPUMilli > 0 && needCPU > 0 && usedCPU+needCPU > h.CPUMilli {
-		return false
-	}
-	return true
+	return placement.Fits(h.MemoryTotalBytes, h.CPUMilli, usedMem, usedCPU, needMem, needCPU)
 }
 
 // hostCanPlace is whether the scheduler may start jobs on this host.

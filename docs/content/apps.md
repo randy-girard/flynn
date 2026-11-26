@@ -850,7 +850,18 @@ Self-hosted clusters leave reservation off unless an operator turns it on.
 A large self-hosted cluster runs `flynn-host runtime:reserve` on each app
 runtime that must fit. Hosted mode reserves the builtin `small`, `medium`,
 and `large` runtimes even when that stored flag is off. A custom runtime
-reserves in hosted mode only when its flag is on. `tenancy:mode` does not
+reserves in hosted mode only when its flag is on. In hosted mode, system and
+platform jobs never reserve, whatever their runtime: the controller,
+scheduler, router, discoverd, blobstore, the platform `postgres`, plugin
+apps, and the rest of the control plane (a `flynn-system-app` that split
+placement keeps on core hosts). Their jobs do not count against the
+reserved sum and are never blocked by it, so a host full of tenant
+reservations still gets its router or controller replacement and
+`flynn-host update` can still roll the system apps. Leave headroom for them
+when you size a host. Tenant databases (`redis-<uuid>` appliances, isolated
+database instances) are a tenant's workload and still reserve. Self-hosted
+mode applies a runtime's stored flag to every job, system jobs included.
+`tenancy:mode` does not
 change the stored flag. Switching back to self-hosted drops the builtin
 override and leaves the flags as they are. That switch is refused while a
 non-system app still has an `owner_account`. It is not a safe reversal.
