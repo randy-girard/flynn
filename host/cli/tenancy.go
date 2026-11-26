@@ -79,25 +79,32 @@ set on the controller).
 usage: flynn-host tenancy:mode [--force] [<mode>]
 
 Show or set the cluster tenancy mode (self_hosted or hosted) using the local
-cluster key. The body is {"mode": mode} only. Hosted does not enable signup,
-does not change reserve_resources, and does not run production:check. hosted
-is refused when that check would fail. self_hosted is refused while the
-cluster is hosted and a non-system app still has an owner. That reversal is
-not safe.
+cluster key. The body is {"mode": mode} only. Hosted does not enable signup
+and does not change reserve_resources. hosted is refused when
+production:check would fail as hosted: this command runs every row first,
+including zfs and overlay on this host, and the controller runs the rows it
+can read itself again on the PUT, so a direct PUT /tenancy is refused too.
+self_hosted is refused while the cluster is hosted and a non-system app
+still has an owner. That reversal is not safe.
 
 Options:
-	--force  switch a hosted cluster to self_hosted even though a non-system
-	         app still has an owner_account. Cluster key only. Recorded in
-	         the controller audit log as tenancy.force_self_hosted.
-	         owner_account is not cleared, account_quotas rows stay, an
-	         account with no quota row becomes unlimited immediately, and
-	         reserve_resources is not cleared.
+	--force  cluster key only. With hosted: switch even though
+	         production:check fails; the failing rows are printed and the
+	         controller records tenancy.force_hosted in its audit log.
+	         With self_hosted: switch a hosted cluster even though a
+	         non-system app still has an owner_account, recorded as
+	         tenancy.force_self_hosted. owner_account is not cleared,
+	         account_quotas rows stay, an account with no quota row becomes
+	         unlimited immediately, and reserve_resources is not cleared.
+	         On a cluster already in that mode --force has nothing to
+	         override and says so.
 
 Examples:
 
     $ flynn-host tenancy:mode
     $ flynn-host tenancy:mode hosted
     $ flynn-host tenancy:mode --force self_hosted
+    $ flynn-host tenancy:mode --force hosted
 `)
 	Register("tenancy:network-policy", runTenancyNetworkPolicy, `
 usage: flynn-host tenancy:network-policy [--mode <mode>] --owner <account> [--allow <spec>]...
@@ -298,7 +305,7 @@ func runTenancyMode(args *docopt.Args, client *cluster.Client) error {
 	force := args.Bool["--force"]
 	if mode == "" {
 		if force {
-			return fmt.Errorf("--force needs a mode: flynn-host tenancy:mode --force self_hosted")
+			return fmt.Errorf("--force needs a mode: flynn-host tenancy:mode --force self_hosted or --force hosted")
 		}
 		var s ct.TenancySettings
 		if err := v.Get("/tenancy", &s); err != nil {
@@ -319,11 +326,18 @@ func runTenancyMode(args *docopt.Args, client *cluster.Client) error {
 		_, err := v.SetTenancyMode(mode, true)
 		return err
 	}
-	return applyTenancyMode(os.Stderr, put, hostedCheck, mode, force)
+	current := func() (string, error) {
+		var s ct.TenancySettings
+		if err := v.Get("/tenancy", &s); err != nil {
+			return "", err
+		}
+		return s.Mode, nil
+	}
+	return applyTenancyMode(os.Stderr, put, hostedCheck, current, mode, force)
 }
 
 // forceSelfHostedWarning is printed before tenancy:mode --force self_hosted
-// sends the override.
+// sends the override to a hosted cluster.
 const forceSelfHostedWarning = `WARNING: forcing tenancy_mode self_hosted while the cluster is hosted.
   - owner_account is not cleared on any app.
   - account_quotas rows stay and still apply.
@@ -333,23 +347,42 @@ const forceSelfHostedWarning = `WARNING: forcing tenancy_mode self_hosted while 
   - the controller records this as tenancy.force_self_hosted in core_audit.
 `
 
-// applyTenancyMode validates and sends a tenancy mode change. --force is only
-// for self_hosted. The controller decides whether the override is needed
-// and refuses it from anything but the cluster key.
-func applyTenancyMode(out io.Writer, put func(mode string, force bool) error, hostedCheck func() error, mode string, force bool) error {
+// forceHostedWarning is printed before tenancy:mode --force hosted sends the
+// override past a failing production:check.
+const forceHostedWarning = `WARNING: forcing tenancy_mode hosted although production:check fails:
+  %s
+  - account quotas and hosted reservations apply at once.
+  - every failing row stays failing until you fix it (flynn-host production:check).
+  - the controller records this as tenancy.force_hosted in core_audit.
+`
+
+// applyTenancyMode validates and sends a tenancy mode change. hosted runs
+// production:check first, as the controller does again on the PUT; a
+// failing row refuses it unless --force, the cluster key's override. --force
+// self_hosted warns only when the cluster is hosted. The controller decides
+// whether an override is needed and refuses it from anything but the
+// cluster key.
+func applyTenancyMode(out io.Writer, put func(mode string, force bool) error, hostedCheck func() error, current func() (string, error), mode string, force bool) error {
 	if err := tenancy.ValidateMode(mode); err != nil {
 		return err
 	}
-	if force && mode != tenancy.ModeSelfHosted {
-		return fmt.Errorf("--force only applies to self_hosted")
-	}
 	if mode == tenancy.ModeHosted {
 		if err := hostedCheck(); err != nil {
-			return err
+			if !force {
+				return fmt.Errorf("%v (the cluster key can override with flynn-host tenancy:mode --force hosted)", err)
+			}
+			fmt.Fprintf(out, forceHostedWarning, err)
+		} else if force {
+			fmt.Fprintln(out, "production:check passes; --force has nothing to override.")
 		}
 	}
-	if force {
-		fmt.Fprint(out, forceSelfHostedWarning)
+	if force && mode == tenancy.ModeSelfHosted {
+		cur, err := current()
+		if err == nil && cur != tenancy.ModeHosted {
+			fmt.Fprintf(out, "tenancy_mode is already %s; --force has nothing to override.\n", cur)
+		} else {
+			fmt.Fprint(out, forceSelfHostedWarning)
+		}
 	}
 	return put(mode, force)
 }

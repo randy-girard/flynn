@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -70,17 +71,10 @@ func TestTenancyModeForce(t *testing.T) {
 		return nil
 	}
 	noCheck := func() error { return nil }
+	hosted := func() (string, error) { return "hosted", nil }
 
 	var out strings.Builder
-	if err := applyTenancyMode(&out, put, noCheck, "hosted", true); err == nil || !strings.Contains(err.Error(), "self_hosted") {
-		t.Fatalf("--force with hosted: %v", err)
-	}
-	if len(calls) != 0 {
-		t.Fatalf("hosted --force must not PUT: %v", calls)
-	}
-
-	out.Reset()
-	if err := applyTenancyMode(&out, put, noCheck, "self_hosted", false); err != nil {
+	if err := applyTenancyMode(&out, put, noCheck, hosted, "self_hosted", false); err != nil {
 		t.Fatal(err)
 	}
 	if out.Len() != 0 || len(calls) != 1 || calls[0] != (call{"self_hosted", false}) {
@@ -88,7 +82,7 @@ func TestTenancyModeForce(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := applyTenancyMode(&out, put, noCheck, "self_hosted", true); err != nil {
+	if err := applyTenancyMode(&out, put, noCheck, hosted, "self_hosted", true); err != nil {
 		t.Fatal(err)
 	}
 	if len(calls) != 2 || calls[1] != (call{"self_hosted", true}) {
@@ -102,5 +96,75 @@ func TestTenancyModeForce(t *testing.T) {
 
 	if _, err := docopt.Parse(commands["tenancy:mode"].usage, []string{"tenancy:mode", "--force", "self_hosted"}, true, "", false); err != nil {
 		t.Fatalf("usage must accept --force: %v", err)
+	}
+}
+
+// TestTenancyModeForceMessages: NEW-47 / NEW-45. --force self_hosted prints
+// the "while the cluster is hosted" warning only when the cluster is hosted.
+// On a self_hosted cluster it says there is nothing to override. --force
+// hosted is the cluster key's override of a failing production:check: the
+// CLI prints the failing rows and what forcing does, then sends force, and
+// the controller records tenancy.force_hosted. Without --force a failing
+// check still refuses before the PUT.
+func TestTenancyModeForceMessages(t *testing.T) {
+	type call struct {
+		mode  string
+		force bool
+	}
+	var calls []call
+	put := func(mode string, force bool) error {
+		calls = append(calls, call{mode, force})
+		return nil
+	}
+	noCheck := func() error { return nil }
+	failing := func() error {
+		return errors.New("refusing hosted: production:check would fail (blobstore); run flynn-host production:check")
+	}
+	mode := func(m string) func() (string, error) { return func() (string, error) { return m, nil } }
+
+	var out strings.Builder
+	if err := applyTenancyMode(&out, put, noCheck, mode("self_hosted"), "self_hosted", true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "while the cluster is hosted") || strings.Contains(out.String(), "WARNING") {
+		t.Fatalf("already self_hosted must not claim the cluster is hosted: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "already self_hosted") {
+		t.Fatalf("already self_hosted must say so: %q", out.String())
+	}
+
+	out.Reset()
+	calls = nil
+	if err := applyTenancyMode(&out, put, failing, mode("self_hosted"), "hosted", false); err == nil || !strings.Contains(err.Error(), "blobstore") {
+		t.Fatalf("a failing check must refuse hosted without --force: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("refused hosted must not PUT: %v", calls)
+	}
+
+	out.Reset()
+	if err := applyTenancyMode(&out, put, failing, mode("self_hosted"), "hosted", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != (call{"hosted", true}) {
+		t.Fatalf("--force hosted must send force: %v", calls)
+	}
+	for _, want := range []string{"WARNING", "blobstore", "tenancy.force_hosted", "quotas"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("force hosted warning missing %q: %q", want, out.String())
+		}
+	}
+
+	if _, err := docopt.Parse(commands["tenancy:mode"].usage, []string{"tenancy:mode", "--force", "hosted"}, true, "", false); err != nil {
+		t.Fatalf("usage must accept --force hosted: %v", err)
+	}
+	usage := commands["tenancy:mode"].usage
+	if strings.Contains(usage, "does not run production:check") {
+		t.Fatalf("help must not say hosted skips production:check: %s", usage)
+	}
+	for _, want := range []string{"controller", "tenancy.force_hosted"} {
+		if !strings.Contains(usage, want) {
+			t.Fatalf("help missing %q: %s", want, usage)
+		}
 	}
 }
