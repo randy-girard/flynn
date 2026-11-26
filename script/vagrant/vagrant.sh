@@ -71,7 +71,8 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
   cli        Build the laptop flynn CLI and install it to /usr/local/bin
   bootstrap  Install the tarball and flynn-host bootstrap on cluster nodes (not the builder)
   update     Build on the builder if Flynn source changed, halt the builder,
-             then flynn-host update on running cluster nodes
+             then flynn-host update on running cluster nodes (post-update ssh
+             steps and probes have deadlines and retry a wedged NAT forward)
   plugin     plugin <name>: build a sibling ../flynn-plugin-<name> checkout and
              plugin:install it, or plugin:update it when it is already
              installed (name, flynn-plugin-<name>, or a path to the checkout)
@@ -413,7 +414,52 @@ run_as_root_on() {
     fi
     exit 1
   fi
+  if [[ -n "${FLYNN_VAGRANT_SSH_DEADLINE:-}" ]]; then
+    # perl's alarm survives exec: SIGALRM ends a hung ssh with exit 142.
+    perl -e 'alarm shift; exec @ARGV or exit 127' "${FLYNN_VAGRANT_SSH_DEADLINE}" \
+      vagrant ssh "${vm}" -c "sudo -n bash -lc $(printf '%q' "${cmd}")" < /dev/null
+    return
+  fi
   vagrant ssh "${vm}" -c "sudo -n bash -lc $(printf '%q' "${cmd}")"
+}
+
+# vm_nat_reset toggles a VM's NAT link (adapter 1) off and on. VirtualBox
+# port forwards can wedge under load or after a snapshot restore (EDGE-120):
+# `vagrant ssh` then exits 255 or hangs until the link is toggled.
+vm_nat_reset() {
+  local id_file="${VAGRANT_DOTFILE_PATH:-}/machines/$1/virtualbox/id" id
+  [[ -f "${id_file}" ]] || return 0
+  id="$(cat "${id_file}")"
+  VBoxManage controlvm "${id}" setlinkstate1 off > /dev/null 2>&1 || return 0
+  sleep 2
+  VBoxManage controlvm "${id}" setlinkstate1 on > /dev/null 2>&1 || true
+}
+
+# run_as_root_on_bounded runs an idempotent root command on a VM with a
+# deadline (FLYNN_VAGRANT_SSH_TIMEOUT seconds, default 300). A wedged ssh
+# (exit 255) or a hung one (deadline, exit 142) is retried after vm_nat_reset,
+# up to FLYNN_VAGRANT_SSH_TRIES times (default 3). Any other exit status is
+# the command's own failure and is returned at once.
+run_as_root_on_bounded() {
+  local vm="$1" cmd="$2" secs="${3:-${FLYNN_VAGRANT_SSH_TIMEOUT:-300}}"
+  local tries="${FLYNN_VAGRANT_SSH_TRIES:-3}" try st=0
+  for ((try = 1; try <= tries; try++)); do
+    st=0
+    (FLYNN_VAGRANT_SSH_DEADLINE="${secs}" run_as_root_on "${vm}" "${cmd}") || st=$?
+    case "${st}" in
+      0) return 0 ;;
+      255 | 142)
+        if [[ "${st}" -eq 142 ]]; then
+          echo "ssh to ${vm} hung for ${secs}s (try ${try}/${tries}); resetting its NAT link" >&2
+        else
+          echo "ssh to ${vm} failed with exit 255 (try ${try}/${tries}); resetting its NAT link" >&2
+        fi
+        vm_nat_reset "${vm}"
+        ;;
+      *) return "${st}" ;;
+    esac
+  done
+  return "${st}"
 }
 
 # restore_layers copies squashfs blobs from the newest local tarball into the
@@ -617,7 +663,9 @@ probe_live_cluster() {
   ip="$(flynn_vagrant_cluster_ip)"
   min_hosts="$(flynn_vagrant_get_nodes)"
   echo "probing live cluster on ${node} (${ip}, min-hosts=${min_hosts})"
-  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} PROBE_SIRENIA=${PROBE_SIRENIA:-} PROBE_FULL_STRENGTH=${PROBE_FULL_STRENGTH:-} script/vagrant/guest/probe-cluster.sh"
+  # Bounded (FLYNN_VAGRANT_PROBE_TIMEOUT, default 600 s): a wedged ssh must
+  # count as a failed probe, not block the stable gate forever (EDGE-120).
+  run_as_root_on_bounded "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} PROBE_SIRENIA=${PROBE_SIRENIA:-} PROBE_FULL_STRENGTH=${PROBE_FULL_STRENGTH:-} script/vagrant/guest/probe-cluster.sh" "${FLYNN_VAGRANT_PROBE_TIMEOUT:-600}"
 }
 
 # probe_live_cluster_retry is the full probe after an update. A quick probe
@@ -679,13 +727,25 @@ update_running_cluster() {
   fi
   echo "updating live cluster on ${nodes[*]} (flynn-host update --all-nodes)"
   run_as_root_on "${nodes[0]}" "cd ${SRC} && script/vagrant/guest/update-cluster.sh"
-  local domain ip
+  echo "flynn-host update finished; running post-update steps on ${nodes[*]}"
+  local domain ip step st
   domain="$(flynn_vagrant_cluster_domain)"
   ip="$(flynn_vagrant_cluster_ip)"
+  # These steps are idempotent, so a wedged or hung ssh is retried
+  # (run_as_root_on_bounded). A failure here is the dev harness, not the
+  # cluster update: say so, and still fail (EDGE-120).
   for name in "${nodes[@]}"; do
-    run_as_root_on "${name}" "cd ${SRC} && CLUSTER_IP=${ip} CLUSTER_DOMAIN=${domain} script/vagrant/guest/node-dns.sh"
-    run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/ensure-flynn-root.sh"
-    run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/ensure-qemu-binfmt.sh"
+    for step in "CLUSTER_IP=${ip} CLUSTER_DOMAIN=${domain} script/vagrant/guest/node-dns.sh" \
+      "script/vagrant/guest/ensure-flynn-root.sh" \
+      "script/vagrant/guest/ensure-qemu-binfmt.sh"; do
+      st=0
+      run_as_root_on_bounded "${name}" "cd ${SRC} && ${step}" || st=$?
+      if [[ "${st}" -ne 0 ]]; then
+        echo "the cluster update completed (flynn-host update succeeded), but post-update step $(basename "${step}") on ${name} failed (exit ${st})." >&2
+        echo "Re-run script/vagrant.sh update (it is safe) once ssh to ${name} works again." >&2
+        return "${st}"
+      fi
+    done
   done
 }
 
