@@ -618,6 +618,10 @@ type controllerAPI struct {
 	dbRuntimeRepo          *data.DBRuntimeRepo
 	buildLockRepo          *data.BuildLockRepo
 	tenancy                *data.TenancyRepo
+	// hostedCheck is the production:check guard PUT /tenancy runs before a
+	// switch to hosted. Nil runs the real rows (hostedProductionCheck);
+	// tests replace it.
+	hostedCheck func() error
 	// buildJobMemoryLimits overrides the shipped host default for one-off
 	// build jobs. Nil counts 12 GiB. False rejects the job.
 	buildJobMemoryLimits *bool

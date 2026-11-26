@@ -17,6 +17,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/productioncheck"
 	"github.com/randy-girard/flynn/pkg/random"
 	"golang.org/x/net/context"
 )
@@ -273,12 +274,13 @@ func (c *controllerAPI) PutTenancy(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	if body.Force {
-		if body.Mode != tenancy.ModeSelfHosted {
-			httphelper.ValidationError(w, "force", "force only applies to mode self_hosted")
+		if tok := authz.TokenFromContext(ctx); tok == nil || !tok.ClusterKey {
+			httphelper.Forbidden(w, "only the cluster key can force a tenancy mode")
 			return
 		}
-		if tok := authz.TokenFromContext(ctx); tok == nil || !tok.ClusterKey {
-			httphelper.Forbidden(w, "only the cluster key can force self_hosted")
+	}
+	if body.Mode == tenancy.ModeHosted {
+		if !c.allowHostedSwitch(ctx, w, body.Force) {
 			return
 		}
 	}
@@ -314,6 +316,63 @@ func (c *controllerAPI) PutTenancy(ctx context.Context, w http.ResponseWriter, r
 	}
 	_ = c.tenancy.Audit(c.actor(ctx), "tenancy.update", "", "", map[string]interface{}{"mode": body.Mode, "force": body.Force})
 	c.GetTenancy(ctx, w, req)
+}
+
+// ForceHostedWarning is what a forced self_hosted → hosted switch skips.
+// It is stored on the tenancy.force_hosted audit row.
+const ForceHostedWarning = "production:check rows failed or could not run and hosted mode was switched on anyway; quotas and hosted reservations apply at once; fix every failing row (flynn-host production:check)"
+
+// allowHostedSwitch runs the production:check rows before a switch to
+// hosted (NEW-45), so a direct PUT cannot skip what flynn-host tenancy:mode
+// checks. A cluster that is already hosted is not checked again. A failing
+// row, or a check that cannot run, refuses the switch unless the cluster key
+// sends force; a forced switch is recorded as tenancy.force_hosted, with the
+// failing rows, before the mode changes. It writes the response and returns
+// false when the switch must not happen.
+func (c *controllerAPI) allowHostedSwitch(ctx context.Context, w http.ResponseWriter, force bool) bool {
+	current, err := c.tenancy.GetSettings()
+	if err != nil {
+		respondWithError(w, err)
+		return false
+	}
+	if current.Mode == tenancy.ModeHosted {
+		return true
+	}
+	check := c.hostedCheck
+	if check == nil {
+		check = c.hostedProductionCheck
+	}
+	checkErr := check()
+	if checkErr == nil {
+		return true
+	}
+	var failing []string
+	var block *productioncheck.HostedBlockError
+	msg := checkErr.Error()
+	if errors.As(checkErr, &block) {
+		failing = block.Fails
+	} else {
+		msg = "refusing hosted: production:check could not run: " + msg
+	}
+	if !force {
+		respondWithError(w, ct.ValidationError{
+			Field:   "mode",
+			Message: msg + " (the cluster key can override with force: flynn-host tenancy:mode --force hosted)",
+		})
+		return false
+	}
+	if err := c.tenancy.Audit(c.actor(ctx), "tenancy.force_hosted", "", "", map[string]interface{}{
+		"from":    current.Mode,
+		"mode":    tenancy.ModeHosted,
+		"force":   true,
+		"failing": failing,
+		"error":   checkErr.Error(),
+		"warning": ForceHostedWarning,
+	}); err != nil {
+		respondWithError(w, err)
+		return false
+	}
+	return true
 }
 
 // ForceSelfHostedWarning is what a forced hosted → self_hosted switch does.

@@ -235,13 +235,48 @@ at their current size. `overlay:set` does not call those APIs.
 itself. `flynn-host tenancy:mode hosted` is the line between that and a
 cluster whose customers share it. The command writes only
 `cluster_settings.tenancy_mode`. It does not set `signup_enabled`, the
-dashboard `allow_signup` flag, or `reserve_resources`, and it does not run
-`production:check`.
+dashboard `allow_signup` flag, or `reserve_resources`.
 
 Run [`production:check`](#production-check) and fix every `fail` before
 switching. `tenancy:mode hosted` judges those same lines as if the mode were
 already `hosted`. A `fail` refuses the change. A `warn` does not. The error
-names the failing checks and points back at `production:check`. Scale already
+names the failing checks and points back at `production:check`.
+
+The controller enforces the same check on `PUT /tenancy`, so the dashboard,
+`curl`, or any other client cannot switch a `self_hosted` cluster to
+`hosted` past a failing row. Before it writes the mode, the controller runs
+every row it can read itself, judged as `hosted`: tenancy, placement,
+blobstore, blobstore auth, reservation, the host process cap, the
+singleton cap, the six availability lines, backups, the sirenia formation,
+the log sink, and service tokens. It reads them through its own API with
+the cluster key, the discoverd host list, and each host's running jobs. The
+`zfs` and `overlay` rows read the host the command runs on (`zpool status`,
+the local flannel config), so only `flynn-host tenancy:mode hosted` runs
+them, before it sends the request. A `fail` on any row, or a check that
+cannot run, answers `400` with the failing rows. A cluster that is already
+`hosted` is not checked again.
+
+The cluster key's override is `flynn-host tenancy:mode --force hosted`. It
+prints the failing rows and what forcing does, then sends
+`{"mode":"hosted","force":true}`. The controller accepts `force` from the
+cluster key only (a cluster admin user gets `403`) and writes a
+`tenancy.force_hosted` row to the
+[audit log](security.md#controller-audit-log) with the previous mode, the
+failing rows, and the error before the mode changes. Quotas and hosted
+reservations apply at once, and every failing row stays failing until it is
+fixed. When the check passes, `--force` has nothing to override and the
+switch is a plain set.
+
+In `hosted` mode system and platform jobs (controller, router, discoverd,
+blobstore, the platform `postgres`, plugin apps) never reserve CPU or
+memory, so tenant reservations cannot block the router replacement, the
+controller, or `flynn-host update`. Tenant apps and tenant databases still
+reserve. A deploy whose roll stops a job before its replacement can start
+(`one-down-one-up`, and the router and other omni types under `one-by-one`)
+first checks with `GET /cluster/capacity` that the replacement can be
+placed; if it cannot, the deploy fails with `no job was stopped`. See
+[Apps — Limits](apps.md#limits) and
+[Architecture — Controller](architecture.html.md#controller). Scale already
 passes real process memory into the account quota, and hosted placement
 already reserves CPU and memory for builtin `small`, `medium`, and `large`.
 This command does not repeat either of those. It does not reschedule jobs.
@@ -272,8 +307,10 @@ set the same mode again.
 The operator override is `flynn-host tenancy:mode --force self_hosted`. It
 sends `{"mode":"self_hosted","force":true}` to `PUT /tenancy`, and the
 controller accepts `force` from the cluster key only: a cluster admin user, a
-tenant, and an app token get `403`. `force` with `hosted` is a validation
-error. Without `force` the refuse above is unchanged. Before it switches, the
+tenant, and an app token get `403`. On a cluster that is already
+`self_hosted`, `--force` has nothing to override: the command says so and
+the switch is a plain set with no force row. Without `force` the refuse
+above is unchanged. Before it switches, the
 controller writes a `tenancy.force_self_hosted` row to the
 [audit log](security.md#controller-audit-log) with the previous mode and the
 number of owned non-system apps, and the command prints what the switch does:

@@ -1006,7 +1006,7 @@ The controller records privileged actions in its `core_audit` table: who
 `deployment.create`, `formation.set`, `scale.request`, `job.run`,
 `job.kill`, `route.create`, `resource.create`, `token.create`,
 `cluster.runtime_settings.set`, `policy.set`, `collaborator.add`,
-`tenancy.update`, `tenancy.force_self_hosted`), the
+`tenancy.update`, `tenancy.force_self_hosted`, `tenancy.force_hosted`), the
 app it touched, and when. Only successful requests are recorded, from
 both the HTTP API and the gRPC API.
 Request bodies are not stored, so env values and keys never land in the
@@ -1047,6 +1047,12 @@ holds the previous mode, the number of owned apps, and what the switch
 leaves in place; see
 [Production — Tenancy mode](production.html.md#tenancy-mode). Only the
 cluster key can send `force`.
+
+`tenancy.force_hosted` is written before a cluster-key `PUT /tenancy` with
+`"force": true` switches a `self_hosted` cluster to `hosted` although the
+controller's `production:check` rows fail or cannot run. Its data holds the
+previous mode, the failing rows, the check's error, and what forcing
+leaves in place.
 
 Cluster-key or cluster-admin credentials can read it with
 `GET /cluster/audit?after=<id>&limit=<n>` (oldest first, at most 1000

@@ -12,7 +12,6 @@ import (
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
-	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/random"
 )
 
@@ -84,11 +83,13 @@ func (s *S) TestPutTenancyForceSelfHosted(c *C) {
 		c.Assert(rec.Body.String(), Matches, "(?s).*cluster key.*")
 	}
 
-	// force only applies to self_hosted.
-	code, apiErr, _ = s.putTenancyRaw(c, `{"mode":"hosted","force":true}`)
-	c.Assert(code, Equals, 400)
-	c.Assert(apiErr.Code, Equals, hh.ValidationErrorCode)
-	c.Assert(apiErr.Message, Matches, ".*force.*self_hosted.*")
+	// force with hosted is the escape hatch past a failing production:check
+	// (NEW-45, tenancy_hosted_check_test.go). On a cluster that is already
+	// hosted nothing is checked or forced: it is a plain set and writes no
+	// force row of either kind.
+	code, _, _ = s.putTenancyRaw(c, `{"mode":"hosted","force":true}`)
+	c.Assert(code, Equals, 200)
+	c.Assert(s.auditActionsSince(c, start, "tenancy.force_hosted"), HasLen, 0)
 
 	stored, err := s.api.tenancy.GetSettings()
 	c.Assert(err, IsNil)

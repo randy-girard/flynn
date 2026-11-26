@@ -111,6 +111,9 @@ func (s *S) SetUpSuite(c *C) {
 	}
 	handler, _, api := appHandler(s.hc)
 	s.api = api
+	// The real hosted guard calls the controller and discoverd, which the
+	// suite does not run. Tests of the guard set their own.
+	s.api.hostedCheck = func() error { return nil }
 	s.srv = httptest.NewServer(handler)
 	client, err := controller.NewClient(s.srv.URL, authKey)
 	c.Assert(err, IsNil)
