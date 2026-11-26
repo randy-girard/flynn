@@ -1615,6 +1615,13 @@ func (c *Client) HostList() ([]*ct.HostInfo, error) {
 	return list, c.Get("/hosts", &list)
 }
 
+// GetClusterCapacity reads GET /cluster/capacity: each host's totals and
+// what reserving jobs hold on it (cluster key or cluster admin).
+func (c *Client) GetClusterCapacity() (*ct.ClusterCapacity, error) {
+	out := &ct.ClusterCapacity{}
+	return out, c.Get("/cluster/capacity", out)
+}
+
 func (c *Client) ListRuntimeProfiles() ([]*ct.RuntimeProfile, error) {
 	var list []*ct.RuntimeProfile
 	return list, c.Get("/runtimes", &list)

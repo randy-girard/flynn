@@ -134,6 +134,12 @@ func (d *DeployJob) Perform() error {
 		"old_release", d.oldFormation.Processes,
 		"new_release", d.newFormation.Processes,
 	)
+	// Before anything is stopped (NEW-45): a stop-first roll whose
+	// replacement cannot be placed fails here, with every old job running.
+	if err := d.checkCapacityBeforeStop(log); err != nil {
+		log.Error("capacity pre-check refused the deploy", "err", err)
+		return err
+	}
 	if err := d.runReleasePhase(log); err != nil {
 		return err
 	}

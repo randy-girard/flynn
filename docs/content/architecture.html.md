@@ -278,6 +278,24 @@ against one, a deployment with `finished_at` and no outcome is waited on for
 two minutes, then counts as a success only if the app's current release is
 the deployment's new release, and fails otherwise.
 
+Before a roll stops anything, the worker checks that each replacement it
+must start after stopping an old job can be placed. That covers
+every process type of a `one-down-one-up` deploy and the omni types of a
+`one-by-one` deploy. It reads `GET /cluster/capacity` (cluster key or cluster
+admin): each host's memory and CPU totals and the jobs that hold a
+reservation on it, counted with the scheduler's rule. When the new process
+reserves CPU and memory and would not fit (on the same host for an omni
+type, on any host otherwise) once the old job's reservation is freed, the
+deploy fails at once with `refusing to roll <type>: ...; no job was
+stopped` and is not rolled back, because nothing changed. A process that
+does not reserve always passes, and in hosted mode a system or platform
+process (router, controller, plugin apps) never reserves. Capacity that
+cannot be read (an older controller, a host whose stats failed) does not
+block a deploy. The check does not judge host tags, the process cap, or
+volume pinning. Start-first rolls (`one-by-one` for non-omni types,
+`in-batches`, `all-at-once`) are not checked: a replacement that cannot be
+placed fails them with the old jobs still running.
+
 An omni process type (the `router` app's `app` and flannel, which use the
 host network, and the controller's `scheduler`) runs one job per host, so the
 one-by-one and one-down-one-up strategies roll it one host at a time by
