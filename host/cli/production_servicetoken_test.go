@@ -48,7 +48,12 @@ func signTestServiceToken(t *testing.T, scope string, expires time.Time) string 
 
 func serviceTokenRows(a productionAPI, now time.Time) []productionRow {
 	var rows []productionRow
-	addServiceTokenLine(func(r productionRow) { rows = append(rows, r) }, a, now)
+	cfg := productionCheckConfig{API: a, Now: func() time.Time { return now }}
+	for _, r := range collectProductionRows(cfg) {
+		if r.check == "service-token" {
+			rows = append(rows, r)
+		}
+	}
 	return rows
 }
 

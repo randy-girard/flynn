@@ -6,25 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/flynn/go-docopt"
-	"github.com/randy-girard/flynn/blobstore/data"
-	"github.com/randy-girard/flynn/controller/authorizer"
-	"github.com/randy-girard/flynn/controller/servicetoken"
-	"github.com/randy-girard/flynn/controller/tenancy"
-	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	flanneldisc "github.com/randy-girard/flynn/flannel/discoverd"
 	"github.com/randy-girard/flynn/flannel/subnet"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/productioncheck"
 	"github.com/randy-girard/flynn/pkg/term"
 	"github.com/randy-girard/flynn/pkg/updaterdeploy"
 )
@@ -134,25 +128,21 @@ func init() {
 	Register("production:check", runProductionCheck, productionCheckUsage)
 }
 
-// productionAPI is the controller surface this check reads. It does not
-// include runtime settings or database runtimes.
-type productionAPI interface {
-	Get(path string, out interface{}) error
-	GetAppRelease(appID string) (*ct.Release, error)
-	ListRuntimeProfiles() ([]*ct.RuntimeProfile, error)
+// productionAPI is the controller surface the check reads.
+type productionAPI = productioncheck.API
+
+// placementJob is one running job sampled for the placement line.
+type placementJob = productioncheck.PlacementJob
+
+func productionAPIError(err error) productionAPI { return productioncheck.APIError{Err: err} }
+
+func productionNotFound(err error) bool { return productioncheck.NotFound(err) }
+
+func blobstoreDefaultIsPostgres(name string, backends map[string]map[string]string) bool {
+	return productioncheck.BlobstoreDefaultIsPostgres(name, backends)
 }
 
-type productionAPIError struct {
-	err error
-}
-
-func (e productionAPIError) Get(string, interface{}) error { return e.err }
-func (e productionAPIError) GetAppRelease(string) (*ct.Release, error) {
-	return nil, e.err
-}
-func (e productionAPIError) ListRuntimeProfiles() ([]*ct.RuntimeProfile, error) {
-	return nil, e.err
-}
+func hostCapLabel(tags map[string]string) (string, bool) { return productioncheck.HostCapLabel(tags) }
 
 // productionCheckConfig is the data the check reads. Tests stub every field.
 // A real run uses one tenancy GET, one blobstore release, one profile list,
@@ -186,24 +176,13 @@ type productionCheckConfig struct {
 // cluster were already hosted. Warn rows do not block. The caller does not
 // print the table and does not run the production:check command.
 func hostedProductionBlock(cfg productionCheckConfig) error {
-	cfg.AssumeMode = tenancy.ModeHosted
-	var fails []string
-	for _, row := range collectProductionRows(cfg) {
-		if row.status != "fail" {
-			continue
-		}
-		fails = append(fails, row.check)
-	}
-	if len(fails) == 0 {
-		return nil
-	}
-	return fmt.Errorf("refusing hosted: production:check would fail (%s); run flynn-host production:check", strings.Join(fails, ", "))
+	return productioncheck.HostedBlock(cfg.rowsConfig())
 }
 
 func hostProductionCheckConfig(client *cluster.Client, pool string) productionCheckConfig {
 	var api productionAPI
 	if v, err := hostV1(); err != nil {
-		api = productionAPIError{err: err}
+		api = productionAPIError(err)
 	} else {
 		api = v
 	}
@@ -297,503 +276,64 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 	return nil
 }
 
-func collectProductionRows(cfg productionCheckConfig) []productionRow {
+// rowsConfig is cfg for productioncheck, with the two rows that read this
+// host: zfs (zpool status -P) and overlay (flannel meta).
+func (cfg productionCheckConfig) rowsConfig() productioncheck.Config {
 	pool := strings.TrimSpace(cfg.Pool)
 	if pool == "" {
 		pool = "flynn-default"
 	}
-	api := cfg.API
-	if api == nil {
-		api = productionAPIError{err: errors.New("no controller client")}
-	}
-
-	var settings ct.TenancySettings
-	tenancyErr := api.Get("/tenancy", &settings)
-
-	var workload ct.WorkloadPlacement
-	placementErr := api.Get("/cluster/placement", &workload)
-	var (
-		jobs    []placementJob
-		jobsErr error
-	)
-	if cfg.Jobs != nil {
-		jobs, jobsErr = cfg.Jobs()
-	}
-
-	release, releaseErr := api.GetAppRelease("blobstore")
-	profiles, profileErr := api.ListRuntimeProfiles()
-
-	var (
-		hosts    []*cluster.Host
-		hostsErr error
-	)
-	if cfg.Hosts == nil {
-		hostsErr = errors.New("no host source")
-	} else {
-		hosts, hostsErr = cfg.Hosts()
-	}
-
-	var (
-		meta    []byte
-		metaErr error
-	)
-	if cfg.FlannelMeta == nil {
-		metaErr = errors.New("no flannel meta source")
-	} else {
-		meta, metaErr = cfg.FlannelMeta()
-	}
-
-	var (
-		zpoolOut []byte
-		zpoolErr error
-		zpoolRun bool
-	)
-	if zpoolNamePattern.MatchString(pool) {
-		zpoolRun = true
-		if cfg.ZpoolStatus == nil {
-			zpoolErr = errors.New("no zpool status command")
-		} else {
-			zpoolOut, zpoolErr = cfg.ZpoolStatus(pool)
-		}
-	}
-
-	mode := "unknown"
-	var rows []productionRow
-	add := func(row productionRow) {
-		rows = append(rows, row)
-	}
-
-	if tenancyErr != nil {
-		add(productionRow{
-			status: "fail",
-			check:  "tenancy",
-			detail: "error=" + tenancyErr.Error(),
-			action: "Fix the controller, then rerun. This is not self-hosted.",
-		})
-	} else if settings.Mode == tenancy.ModeHosted || settings.Mode == tenancy.ModeSelfHosted {
-		mode = settings.Mode
-		action := "Hosted mode is on. Quotas apply."
-		if mode == tenancy.ModeSelfHosted {
-			action = "Quotas are unlimited. Run flynn-host tenancy:mode hosted to switch."
-		}
-		add(productionRow{status: "ok", check: "tenancy", detail: "mode=" + mode, action: action})
-		// The tenancy row stays the stored mode. Later lines use AssumeMode
-		// so a switch can be judged before the row is written.
-		if cfg.AssumeMode == tenancy.ModeHosted || cfg.AssumeMode == tenancy.ModeSelfHosted {
-			mode = cfg.AssumeMode
-		}
-	} else {
-		add(productionRow{
-			status: "fail",
-			check:  "tenancy",
-			detail: "error=unknown tenancy mode",
-			action: "Set it: flynn-host tenancy:mode self_hosted or hosted.",
-		})
-	}
-
-	addPlacementLine(add, api, workload, placementErr, hosts, hostsErr, jobs, jobsErr)
-	addBlobstoreLine(add, mode, release, releaseErr)
-	addBlobstoreAuthLine(add, release, releaseErr)
-	addZFSLine(add, pool, zpoolRun, zpoolOut, zpoolErr, cfg.Stat)
-	addReserveLine(add, mode, profiles, profileErr)
-	addHostCapLine(add, hosts, hostsErr)
-	addSingletonCapLine(add, hosts, hostsErr)
-	addPostgresAvailabilityLine(add, api, hosts, hostsErr)
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "mysql-availability", "/cluster/mysql-availability", "mysql:availability", 2, "The MySQL page shows that.")
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "redis-availability", "/cluster/redis-availability", "redis:availability", 2, "The Redis page shows the offset loss.")
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "mongodb-availability", "/cluster/mongodb-availability", "mongodb:availability", 3, "The MongoDB page says when failover is unavailable.")
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "kafka-availability", "/cluster/kafka-availability", "kafka:availability", 3, "The Kafka page says when failover is unavailable.")
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "clickhouse-availability", "/cluster/clickhouse-availability", "clickhouse:availability", 3, "The ClickHouse page says when failover is unavailable.")
-	now := time.Now()
-	if cfg.Now != nil {
-		now = cfg.Now()
-	}
-	addBackupLine(add, api, now)
-	if cfg.SireniaFormations != nil {
-		states, err := cfg.SireniaFormations()
-		addSireniaFormationLine(add, states, err)
-	}
-	addLogSinkLine(add, api, mode)
-	addOverlayLine(add, meta, metaErr)
-	addServiceTokenLine(add, api, now)
-	return rows
-}
-
-// addSireniaFormationLine checks that every sirenia app's engines run from
-// its current release (EDGE-73). A current release with no engines while
-// another release runs them fails: every deploy copies the current formation,
-// so before EDGE-73 a deploy left the engines where they were. Another
-// release's formation that still asks for engines while the primary is on
-// the current release warns (EDGE-76: a rollback kept its peers). Engines on
-// another release while the current release also runs some warns (it is
-// also the shape during a sirenia deploy).
-func addSireniaFormationLine(add func(productionRow), states []updaterdeploy.SireniaFormationState, err error) {
-	if err != nil {
-		add(productionRow{
-			status: "fail", check: "sirenia-formation", detail: "error=" + err.Error(),
-			action: "Fix the controller or discoverd, then rerun.",
-		})
-		return
-	}
-	short := func(id string) string {
-		if len(id) > 8 {
-			return id[:8]
-		}
-		return id
-	}
-	also := func(s updaterdeploy.SireniaFormationState) string {
-		ids := make([]string, 0, len(s.Others))
-		for id := range s.Others {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		out := ""
-		for _, id := range ids {
-			out += fmt.Sprintf(" also=%s %s=%d", short(id), s.ProcessType, s.Others[id])
-		}
-		return out
-	}
-	bad := false
-	for _, s := range states {
-		if !s.Mismatch() {
-			if len(s.Others) == 0 {
-				continue
+	return productioncheck.Config{
+		API:               cfg.API,
+		Hosts:             cfg.Hosts,
+		Now:               cfg.Now,
+		AssumeMode:        cfg.AssumeMode,
+		Jobs:              cfg.Jobs,
+		SireniaFormations: cfg.SireniaFormations,
+		ZFS: func(add func(productioncheck.Row)) {
+			var (
+				out []byte
+				err error
+				ran bool
+			)
+			if zpoolNamePattern.MatchString(pool) {
+				ran = true
+				if cfg.ZpoolStatus == nil {
+					err = errors.New("no zpool status command")
+				} else {
+					out, err = cfg.ZpoolStatus(pool)
+				}
 			}
-			// EDGE-76: a rollback kept a failed release's engines.
-			bad = true
-			add(productionRow{
-				status: "warn", check: "sirenia-formation",
-				detail: fmt.Sprintf("%s current=%s %s=%d%s", s.App, short(s.CurrentRelease), s.ProcessType, s.CurrentCount, also(s)),
-				action: "Engines run from more than one release. Unless a deploy of the app is running, run flynn-host update (or deploy the app); its orphan repair scales the other releases down.",
-			})
-			continue
-		}
-		bad = true
-		detail := fmt.Sprintf("%s current=%s %s=%d engines=%s %s=%d", s.App, short(s.CurrentRelease), s.ProcessType, s.CurrentCount, short(s.PrimaryRelease), s.ProcessType, s.PrimaryCount) + also(s)
-		if s.Stuck() {
-			add(productionRow{
-				status: "fail", check: "sirenia-formation", detail: detail,
-				action: "The current release runs no engines. Unless a deploy of the app is running, run flynn-host update (or deploy the app) to move them to a new release. Do not scale the current release by hand.",
-			})
-			continue
-		}
-		add(productionRow{
-			status: "warn", check: "sirenia-formation", detail: detail,
-			action: "The primary is not on the current release. Unless a deploy of the app is running, run flynn-host update (or deploy the app) to move the engines to one release.",
-		})
-	}
-	if !bad {
-		add(productionRow{
-			status: "ok", check: "sirenia-formation", detail: fmt.Sprintf("apps=%d", len(states)),
-			action: "Every sirenia app's primary and engines run from its current release.",
-		})
-	}
-}
-
-func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release, err error) {
-	if err != nil {
-		add(productionRow{
-			status: "fail", check: "blobstore", detail: "error=" + err.Error(),
-			action: "Fix the blobstore release, then rerun. This check does not migrate.",
-		})
-		return
-	}
-	if release == nil {
-		add(productionRow{
-			status: "fail", check: "blobstore", detail: "error=blobstore release is empty",
-			action: "Fix the blobstore release, then rerun. This check does not migrate.",
-		})
-		return
-	}
-	name, backends, err := data.BackendsFromEnv(data.EnvMapToSlice(release.Env))
-	if err != nil {
-		add(productionRow{
-			status: "fail", check: "blobstore", detail: "error=" + err.Error(),
-			action: "Fix the blobstore release, then rerun. This check does not migrate.",
-		})
-		return
-	}
-	if blobstoreDefaultIsPostgres(name, backends) {
-		detail := "default=" + name
-		if name == "" || strings.EqualFold(name, "postgres") {
-			detail = "default=postgres"
-		}
-		if mode == tenancy.ModeSelfHosted {
-			add(productionRow{
-				status: "warn", check: "blobstore", detail: detail,
-				action: "Postgres is allowed. Hosted needs flynn-host blobstore:set --migrate --delete. This check does not migrate.",
-			})
-			return
-		}
-		add(productionRow{
-			status: "fail", check: "blobstore", detail: detail,
-			action: "Run flynn-host blobstore:set --migrate --delete. This check does not migrate.",
-		})
-		return
-	}
-	add(productionRow{
-		status: "ok", check: "blobstore", detail: "default=" + name,
-		action: "No blobstore change.",
-	})
-}
-
-// blobstoreAllowUnauthenticatedEnv is the blobstore's explicit opt-in to
-// serve objects with no credentials (blobstore/auth.go).
-const blobstoreAllowUnauthenticatedEnv = "BLOBSTORE_ALLOW_UNAUTHENTICATED"
-
-// addBlobstoreAuthLine reports whether the blobstore release can authenticate
-// callers. Without AUTH_KEY or CONTROLLER_KEY and without ACCESS_TOKEN_KEY
-// the blobstore refuses every object request (EDGE-12); with the
-// BLOBSTORE_ALLOW_UNAUTHENTICATED override it serves every object to anyone.
-// Both fail in either tenancy mode. Only key names are printed, never values.
-// A release read error is already a blobstore fail and adds no row here.
-func addBlobstoreAuthLine(add func(productionRow), release *ct.Release, err error) {
-	if err != nil || release == nil {
-		return
-	}
-	env := release.Env
-	clusterKey := "missing"
-	for _, name := range []string{"AUTH_KEY", "CONTROLLER_KEY"} {
-		for _, k := range strings.Split(env[name], ",") {
-			if strings.TrimSpace(k) != "" {
-				clusterKey = "set"
+			addZFSLine(cliRowAdder(add), pool, ran, out, err, cfg.Stat)
+		},
+		Overlay: func(add func(productioncheck.Row)) {
+			var (
+				meta []byte
+				err  error
+			)
+			if cfg.FlannelMeta == nil {
+				err = errors.New("no flannel meta source")
+			} else {
+				meta, err = cfg.FlannelMeta()
 			}
-		}
+			addOverlayLine(cliRowAdder(add), meta, err)
+		},
 	}
-	tokenKey := "missing"
-	if raw := strings.TrimSpace(env["ACCESS_TOKEN_KEY"]); raw != "" {
-		tokenKey = "set"
-		if k, err := authorizer.ParseTokenKey(raw); err != nil || k == nil {
-			tokenKey = "invalid"
-		}
-	}
-	override := false
-	switch strings.ToLower(strings.TrimSpace(env[blobstoreAllowUnauthenticatedEnv])) {
-	case "1", "true":
-		override = true
-	}
-	detail := "cluster_key=" + clusterKey + " token_key=" + tokenKey
-	if override {
-		detail += " unauthenticated=allowed"
-	}
-	row := productionRow{check: "blobstore-auth", detail: detail}
-	switch {
-	case clusterKey == "missing" && tokenKey != "set" && override:
-		row.status = "fail"
-		row.action = "Every object is open to any caller. Set AUTH_KEY and ACCESS_TOKEN_KEY on the blobstore release and unset " + blobstoreAllowUnauthenticatedEnv + "."
-	case clusterKey == "missing" && tokenKey != "set":
-		row.status = "fail"
-		row.action = "The blobstore refuses every object request, so builds and deploys fail. Set AUTH_KEY (the controller key) and ACCESS_TOKEN_KEY on the blobstore release."
-	case clusterKey == "missing":
-		row.status = "fail"
-		row.action = "Cluster services authenticate with the controller key and are refused. Set AUTH_KEY on the blobstore release."
-	case override:
-		row.status = "warn"
-		row.action = "Unset " + blobstoreAllowUnauthenticatedEnv + ". The keys are enforced now, but it opens every object if they are removed."
-	case tokenKey != "set":
-		row.status = "warn"
-		row.action = "scoped build tokens are refused, so app builds fail. Set a valid ACCESS_TOKEN_KEY on the blobstore release."
-	default:
-		row.status = "ok"
-		row.action = "No blobstore auth change."
-	}
-	add(row)
 }
 
-const (
-	tenantBackupInterval = 24 * time.Hour
-	tenantBackupGrace    = time.Hour
-)
-
-const backupVolumeDetail = "tenant volumes are outside flynn-host backup"
-const backupVolumeAction = "Back up tenant volumes separately."
-
-type backupEngine struct {
-	name   string
-	path   string
-	noun   string
-	filter func([]*ct.Resource) []*ct.Resource
+func cliRowAdder(add func(productioncheck.Row)) func(productionRow) {
+	return func(r productionRow) {
+		add(productioncheck.Row{Status: r.status, Check: r.check, Detail: r.detail, Action: r.action})
+	}
 }
 
-func addBackupLine(add func(productionRow), api productionAPI, now time.Time) {
-	engines := []backupEngine{
-		{"postgres", "/providers/postgres/resources", "primaries", postgresBackupResources},
-		{"mongodb", "/providers/mongodb/resources", "resources", idBackupResources},
-		{"kafka", "/providers/kafka/resources", "resources", idBackupResources},
-		{"clickhouse", "/providers/clickhouse/resources", "resources", idBackupResources},
-	}
-	counted := map[string][]*ct.Resource{}
-	total := 0
-	for _, eng := range engines {
-		var resources []*ct.Resource
-		err := api.Get(eng.path, &resources)
-		if err != nil {
-			if productionNotFound(err) {
-				continue
-			}
-			add(productionRow{
-				status: "fail", check: "backup", detail: "error=" + err.Error(),
-				action: "Fix the controller, then rerun. This check does not dump.",
-			})
-			return
-		}
-		list := eng.filter(resources)
-		counted[eng.name] = list
-		total += len(list)
-	}
-	if total == 0 {
-		add(productionRow{status: "warn", check: "backup", detail: backupVolumeDetail, action: backupVolumeAction})
-		return
-	}
-	var backups []*ct.TenantBackup
-	if err := api.Get("/tenant-backups", &backups); err != nil {
-		add(productionRow{
-			status: "fail", check: "backup", detail: "error=" + err.Error(),
-			action: "Fix the controller, then rerun. This check does not dump.",
-		})
-		return
-	}
-	byID := map[string]*ct.TenantBackup{}
-	for _, st := range backups {
-		if st == nil || st.ResourceID == "" {
-			continue
-		}
-		byID[st.ResourceID] = st
-	}
-	var misses []string
-	var missedNames []string
-	var current []string
-	otherMiss := false
-	for _, eng := range engines {
-		list := counted[eng.name]
-		if len(list) == 0 {
-			continue
-		}
-		miss := 0
-		for _, res := range list {
-			var last *time.Time
-			if st := byID[res.ID]; st != nil {
-				last = st.LastSuccessAt
-			}
-			if tenantBackupMiss(last, now) {
-				miss++
-			}
-		}
-		if miss > 0 {
-			misses = append(misses, fmt.Sprintf("%s %s missing a current dump: %d", eng.name, eng.noun, miss))
-			missedNames = append(missedNames, eng.name)
-			if eng.name != "postgres" {
-				otherMiss = true
-			}
-			continue
-		}
-		current = append(current, fmt.Sprintf("%s dumps current (%d)", eng.name, len(list)))
-	}
-	if len(misses) > 0 {
-		detail := strings.Join(misses, "; ")
-		if otherMiss {
-			detail += "; " + backupVolumeDetail
-		}
-		add(productionRow{
-			status: "fail", check: "backup", detail: detail,
-			action: backupMissAction(missedNames),
-		})
-		return
-	}
-	add(productionRow{
-		status: "ok", check: "backup",
-		detail: strings.Join(current, "; ") + "; " + backupVolumeDetail,
-		action: backupVolumeAction,
-	})
-}
-
-func backupMissAction(names []string) string {
-	var cmds []string
-	for _, name := range names {
-		switch name {
-		case "postgres":
-			cmds = append(cmds, "flynn pg dump")
-		default:
-			cmds = append(cmds, "flynn "+name+" dump")
-		}
-	}
-	verb := "Run " + cmds[0]
-	if len(cmds) == 2 {
-		verb = "Run " + cmds[0] + " or " + cmds[1]
-	} else if len(cmds) > 2 {
-		verb = "Run " + strings.Join(cmds[:len(cmds)-1], ", ") + ", or " + cmds[len(cmds)-1]
-	}
-	return verb + ", or wait for the scheduled dump. This check does not dump. " + backupVolumeAction
-}
-
-func postgresBackupResources(resources []*ct.Resource) []*ct.Resource {
-	var out []*ct.Resource
-	for _, res := range resources {
-		if res == nil || strings.TrimSpace(res.ID) == "" || !postgresResourceIsPrimary(res.Env) {
-			continue
-		}
-		out = append(out, res)
+func collectProductionRows(cfg productionCheckConfig) []productionRow {
+	in := productioncheck.Collect(cfg.rowsConfig())
+	out := make([]productionRow, len(in))
+	for i, r := range in {
+		out[i] = productionRow{status: r.Status, check: r.Check, detail: r.Detail, action: r.Action}
 	}
 	return out
-}
-
-func idBackupResources(resources []*ct.Resource) []*ct.Resource {
-	var out []*ct.Resource
-	for _, res := range resources {
-		if res == nil || strings.TrimSpace(res.ID) == "" {
-			continue
-		}
-		out = append(out, res)
-	}
-	return out
-}
-
-func productionNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, ct.ErrNotFound) {
-		return true
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "not found")
-}
-
-func postgresResourceIsPrimary(env map[string]string) bool {
-	role := ""
-	if env != nil {
-		role = strings.TrimSpace(env["FLYNN_POSTGRES_ROLE"])
-		if role == "" {
-			role = strings.TrimSpace(env["POSTGRES_ROLE"])
-		}
-	}
-	switch strings.ToLower(role) {
-	case "follower", "deposed":
-		return false
-	default:
-		return true
-	}
-}
-
-func tenantBackupMiss(last *time.Time, now time.Time) bool {
-	if last == nil || last.IsZero() {
-		return true
-	}
-	return now.UTC().Sub(last.UTC()) > tenantBackupInterval+tenantBackupGrace
-}
-
-// blobstoreDefaultIsPostgres is true when the default name is empty or
-// postgres, or when that name's parsed backend type is missing or postgres.
-// BackendsFromEnv lowercases BACKEND_* names and always inserts a postgres entry.
-func blobstoreDefaultIsPostgres(name string, backends map[string]map[string]string) bool {
-	if name == "" || strings.EqualFold(name, "postgres") {
-		return true
-	}
-	info, ok := backends[strings.ToLower(name)]
-	if !ok || info == nil {
-		return true
-	}
-	kind := info["backend"]
-	return kind == "" || strings.EqualFold(kind, "postgres")
 }
 
 func addZFSLine(add func(productionRow), pool string, ran bool, out []byte, zerr error, stat func(string) (os.FileInfo, error)) {
@@ -953,368 +493,6 @@ func vdevRow(line string) (depth int, name string, ok bool) {
 		return 0, "", false
 	}
 	return spaces / 2, fields[0], true
-}
-
-func addReserveLine(add func(productionRow), mode string, profiles []*ct.RuntimeProfile, err error) {
-	if err != nil {
-		add(productionRow{
-			status: "fail", check: "reserve", detail: "error=" + err.Error(),
-			action: "Fix the runtime profile list, then rerun.",
-		})
-		return
-	}
-	// Same name rule as scheduler.syncRuntimeProfiles: lowercased, trimmed.
-	// An empty name does not reserve. Hosted placement reserves builtin
-	// small, medium, and large even when the stored flag is off.
-	flags := map[string]bool{}
-	for _, p := range profiles {
-		if p == nil {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(p.Name))
-		if name == "" {
-			continue
-		}
-		flags[name] = p.ReserveResources
-	}
-	small := flags["small"]
-	medium := flags["medium"]
-	large := flags["large"]
-	detail := fmt.Sprintf("mode=%s small=%t medium=%t large=%t scheduler=%s", mode, small, medium, large, reserveSchedulerLabel(mode))
-	switch mode {
-	case tenancy.ModeHosted:
-		add(productionRow{
-			status: "ok", check: "reserve", detail: detail,
-			action: "Hosted placement reserves small, medium, and large. runtime:reserve only stores the flag.",
-		})
-	case tenancy.ModeSelfHosted:
-		action := "Flags may stay off. A large cluster runs runtime:reserve on profiles that must fit."
-		if small || medium || large {
-			action = "Flagged profiles place only when a host has free reserved CPU and memory."
-		}
-		add(productionRow{status: "ok", check: "reserve", detail: detail, action: action})
-	default:
-		add(productionRow{
-			status: "fail", check: "reserve", detail: detail,
-			action: "Fix the tenancy read, then rerun. Unknown mode is not self-hosted.",
-		})
-	}
-}
-
-func reserveSchedulerLabel(mode string) string {
-	switch mode {
-	case tenancy.ModeHosted:
-		return "hosted_builtin"
-	case tenancy.ModeSelfHosted:
-		return "profile_flag"
-	default:
-		return "unknown"
-	}
-}
-
-func addHostCapLine(add func(productionRow), hosts []*cluster.Host, err error) {
-	if err != nil {
-		add(productionRow{
-			status: "fail", check: "host-cap", detail: "error=" + err.Error(),
-			action: "Fix discoverd, then rerun. This check does not set the tag.",
-		})
-		return
-	}
-	type capRow struct {
-		id    string
-		label string
-		ok    bool
-	}
-	caps := make([]capRow, 0, len(hosts))
-	for _, h := range hosts {
-		if h == nil {
-			continue
-		}
-		label, ok := hostCapLabel(h.Tags())
-		caps = append(caps, capRow{id: h.ID(), label: label, ok: ok})
-	}
-	if len(caps) == 0 {
-		add(productionRow{
-			status: "fail", check: "host-cap", detail: "error=no discoverd host registrations",
-			action: "Register hosts in discoverd, then rerun. This check does not set the tag.",
-		})
-		return
-	}
-	sort.Slice(caps, func(i, j int) bool { return caps[i].id < caps[j].id })
-	parts := make([]string, len(caps))
-	allOK := true
-	for i, row := range caps {
-		if !row.ok {
-			allOK = false
-		}
-		parts[i] = row.id + "=" + row.label
-	}
-	status := "ok"
-	action := "Every registered host has a numeric flynn-max-processes cap."
-	if !allOK {
-		status = "fail"
-		action = "Run flynn-host tags:max-processes <host> <n>, or the same command with --auto to follow runtime sizes. This check does not set the tag."
-	}
-	add(productionRow{status: status, check: "host-cap", detail: strings.Join(parts, " "), action: action})
-}
-
-func addSingletonCapLine(add func(productionRow), hosts []*cluster.Host, err error) {
-	if err != nil {
-		add(productionRow{
-			status: "fail", check: "singleton-cap", detail: "error=" + err.Error(),
-			action: "Register hosts in discoverd, then rerun. This check does not set flynn-max-persistent-singletons.",
-		})
-		return
-	}
-	type capRow struct {
-		id    string
-		label string
-		ok    bool
-	}
-	caps := make([]capRow, 0, len(hosts))
-	for _, h := range hosts {
-		if h == nil {
-			continue
-		}
-		label, ok := singletonCapLabel(h.Tags())
-		caps = append(caps, capRow{id: h.ID(), label: label, ok: ok})
-	}
-	if len(caps) == 0 {
-		add(productionRow{
-			status: "fail", check: "singleton-cap", detail: "error=no discoverd host registrations",
-			action: "Register hosts in discoverd, then rerun. This check does not set flynn-max-persistent-singletons.",
-		})
-		return
-	}
-	sort.Slice(caps, func(i, j int) bool { return caps[i].id < caps[j].id })
-	parts := make([]string, len(caps))
-	allOK := true
-	for i, row := range caps {
-		if !row.ok {
-			allOK = false
-		}
-		parts[i] = row.id + "=" + row.label
-	}
-	status := "ok"
-	action := "Every registered host has a numeric flynn-max-persistent-singletons cap."
-	if !allOK {
-		status = "warn"
-		action = "Run flynn-host tags:set <host> flynn-max-persistent-singletons=<n> on hosts that should limit new single-node databases. Missing, unlimited, 0, off, none, and auto are no cap. This check does not set the tag. The same warning applies in hosted and self-hosted mode."
-	}
-	add(productionRow{status: status, check: "singleton-cap", detail: strings.Join(parts, " "), action: action})
-}
-
-func singletonCapLabel(tags map[string]string) (string, bool) {
-	n, ok := ct.ParseHostPersistentSingletons(tags)
-	if ok {
-		return strconv.Itoa(n), true
-	}
-	if tags == nil {
-		return "missing", false
-	}
-	raw, present := tags[ct.FormationMaxPersistentSingletonsTag]
-	if !present {
-		return "missing", false
-	}
-	s := strings.ToLower(strings.TrimSpace(raw))
-	switch s {
-	case "":
-		return "empty", false
-	case "unlimited", "off", "none", "0", "auto":
-		return s, false
-	default:
-		return s, false
-	}
-}
-
-func hostCapLabel(tags map[string]string) (string, bool) {
-	n, ok := ct.ParseHostMaxProcesses(tags)
-	if ok {
-		return strconv.Itoa(n), true
-	}
-	if tags == nil {
-		return "missing", false
-	}
-	raw, present := tags[ct.FormationMaxProcessesTag]
-	if !present {
-		return "missing", false
-	}
-	s := strings.ToLower(strings.TrimSpace(raw))
-	switch s {
-	case "":
-		return "empty", false
-	case "unlimited", "off", "none", "0":
-		return s, false
-	default:
-		return s, false
-	}
-}
-
-func addPostgresAvailabilityLine(add func(productionRow), api productionAPI, hosts []*cluster.Host, hostsErr error) {
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "postgres-availability", "/cluster/postgres-availability", "postgres:availability", 2, "The Postgres page shows that.")
-}
-
-func addEngineAvailabilityLine(add func(productionRow), api productionAPI, hosts []*cluster.Host, hostsErr error, check, path, command string, minHosts int, protected string) {
-	var current ct.PostgresAvailability
-	if err := api.Get(path, &current); err != nil {
-		add(productionRow{
-			status: "fail", check: check, detail: "error=" + err.Error(),
-			action: "Fix the controller, then rerun. This is not manual.",
-		})
-		return
-	}
-	switch current.Mode {
-	case "manual":
-		manualAction := "Run flynn-host " + command + " system to create platform replicas. Tenancy does not change this."
-		if minHosts >= 3 {
-			manualAction = "Run flynn-host " + command + " system to grow each resource when three hosts are registered. Tenancy does not change this."
-		}
-		add(productionRow{
-			status: "ok", check: check, detail: "mode=manual",
-			action: manualAction,
-		})
-	case "system":
-		if hostsErr != nil {
-			add(productionRow{
-				status: "warn", check: check, detail: "mode=system hosts=unknown",
-				action: "Fix the host list, then rerun. A warn does not exit 1.",
-			})
-			return
-		}
-		n := len(hosts)
-		if n < minHosts {
-			action := "Add a second host before a platform replica can leave the primary. This does not fail the cluster."
-			if minHosts >= 3 {
-				action = "Add hosts until three are registered. Failover stays unavailable below that. This does not fail the cluster."
-			}
-			add(productionRow{
-				status: "warn", check: check,
-				detail: fmt.Sprintf("mode=system hosts=%d", n),
-				action: action,
-			})
-			return
-		}
-		okAction := "A primary is protected only while its platform replica is caught up. " + protected
-		if minHosts >= 3 {
-			okAction = "A resource is protected only while three members are live on three hosts. " + protected
-		}
-		add(productionRow{
-			status: "ok", check: check,
-			detail: fmt.Sprintf("mode=system hosts=%d", n),
-			action: okAction,
-		})
-	default:
-		add(productionRow{
-			status: "fail", check: check, detail: "error=unknown " + check,
-			action: "Set it: flynn-host " + command + " manual or system.",
-		})
-	}
-}
-
-const logSinkFixAction = "flynn-host log-sink:add syslog syslog+tls://logs.example:6514/ format rfc6587 and no prefix. A large cluster needs this sink. The ring is not retention."
-
-func addLogSinkLine(add func(productionRow), api productionAPI, mode string) {
-	var sinks []*ct.Sink
-	if err := api.Get("/sinks", &sinks); err != nil {
-		add(productionRow{
-			status: "fail",
-			check:  "log-sink",
-			detail: "error=" + err.Error(),
-			action: "Fix the controller, then rerun. This check does not call log-sink:list.",
-		})
-		return
-	}
-	if mode != tenancy.ModeHosted && mode != tenancy.ModeSelfHosted {
-		add(productionRow{
-			status: "fail",
-			check:  "log-sink",
-			detail: "error=unknown tenancy",
-			action: "Tenancy is unread. This is not a self-hosted warning.",
-		})
-		return
-	}
-	detail, ok := logSinkCoverage(sinks)
-	if ok {
-		add(productionRow{
-			status: "ok",
-			check:  "log-sink",
-			detail: detail,
-			action: "log-sink:add remains the operator command.",
-		})
-		return
-	}
-	status := "fail"
-	if mode == tenancy.ModeSelfHosted {
-		status = "warn"
-	}
-	add(productionRow{
-		status: status,
-		check:  "log-sink",
-		detail: detail,
-		action: logSinkFixAction,
-	})
-}
-
-// logSinkCoverage reports whether controller sinks cover system and app logs.
-// A sink that does not parse is skipped. That is not a list-read error.
-func logSinkCoverage(sinks []*ct.Sink) (string, bool) {
-	all, system, apps := false, false, false
-	for _, sink := range sinks {
-		sys, app := qualifyingLogSink(sink)
-		if sys && app {
-			all = true
-		}
-		system = system || sys
-		apps = apps || app
-	}
-	switch {
-	case all:
-		return "syslog+tls scope=all", true
-	case system && apps:
-		return "syslog+tls scope=system+apps", true
-	case system:
-		return "coverage=system", false
-	case apps:
-		return "coverage=apps", false
-	default:
-		return "coverage=none", false
-	}
-}
-
-func qualifyingLogSink(sink *ct.Sink) (system, apps bool) {
-	if sink == nil || sink.Kind != ct.SinkKindSyslog || strings.TrimSpace(sink.AppID) != "" || sink.Config == nil {
-		return false, false
-	}
-	var cfg ct.SyslogSinkConfig
-	if err := json.Unmarshal(*sink.Config, &cfg); err != nil {
-		return false, false
-	}
-	if cfg.Insecure || strings.TrimSpace(cfg.Prefix) != "" {
-		return false, false
-	}
-	u, err := url.Parse(strings.TrimSpace(cfg.URL))
-	if err != nil || u.Scheme != "syslog+tls" || u.Host == "" {
-		return false, false
-	}
-	switch cfg.Format {
-	case "", ct.SyslogFormatRFC6587:
-	default:
-		return false, false
-	}
-	scope, err := ct.ParseSinkScope(cfg.Scope)
-	if err != nil {
-		return false, false
-	}
-	switch scope {
-	case ct.SinkScopeAll:
-		return true, true
-	case ct.SinkScopeSystem:
-		return true, false
-	case ct.SinkScopeApps:
-		return false, true
-	default:
-		return false, false
-	}
 }
 
 func addOverlayLine(add func(productionRow), meta []byte, err error) {
@@ -1530,34 +708,4 @@ func parseFlannelOverlay(data []byte) (string, uint, error) {
 		return "", 0, err
 	}
 	return parsed.Network.String(), parsed.SubnetLen, nil
-}
-
-// serviceTokenApps are the plugin apps that carry a long-lived service token.
-var serviceTokenApps = []struct{ app, env, scope string }{
-	{"billing-plugin", "QUOTA_TOKEN", "account:quota"},
-	{"letsencrypt-plugin", "ACME_TOKEN", "acme:issue"},
-}
-
-// addServiceTokenLine warns for each plugin service token that is expired,
-// unparseable, carries the wrong scope, or is inside servicetoken.RenewBefore
-// of expiry. Plugins that are not installed, or that hold no token, add no
-// row. The token value is never printed.
-func addServiceTokenLine(add func(productionRow), api productionAPI, now time.Time) {
-	for _, st := range serviceTokenApps {
-		release, err := api.GetAppRelease(st.app)
-		if err != nil || release == nil {
-			continue
-		}
-		tok := strings.TrimSpace(release.Env[st.env])
-		if tok == "" {
-			continue
-		}
-		if ok, why := servicetoken.Reusable(tok, st.scope, now); !ok {
-			add(productionRow{
-				status: "warn", check: "service-token",
-				detail: st.app + " " + st.env + " " + why,
-				action: "Run flynn-host token:rotate " + st.app + " " + st.env + " " + st.scope + ", or flynn plugin:update. Plugin update re-mints a token inside 30 days of expiry.",
-			})
-		}
-	}
 }
