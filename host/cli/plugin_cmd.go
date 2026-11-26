@@ -97,19 +97,44 @@ func runHostPluginCommand(name string, args []string) error {
 }
 
 func executeHostPluginAction(client controller.Client, spec *plugin.CLI, action *plugin.CLIAction, extra []string) error {
+	var getter hostReleaseGetter
+	if client != nil {
+		getter = client
+	}
+	req, err := hostPluginJob(getter, spec, action, extra)
+	if err != nil {
+		return err
+	}
+	return runHostPluginJob(client, strings.TrimSpace(spec.App), req, os.Stdin, os.Stdout, os.Stderr)
+}
+
+type hostReleaseGetter interface {
+	GetAppRelease(appID string) (*ct.Release, error)
+}
+
+// hostPluginJob is the one-off job for a cluster-scope plugin action: it
+// runs on the plugin app in its current release. A plugin API binary
+// (/bin/flynn-<name>-api) gets the plugin's own API key, and nothing else
+// from the release env unless the action sets release_env: without it
+// flynn-host <plugin>:maintenance got 401 from the plugin API (NEW-11,
+// DATA-69).
+func hostPluginJob(client hostReleaseGetter, spec *plugin.CLI, action *plugin.CLIAction, extra []string) (*ct.NewJob, error) {
 	if spec == nil || action == nil {
-		return fmt.Errorf("missing plugin CLI action")
+		return nil, fmt.Errorf("missing plugin CLI action")
 	}
 	appName := strings.TrimSpace(spec.App)
 	if appName == "" {
-		return fmt.Errorf("%s plugin CLI is missing the plugin app name", spec.Command)
+		return nil, fmt.Errorf("%s plugin CLI is missing the plugin app name", spec.Command)
+	}
+	if client == nil {
+		return nil, fmt.Errorf("missing controller client")
 	}
 	release, err := client.GetAppRelease(appName)
 	if err != nil {
-		return fmt.Errorf("error getting app release: %s", err)
+		return nil, fmt.Errorf("error getting app release: %s", err)
 	}
 	if release == nil || release.ID == "" {
-		return fmt.Errorf("error getting %s release", spec.Command)
+		return nil, fmt.Errorf("error getting %s release", spec.Command)
 	}
 	in := plugin.Interp{AppName: appName, Resource: appName}
 	if release.Env != nil {
@@ -118,7 +143,7 @@ func executeHostPluginAction(client controller.Client, spec *plugin.CLI, action 
 	}
 	jobArgs, err := plugin.InterpolateAll(action.Args, in)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	jobArgs = compactHostPluginArgs(jobArgs)
 	if action.Passthrough {
@@ -133,13 +158,18 @@ func executeHostPluginAction(client controller.Client, spec *plugin.CLI, action 
 		Partition:            ct.PartitionTypeSystem,
 		DeprecatedEntrypoint: nil,
 	}
+	if !action.ReleaseEnv && plugin.APIBinary(jobArgs) {
+		if env := plugin.APIAuthEnv(release); len(env) > 0 {
+			req.Env = env
+		}
+	}
 	if len(jobArgs) > 0 {
 		req.DeprecatedEntrypoint = []string{jobArgs[0]}
 	}
 	if len(jobArgs) > 1 {
 		req.DeprecatedCmd = jobArgs[1:]
 	}
-	return runHostPluginJob(client, appName, req, os.Stdin, os.Stdout, os.Stderr)
+	return req, nil
 }
 
 func compactHostPluginArgs(args []string) []string {
