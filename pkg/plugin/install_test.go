@@ -1287,3 +1287,42 @@ func TestPluginResourceProviderUsesPlatformAppliance(t *testing.T) {
 		t.Fatalf("redis -> %s", got)
 	}
 }
+
+// NEW-34: plugin redis printed "cluster/upgrades: EOF". The POST runs right
+// after the previous release is retired, so it can land on the job that is
+// stopping and the connection closes with no answer. A transport error is
+// retried; the plugin's handler is idempotent (a running upgrade is reported,
+// not started twice).
+func TestStartClusterUpgradesRetriesEOF(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cluster/upgrades" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		calls++
+		if calls == 1 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				conn.Close()
+			}
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	orig := clusterUpgradesRetryDelay
+	clusterUpgradesRetryDelay = time.Millisecond
+	defer func() { clusterUpgradesRetryDelay = orig }()
+	var log bytes.Buffer
+	in := &Installer{HTTP: srv.Client(), Stdout: &log}
+	m := &Manifest{
+		Kind:     KindResourceProvider,
+		Wait:     srv.URL + "/ping",
+		Provider: &Provider{Name: "redis", URL: srv.URL + "/clusters"},
+	}
+	in.startClusterUpgrades(m)
+	if calls != 2 || !strings.Contains(log.String(), "started background instance upgrades") {
+		t.Fatalf("calls=%d log=%q", calls, log.String())
+	}
+}

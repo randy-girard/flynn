@@ -1558,9 +1558,17 @@ func (in *Installer) http() *http.Client {
 	return http.DefaultClient
 }
 
+// clusterUpgradesRetryDelay is the pause between POST attempts (tests
+// shorten it).
+var clusterUpgradesRetryDelay = 2 * time.Second
+
 // startClusterUpgrades POSTs /cluster/upgrades after ping. flynn-host runs
 // install hooks on the host OS, which cannot resolve *.discoverd; this uses
 // the same HTTP client as waitHTTP. 404 means the plugin has no upgrade API.
+// The POST runs right after the previous release is retired, so it can reach
+// the job that is stopping and get EOF or a reset (NEW-34): a transport
+// error is retried until clusterUpgradesTimeout. The plugin side is
+// idempotent (a running upgrade is reported, not started again).
 func (in *Installer) startClusterUpgrades(m *Manifest) {
 	u := m.ClusterUpgradesURL()
 	if u == "" {
@@ -1569,17 +1577,25 @@ func (in *Installer) startClusterUpgrades(m *Manifest) {
 	in.logf("starting background instance upgrades if needed")
 	ctx, cancel := context.WithTimeout(context.Background(), clusterUpgradesTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
-	if err != nil {
-		in.logf("instance upgrades: %v", err)
-		return
-	}
-	req.Close = true
-	appliancehttp.SetAuth(req, appliancehttp.Key())
-	res, err := in.http().Do(req)
-	if err != nil {
-		in.logf("instance upgrades: %v", err)
-		return
+	var res *http.Response
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+		if err != nil {
+			in.logf("instance upgrades: %v", err)
+			return
+		}
+		req.Close = true
+		appliancehttp.SetAuth(req, appliancehttp.Key())
+		res, err = in.http().Do(req)
+		if err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			in.logf("instance upgrades: %v (after %d attempts)", err, attempt)
+			return
+		case <-time.After(clusterUpgradesRetryDelay):
+		}
 	}
 	defer res.Body.Close()
 	_, _ = io.Copy(io.Discard, res.Body)
