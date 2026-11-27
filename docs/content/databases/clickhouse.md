@@ -174,6 +174,20 @@ the dump are replaced. Database names may contain `-` (each resource's own
 `d_<app>` database does). Dumps written before this format could not be
 restored and are refused before anything is dropped.
 
+Views and materialized views are restored without firing them twice. The
+dump writes the tables first, each with its rows. Then come the views,
+materialized views and dictionaries, each after the views it reads, as DDL
+only (never `POPULATE`). A materialized view's `.inner_id.<uuid>` table is
+not dumped, because the view recreates it. A materialized view with an
+implicit inner table keeps its rows under the view's name, and they are
+inserted right after the view is created. A `TO` view's rows are its target
+table's, so the view has none of its own. A plain view has no rows. Tables
+with an engine that keeps no rows of its own (`Distributed`, `Merge`,
+`Buffer`, `Null`, external engines) are DDL only. A restore applies this
+order to any dump, including one written before this change. So base,
+target and inner tables come back with the source's row counts. A dump with
+`POPULATE` in a materialized view is refused.
+
 Each database is its own object:
 `backups/<owner>/<resource UUID>/<timestamp>/<database>`.
 Empty owner uses `cluster`. The schedule runs on the `clickhouse-backup`
