@@ -191,7 +191,13 @@ func runEnvGet(args *docopt.Args, client controller.Client) error {
 }
 
 func setEnv(client controller.Client, proc string, env map[string]*string) (string, error) {
-	app, err := client.GetApp(mustApp())
+	return setAppEnv(client, mustApp(), proc, env)
+}
+
+// setAppEnv is setEnv for the app appRef (name or ID) instead of the
+// selected app.
+func setAppEnv(client controller.Client, appRef, proc string, env map[string]*string) (string, error) {
+	app, err := client.GetApp(appRef)
 	if err != nil {
 		return "", err
 	}

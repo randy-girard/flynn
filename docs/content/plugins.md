@@ -95,9 +95,14 @@ every host (the existing 15-second route reconcile). This command does not
 follow the job onto one node.
 
 Attachment names (`--as ANALYTICS`, or the color `AMBER`) are stored on the
-app as `flynn-addon-attachments`. `addons:detach` takes that name, not the
-add-on name and not the env var. `addons:destroy` takes the add-on name and
-is owner-only.
+app as `flynn-addon-attachments`. `addons:detach` takes that name, or the
+add-on NAME or ID of a resource the app is attached to (that removes every
+attachment of it from the app), not the env var. `addons:destroy` takes the
+add-on name and is owner-only. It asks the provider first; only after the
+provider accepted does it unset the attachment env, on the owning app and on
+every other attached app. Shared keys that another resource on the same app
+still provides stay. With no app selected it removes a resource no app uses
+(`addons:create --unattached`).
 
 Space form (`flynn addons create postgres`) stays an alias. `resource:*` is
 gone.

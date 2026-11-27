@@ -347,6 +347,53 @@ func lookupResourceByRef(client controller.Client, ref string) (*ct.Resource, er
 	return nil, fmt.Errorf("resource %q not found; see flynn resource", ref)
 }
 
+// ambiguousResourceError is more than one of the app's resources answering
+// to one name (a switchover can leave the retired row with the promoted name).
+type ambiguousResourceError struct {
+	ref string
+	ids []string
+}
+
+func (e *ambiguousResourceError) Error() string {
+	return fmt.Sprintf("multiple resources match %q (%s); pass the ID from flynn resource", e.ref, strings.Join(e.ids, ", "))
+}
+
+// lookupAppResourceStrict is lookupAppResource with a typed ambiguity error
+// that names every matching ID.
+func lookupAppResourceStrict(client controller.Client, app, ref string) (*ct.Resource, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("resource is required")
+	}
+	list, err := client.AppResourceList(app)
+	if err != nil {
+		return nil, err
+	}
+	var got []*ct.Resource
+	for _, r := range list {
+		if resourceMatchesRef(r, ref) {
+			got = append(got, r)
+		}
+	}
+	switch len(got) {
+	case 1:
+		return got[0], nil
+	case 0:
+		return nil, fmt.Errorf("resource %q not found; see flynn resource", ref)
+	}
+	// An exact ID match is never ambiguous.
+	for _, r := range got {
+		if strings.EqualFold(r.ID, ref) {
+			return r, nil
+		}
+	}
+	e := &ambiguousResourceError{ref: ref}
+	for _, r := range got {
+		e.ids = append(e.ids, r.ID)
+	}
+	return nil, e
+}
+
 func lookupAppResource(client controller.Client, app, ref string) (*ct.Resource, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {

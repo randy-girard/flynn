@@ -86,8 +86,15 @@ Examples:
 	register("addons:detach", runAddonsDetach, `
 usage: flynn addons:detach <attachment>
 
-Remove one attachment from this app. <attachment> is the --as name (ANALYTICS
-or AMBER), not the add-on name and not the env var. The add-on is not deleted.
+Remove an attachment from this app. <attachment> is the --as name (ANALYTICS
+or AMBER), or the add-on NAME or ID (postgresql-concave-48291), which removes
+every attachment of that add-on from this app. It is not the env var. The
+add-on is not deleted. The app that owns the add-on uses addons:destroy.
+
+Examples:
+
+	$ flynn -a shop addons:detach ANALYTICS
+	$ flynn -a shop addons:detach postgresql-concave-48291
 `)
 	register("addons:destroy", runAddonsDestroy, `
 usage: flynn addons:destroy [<provider>] [<addon>] [--yes]
@@ -95,11 +102,16 @@ usage: flynn addons:destroy [<provider>] [<addon>] [--yes]
 Delete an add-on this app owns. <addon> is the NAME from addons:list
 (postgresql-concave-48291, or scheduler). flynn resource remove postgres
 <name> passes the provider and the NAME or ID. An app that is only attached
-uses addons:detach.
+uses addons:detach. With no app selected (no -a and no flynn git remote),
+<addon> names a resource that no app uses, such as one made with
+addons:create --unattached.
 
-A database leader cannot be removed while followers are still linked. The
-command returns after the add-on is detached. An isolated instance is
-destroyed in the background.
+The provider is asked first and can refuse: a database leader cannot be
+removed while followers are still linked. The app's env is changed only
+after the provider accepted. The attachment env is then removed from this
+app and from every other attached app; shared keys that another attached
+resource still provides (FLYNN_MYSQL_TLS_ENABLED, its ROLE) stay. An isolated
+instance is destroyed in the background.
 
 Destroying scheduler, after confirmation, stops and deletes that app's
 scheduled jobs.
@@ -133,6 +145,13 @@ port on its own.
 Options:
 	--domain=<host>  hostname of the route to remove (default: the add-on hostname)
 `)
+}
+
+// addonsNoApp is true when no app is selected (no -a, no remote, no
+// FLYNN_APP). Tests replace it.
+var addonsNoApp = func() bool {
+	_, err := app()
+	return err != nil
 }
 
 // confirmAddonDestroy is replaced in tests.
@@ -366,7 +385,8 @@ func runAddonsAttach(args *docopt.Args, client controller.Client) error {
 }
 
 func runAddonsDetach(args *docopt.Args, client controller.Client) error {
-	name := canonicalAttachmentName(args.String["<attachment>"])
+	raw := strings.TrimSpace(args.String["<attachment>"])
+	name := canonicalAttachmentName(raw)
 	if name == "" {
 		return fmt.Errorf("attachment name is required")
 	}
@@ -381,7 +401,47 @@ func runAddonsDetach(args *docopt.Args, client controller.Client) error {
 	if rec, ok := stored[name]; ok {
 		return detachStoredAttachment(client, cat, name, rec)
 	}
-	return detachInferredAttachment(client, cat, name)
+	err = detachInferredAttachment(client, cat, name)
+	if !errors.Is(err, errAttachmentNotFound) {
+		return err
+	}
+	// Not an attachment name: the add-on NAME or ID, as addons:attach takes,
+	// among this app's own resources.
+	res, spec, lerr := lookupAppAddonByName(client, cat, raw)
+	var ambiguous *ambiguousResourceError
+	if errors.As(lerr, &ambiguous) {
+		return lerr
+	}
+	if lerr != nil || res == nil {
+		return fmt.Errorf("attachment %q not found on this app; use the --as name or the add-on NAME from flynn addons", raw)
+	}
+	return detachResourceAddon(client, spec, res)
+}
+
+var errAttachmentNotFound = errors.New("attachment not found")
+
+// detachResourceAddon removes every attachment of res from this app: it
+// unbinds the app (the add-on stays), unsets the env and drops the records.
+// The owning app destroys instead.
+func detachResourceAddon(client controller.Client, spec *plugin.AddonSpec, res *ct.Resource) error {
+	if spec != nil && !spec.Supports(plugin.VerbDetach) {
+		return spec.VerbError(plugin.VerbDetach)
+	}
+	app, err := client.GetApp(mustApp())
+	if err != nil {
+		return err
+	}
+	if res.OwnedByApp(app) {
+		return fmt.Errorf("%s belongs to this app; flynn addons:destroy %s deletes it (addons:detach is for an app attached to another app's add-on)", resourceDisplayName(res), resourceDisplayName(res))
+	}
+	if _, err := client.DeleteResourceApp(resourceProviderName(client, spec, res), res.ID, app.ID); err != nil {
+		return err
+	}
+	if err := removeAttachmentFromApp(client, app.ID, res); err != nil {
+		return fmt.Errorf("unbound %s, but removing its env from %s failed: %w", resourceDisplayName(res), app.Name, err)
+	}
+	log.Printf("Detached %s.", resourceDisplayName(res))
+	return nil
 }
 
 func runAddonsDestroy(args *docopt.Args, client controller.Client) error {
@@ -393,6 +453,9 @@ func runAddonsDestroy(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
+	if addonsNoApp() {
+		return destroyUnattachedAddon(client, cat, provider, name)
+	}
 	if provider != "" {
 		res, err := lookupProviderResource(client, mustApp(), provider, name)
 		if err != nil {
@@ -400,8 +463,13 @@ func runAddonsDestroy(args *docopt.Args, client controller.Client) error {
 		}
 		return destroyResourceAddon(args, client, res, specForResource(client, cat, res))
 	}
-	if res, spec, err := lookupAppAddonByName(client, cat, name); err == nil && res != nil {
+	res, spec, err := lookupAppAddonByName(client, cat, name)
+	if err == nil && res != nil {
 		return destroyResourceAddon(args, client, res, spec)
+	}
+	var ambiguous *ambiguousResourceError
+	if errors.As(err, &ambiguous) {
+		return err
 	}
 	if spec := cat.AddonByType(name); spec != nil && spec.Backend == plugin.BackendPlugin {
 		if !spec.Supports(plugin.VerbDestroy) {
@@ -419,6 +487,54 @@ func runAddonsDestroy(args *docopt.Args, client controller.Client) error {
 		return nil
 	}
 	return fmt.Errorf("add-on %q not found; see flynn addons", name)
+}
+
+// destroyUnattachedAddon deletes a resource that no app uses (one made with
+// addons:create --unattached) when no app is selected. A resource that is
+// still attached must be destroyed from its owning app, which also removes
+// the env from every attached app.
+func destroyUnattachedAddon(client controller.Client, cat *plugin.Catalog, provider, name string) error {
+	var res *ct.Resource
+	var err error
+	if provider != "" {
+		res, err = lookupProviderResource(client, "", provider, name)
+	} else {
+		res, err = lookupResourceByRef(client, name)
+	}
+	if err != nil {
+		return err
+	}
+	spec := specForResource(client, cat, res)
+	if spec != nil && !spec.Supports(plugin.VerbDestroy) {
+		return spec.VerbError(plugin.VerbDestroy)
+	}
+	if len(res.Apps) > 0 {
+		owner := strings.TrimSpace(res.OwnerApp)
+		if owner == "" {
+			owner = res.Apps[len(res.Apps)-1]
+		}
+		if app, err := client.GetApp(owner); err == nil && app != nil && app.Name != "" {
+			owner = app.Name
+		}
+		return fmt.Errorf("%s is attached to an app; run flynn -a %s addons:destroy %s", resourceDisplayName(res), owner, resourceDisplayName(res))
+	}
+	deleted, err := client.DeleteResource(resourceProviderName(client, spec, res), res.ID)
+	if err != nil {
+		return err
+	}
+	log.Printf("Deleted add-on %s.", resourceDisplayName(deleted))
+	log.Println("The instance is being removed in the background.")
+	return nil
+}
+
+func resourceProviderName(client controller.Client, spec *plugin.AddonSpec, res *ct.Resource) string {
+	if spec != nil && spec.Provider != "" {
+		return spec.Provider
+	}
+	if p, err := client.GetProvider(res.ProviderID); err == nil && p != nil && p.Name != "" {
+		return p.Name
+	}
+	return res.ProviderID
 }
 
 func runAddonsExpose(args *docopt.Args, client controller.Client) error {
@@ -467,6 +583,11 @@ func runAddonsUnexpose(args *docopt.Args, client controller.Client) error {
 	return runResourceUnexpose(args, client)
 }
 
+// destroyResourceAddon asks the provider to delete res first. The provider
+// can refuse (a leader with followers, a datastore guard), and the tenant's
+// env must then stay as it was. Only after the delete is accepted is the
+// attachment env removed, from the owning app and from every other attached
+// app, keeping shared keys a remaining resource still provides.
 func destroyResourceAddon(args *docopt.Args, client controller.Client, res *ct.Resource, spec *plugin.AddonSpec) error {
 	if spec != nil && !spec.Supports(plugin.VerbDestroy) {
 		return spec.VerbError(plugin.VerbDestroy)
@@ -485,35 +606,61 @@ func destroyResourceAddon(args *docopt.Args, client controller.Client, res *ct.R
 	if !res.OwnedByApp(app) {
 		return fmt.Errorf("cannot delete %s from %s; this app is attached but does not own the add-on. Use flynn addons:detach", resourceDisplayName(res), app.Name)
 	}
-	release, err := client.GetAppRelease(mustApp())
+	deleted, err := client.DeleteResource(resourceProviderName(client, spec, res), res.ID)
 	if err != nil {
 		return err
 	}
-	env := resname.UnsetAttachment(release.Env, res.Env)
-	if _, err := setEnv(client, "", env); err != nil {
-		return err
+	if deleted == nil {
+		deleted = res
 	}
-	if err := forgetAddonAttachments(client, res.ID, ""); err != nil {
-		return err
-	}
-	provider := ""
-	if spec != nil {
-		provider = spec.Provider
-	}
-	if provider == "" {
-		p, err := client.GetProvider(res.ProviderID)
-		if err != nil {
-			return err
+	apps := []string{app.ID}
+	for _, id := range res.Apps {
+		if id = strings.TrimSpace(id); id != "" && !strings.EqualFold(id, app.ID) && !strings.EqualFold(id, app.Name) {
+			apps = append(apps, id)
 		}
-		provider = p.Name
 	}
-	deleted, err := client.DeleteResource(provider, res.ID)
-	if err != nil {
-		return err
+	var ownerErr error
+	for i, ref := range apps {
+		if err := removeAttachmentFromApp(client, ref, res); err != nil {
+			if i == 0 {
+				ownerErr = fmt.Errorf("deleted add-on %s, but removing its env from %s failed: %w", resourceDisplayName(res), app.Name, err)
+				continue
+			}
+			log.Printf("Deleted add-on %s, but removing its env from app %s failed: %v", resourceDisplayName(res), ref, err)
+		}
+	}
+	if ownerErr != nil {
+		return ownerErr
 	}
 	log.Printf("Deleted add-on %s.", resourceDisplayName(deleted))
 	log.Println("The instance is being removed in the background.")
 	return nil
+}
+
+// removeAttachmentFromApp unsets res's attachment env on one app (keeping
+// shared keys its other resources provide) and drops res from that app's
+// attachment record. An app with no release has no env to change.
+func removeAttachmentFromApp(client controller.Client, appRef string, res *ct.Resource) error {
+	release, err := client.GetAppRelease(appRef)
+	if err != nil && !errors.Is(err, controller.ErrNotFound) {
+		return err
+	}
+	if release != nil {
+		var remaining []map[string]string
+		if list, err := client.AppResourceList(appRef); err == nil {
+			for _, r := range list {
+				if r != nil && r.ID != res.ID {
+					remaining = append(remaining, r.Env)
+				}
+			}
+		}
+		if env := resname.UnsetAttachmentKeeping(release.Env, res.Env, remaining); len(env) > 0 {
+			if _, err := setAppEnv(client, appRef, "", env); err != nil {
+				return err
+			}
+		}
+	}
+	return forgetAppAddonAttachments(client, appRef, res.ID, "")
 }
 
 func missingAddonType(typ string) error {
@@ -529,7 +676,7 @@ func lookupAddonByName(client controller.Client, cat *plugin.Catalog, name strin
 }
 
 func lookupAppAddonByName(client controller.Client, cat *plugin.Catalog, name string) (*ct.Resource, *plugin.AddonSpec, error) {
-	res, err := lookupAppResource(client, mustApp(), name)
+	res, err := lookupAppResourceStrict(client, mustApp(), name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -559,8 +706,12 @@ func canonicalAttachmentName(name string) string {
 }
 
 func loadAddonAttachments(client controller.Client) (map[string]addonAttachment, error) {
+	return loadAppAddonAttachments(client, mustApp())
+}
+
+func loadAppAddonAttachments(client controller.Client, appRef string) (map[string]addonAttachment, error) {
 	out := map[string]addonAttachment{}
-	app, err := client.GetApp(mustApp())
+	app, err := client.GetApp(appRef)
 	if err != nil {
 		return nil, err
 	}
@@ -578,7 +729,11 @@ func loadAddonAttachments(client controller.Client) (map[string]addonAttachment,
 }
 
 func saveAddonAttachments(client controller.Client, attachments map[string]addonAttachment) error {
-	app, err := client.GetApp(mustApp())
+	return saveAppAddonAttachments(client, mustApp(), attachments)
+}
+
+func saveAppAddonAttachments(client controller.Client, appRef string, attachments map[string]addonAttachment) error {
+	app, err := client.GetApp(appRef)
 	if err != nil {
 		return err
 	}
@@ -694,6 +849,9 @@ func envMatchesResource(resource map[string]string, val string) bool {
 
 func detachStoredAttachment(client controller.Client, cat *plugin.Catalog, name string, rec addonAttachment) error {
 	release, err := client.GetAppRelease(mustApp())
+	if errors.Is(err, controller.ErrNotFound) {
+		release, err = &ct.Release{}, nil
+	}
 	if err != nil {
 		return err
 	}
@@ -714,7 +872,13 @@ func detachStoredAttachment(client controller.Client, cat *plugin.Catalog, name 
 	}
 	res, spec, resErr := lookupAppAddonByName(client, cat, firstNonEmpty(rec.Addon, rec.ResourceID))
 	if remaining == 0 && resErr == nil && res != nil {
-		for k, v := range resname.UnsetAttachment(release.Env, res.Env) {
+		var others []map[string]string
+		for _, r := range appResourcesOrNil(client, mustApp()) {
+			if r != nil && r.ID != res.ID {
+				others = append(others, r.Env)
+			}
+		}
+		for k, v := range resname.UnsetAttachmentKeeping(release.Env, res.Env, others) {
 			env[k] = v
 		}
 		appID, err := resolvedAppID(client)
@@ -736,8 +900,10 @@ func detachStoredAttachment(client controller.Client, cat *plugin.Catalog, name 
 			}
 		}
 	}
-	if _, err := setEnv(client, "", env); err != nil {
-		return err
+	if len(env) > 0 {
+		if _, err := setEnv(client, "", env); err != nil {
+			return err
+		}
 	}
 	if err := saveAddonAttachments(client, stored); err != nil {
 		return err
@@ -752,7 +918,7 @@ func detachInferredAttachment(client controller.Client, cat *plugin.Catalog, nam
 		return err
 	}
 	release, err := client.GetAppRelease(mustApp())
-	if err != nil {
+	if err != nil && !errors.Is(err, controller.ErrNotFound) {
 		return err
 	}
 	envMap := map[string]string{}
@@ -781,24 +947,30 @@ func detachInferredAttachment(client controller.Client, cat *plugin.Catalog, nam
 			return detachStoredAttachment(client, cat, canonicalAttachmentName(name), rec)
 		}
 	}
-	return fmt.Errorf("attachment %q not found on this app; use the --as name from flynn addons", name)
+	return errAttachmentNotFound
 }
 
-func forgetAddonAttachments(client controller.Client, resourceID, name string) error {
-	stored, err := loadAddonAttachments(client)
+func forgetAppAddonAttachments(client controller.Client, appRef, resourceID, name string) error {
+	stored, err := loadAppAddonAttachments(client, appRef)
 	if err != nil {
 		return err
 	}
+	changed := false
 	for k, rec := range stored {
 		if name != "" && k == canonicalAttachmentName(name) {
 			delete(stored, k)
+			changed = true
 			continue
 		}
 		if resourceID != "" && rec.ResourceID == resourceID {
 			delete(stored, k)
+			changed = true
 		}
 	}
-	return saveAddonAttachments(client, stored)
+	if !changed {
+		return nil
+	}
+	return saveAppAddonAttachments(client, appRef, stored)
 }
 
 // addonsArgUsage narrows addons:create to the installed type's docopt and
