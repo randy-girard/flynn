@@ -1374,6 +1374,16 @@ func (c *Client) VolumeList() ([]*ct.Volume, error) {
 	return volumes, c.Get("/volumes", &volumes)
 }
 
+// OrphanedVolumeList returns the volumes of apps deleted at least grace ago
+// that were never decommissioned or destroyed (GET /volumes?orphaned=true),
+// leaving out apps with ct.AppMetaKeepVolumes. flynn-host volume:gc
+// --deleted-apps destroys them.
+func (c *Client) OrphanedVolumeList(grace time.Duration) ([]*ct.Volume, error) {
+	var volumes []*ct.Volume
+	q := url.Values{"orphaned": {"true"}, "grace": {grace.String()}}
+	return volumes, c.Get("/volumes?"+q.Encode(), &volumes)
+}
+
 // AppVolumeList returns a list of all volumes for an app.
 func (c *Client) AppVolumeList(appID string) ([]*ct.Volume, error) {
 	if appID == "" {

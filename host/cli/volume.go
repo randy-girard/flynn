@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -60,17 +61,52 @@ Examples:
     $ flynn-host volume:delete 102fad07-07a3-4841-bded-d9e8a3eedbd6
 `)
 	Register("volume:gc", runVolumeGarbageCollection, `
-usage: flynn-host volume:gc
+usage: flynn-host volume:gc [--dry-run] [--deleted-apps] [--grace=<duration>]
 
-Garbage collect currently unused volumes.
+Garbage collect currently unused volumes: volumes no running job binds and
+the controller does not track (or tracks as destroyed or decommissioned).
+System images and the discoverd and flannel state volumes stay.
+
+With --deleted-apps, also collect the data volumes of apps that were deleted
+at least --grace ago and never decommissioned (apps deleted before app
+deletion started decommissioning volumes). A volume a running job still
+binds stays, and so does every volume of an app deleted with
+flynn-controller.keep-volumes=true. Run it with --dry-run first.
+
+Options:
+    --dry-run            List what would be deleted, with sizes, and delete nothing
+    --deleted-apps       Also collect volumes of deleted apps
+    --grace=<duration>   With --deleted-apps, only apps deleted at least this long ago [default: 24h]
 
 Examples:
 
     $ flynn-host volume:gc
+    $ flynn-host volume:gc --deleted-apps --dry-run
+    $ flynn-host volume:gc --deleted-apps --grace=1h
 `)
 }
 
+// volumeGCOptions are the volume:gc flags. The zero value is the plain gc
+// that update and disk:reclaim run.
+type volumeGCOptions struct {
+	DryRun      bool
+	DeletedApps bool
+	Grace       time.Duration
+}
+
 func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error {
+	opts := volumeGCOptions{
+		DryRun:      args.Bool["--dry-run"],
+		DeletedApps: args.Bool["--deleted-apps"],
+		Grace:       24 * time.Hour,
+	}
+	if g := strings.TrimSpace(args.String["--grace"]); g != "" {
+		d, err := time.ParseDuration(g)
+		if err != nil || d < 0 {
+			return fmt.Errorf("invalid --grace %q: want a duration such as 24h", g)
+		}
+		opts.Grace = d
+	}
 	hosts, err := client.Hosts()
 	if err != nil {
 		return fmt.Errorf("could not list hosts: %s", err)
@@ -78,7 +114,7 @@ func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error
 	if len(hosts) == 0 {
 		return errors.New("no hosts found")
 	}
-	return garbageCollectUnusedVolumes(hosts, nil)
+	return garbageCollectVolumes(hosts, nil, opts)
 }
 
 func volumeGCKeepFromJobs(jobs map[string]host.ActiveJob) map[string]struct{} {
@@ -152,6 +188,15 @@ func shouldGCVolume(v *volume.Info, keep map[string]struct{}) bool {
 // garbageCollectUnusedVolumes deletes host volumes that are not attached to a
 // running job, not tracked by the controller scheduler, and not system images.
 func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error {
+	return garbageCollectVolumes(hosts, log, volumeGCOptions{})
+}
+
+// orphanedVolumeLister is the controller call behind --deleted-apps.
+type orphanedVolumeLister interface {
+	OrphanedVolumeList(grace time.Duration) ([]*ct.Volume, error)
+}
+
+func garbageCollectVolumes(hosts []*cluster.Host, log log15.Logger, opts volumeGCOptions) error {
 	keep := make(map[string]struct{})
 	for _, h := range hosts {
 		jobs, err := h.ListJobs()
@@ -167,6 +212,10 @@ func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error 
 		if k := controllerKeyFromActiveJobs(jobs); k != "" {
 			seedControllerKey(k)
 		}
+	}
+	jobKeep := make(map[string]struct{}, len(keep))
+	for id := range keep {
+		jobKeep[id] = struct{}{}
 	}
 
 	volumes, err := clusterVolumes(hosts)
@@ -191,25 +240,97 @@ func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error 
 	}
 	addControllerVolumeKeep(keep, ctrlVols)
 
-	success := true
-	for _, v := range volumes {
-		if !shouldGCVolume(v.Volume, keep) {
-			continue
+	if opts.DeletedApps {
+		lister, ok := ctrl.(orphanedVolumeLister)
+		if !ok {
+			return errors.New("skipping volume gc: controller client cannot list deleted-app volumes")
 		}
-		if err := v.Host.DestroyVolume(v.Volume.ID); err != nil {
-			success = false
-			fmt.Printf("could not delete %s volume %s: %s\n", v.Volume.Type, v.Volume.ID, err)
-			continue
+		orphans, err := lister.OrphanedVolumeList(opts.Grace)
+		if err != nil {
+			fmt.Printf("warning: could not list deleted-app volumes for gc: %s\n", err)
+			return fmt.Errorf("skipping volume gc: %w", err)
 		}
-		fmt.Println("Deleted", v.Volume.Type, "volume", v.Volume.ID)
-		if log != nil {
-			log.Info("deleted unused volume", "type", v.Volume.Type, "id", v.Volume.ID, "host", v.Host.ID())
-		}
+		released := dropDeletedAppVolumes(keep, jobKeep, orphans)
+		fmt.Printf("%d volumes of apps deleted more than %s ago (%d still bound by a running job)\n", len(released), opts.Grace, len(orphans)-len(released))
 	}
-	if !success {
+
+	targets := make([]gcTarget, 0, len(volumes))
+	for _, v := range volumes {
+		targets = append(targets, gcTarget{HostID: v.Host.ID(), Volume: v.Volume, host: v.Host})
+	}
+	res := collectVolumes(targets, keep, opts.DryRun, func(t gcTarget) error {
+		return t.host.DestroyVolume(t.Volume.ID)
+	}, os.Stdout, log)
+	verb := "Deleted"
+	if opts.DryRun {
+		verb = "Would delete"
+	}
+	fmt.Printf("%s %d volumes (%s quota)\n", verb, res.count, units.BytesSize(float64(res.bytes)))
+	if res.failed {
 		return errors.New("could not garbage collect all volumes")
 	}
 	return nil
+}
+
+// dropDeletedAppVolumes stops keeping the controller volumes of deleted apps
+// (orphans) that no running job binds (jobKeep). It returns the ones it
+// released.
+func dropDeletedAppVolumes(keep, jobKeep map[string]struct{}, orphans []*ct.Volume) []*ct.Volume {
+	var released []*ct.Volume
+	for _, vol := range orphans {
+		if vol == nil || vol.ID == "" {
+			continue
+		}
+		if _, ok := jobKeep[vol.ID]; ok {
+			continue
+		}
+		delete(keep, vol.ID)
+		released = append(released, vol)
+	}
+	return released
+}
+
+type gcTarget struct {
+	HostID string
+	Volume *volume.Info
+	host   *cluster.Host
+}
+
+type gcResult struct {
+	count  int
+	bytes  int64
+	failed bool
+}
+
+// collectVolumes destroys (or with dryRun lists) every target shouldGCVolume
+// allows, printing one line per volume to out and logging each delete.
+func collectVolumes(targets []gcTarget, keep map[string]struct{}, dryRun bool, destroy func(gcTarget) error, out io.Writer, log log15.Logger) gcResult {
+	var res gcResult
+	for _, t := range targets {
+		if !shouldGCVolume(t.Volume, keep) {
+			continue
+		}
+		app := t.Volume.Meta["flynn-controller.app"]
+		size := units.BytesSize(float64(t.Volume.Size))
+		if dryRun {
+			fmt.Fprintf(out, "Would delete %s volume %s on %s (app %s, %s quota)\n", t.Volume.Type, t.Volume.ID, t.HostID, app, size)
+			res.count++
+			res.bytes += t.Volume.Size
+			continue
+		}
+		if err := destroy(t); err != nil {
+			res.failed = true
+			fmt.Fprintf(out, "could not delete %s volume %s: %s\n", t.Volume.Type, t.Volume.ID, err)
+			continue
+		}
+		res.count++
+		res.bytes += t.Volume.Size
+		fmt.Fprintln(out, "Deleted", t.Volume.Type, "volume", t.Volume.ID, "on", t.HostID)
+		if log != nil {
+			log.Info("deleted unused volume", "type", t.Volume.Type, "id", t.Volume.ID, "host", t.HostID, "app", app)
+		}
+	}
+	return res
 }
 
 func runVolumeDelete(args *docopt.Args, client *cluster.Client) error {

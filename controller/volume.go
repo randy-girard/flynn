@@ -20,10 +20,42 @@ func (c *controllerAPI) GetVolumes(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
+	if truthyQuery(req.FormValue("orphaned")) {
+		c.getOrphanedVolumes(w, req)
+		return
+	}
+
 	list, err := c.volumeRepo.List()
 	if err != nil {
 		respondWithError(w, err)
 		return
+	}
+	httphelper.JSON(w, 200, list)
+}
+
+// defaultOrphanedVolumeGrace is how long ago an app must have been deleted
+// before GET /volumes?orphaned=true lists its volumes.
+const defaultOrphanedVolumeGrace = 24 * time.Hour
+
+// getOrphanedVolumes lists volumes of deleted apps that were never
+// decommissioned (NEW-35). grace is a Go duration (default 24h).
+func (c *controllerAPI) getOrphanedVolumes(w http.ResponseWriter, req *http.Request) {
+	grace := defaultOrphanedVolumeGrace
+	if g := strings.TrimSpace(req.FormValue("grace")); g != "" {
+		d, err := time.ParseDuration(g)
+		if err != nil || d < 0 {
+			respondWithError(w, ct.ValidationError{Field: "grace", Message: "must be a non-negative duration such as 24h"})
+			return
+		}
+		grace = d
+	}
+	list, err := c.volumeRepo.ListOrphaned(grace)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if list == nil {
+		list = []*ct.Volume{}
 	}
 	httphelper.JSON(w, 200, list)
 }
