@@ -68,3 +68,30 @@ func TestProvisionConfigAppIsOverwrittenFromRequest(t *testing.T) {
 		t.Fatalf("empty config: %v", got)
 	}
 }
+
+// NEW-27: an unattached provision (addons:create --unattached --follow) has
+// no app, so the plugin cannot tell whose leader it may follow. The
+// controller stamps the resolved owner account, never the caller's value.
+func TestProvisionConfigStampsOwnerAccount(t *testing.T) {
+	get := func(t *testing.T, raw []byte) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	forged := []byte(`{"follow":"mysql-gorge-85967","owner_account":"user:victim"}`)
+	got := get(t, provisionConfigWithOwner(forged, nil, "user:ada", false))
+	if got["owner_account"] != "user:ada" || got["follow"] != "mysql-gorge-85967" {
+		t.Fatalf("unattached provision must carry the resolved owner: %v", got)
+	}
+	target := &ct.App{ID: "id1", Name: "shop", OwnerAccount: "org:acme"}
+	got = get(t, provisionConfigWithOwner(forged, target, "org:acme", false))
+	if got["owner_account"] != "org:acme" || got["app"] != "shop" {
+		t.Fatalf("attached provision carries the app's owner: %v", got)
+	}
+	got = get(t, provisionConfigWithOwner(forged, nil, "", false))
+	if _, ok := got["owner_account"]; ok {
+		t.Fatalf("a caller-supplied owner_account must not reach the plugin: %v", got)
+	}
+}

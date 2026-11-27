@@ -129,7 +129,7 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	addon := c.addonForProvider(p)
 	if addon != nil && addon.PassApp {
 		tok := authz.TokenFromContext(ctx)
-		config = provisionConfigWithApp(config, target, tok != nil && tok.ClusterKey)
+		config = provisionConfigWithOwner(config, target, owner, tok != nil && tok.ClusterKey)
 	}
 	// The built-in appliance is the platform database. Bootstrap still creates
 	// the controller and blobstore databases (system apps, platform marker).
@@ -283,6 +283,19 @@ func provisionAs(config []byte) string {
 // provisionConfigWithApp stamps the tenant app name so database plugins attach
 // the same way as `flynn resource:add` (name, role, FLYNN_POSTGRESQL_<COLOR>_URL, and DATABASE_URL when free).
 func provisionConfigWithApp(config []byte, app *ct.App, clusterKey bool) []byte {
+	owner := ""
+	if app != nil {
+		owner = app.OwnerAccount
+	}
+	return provisionConfigWithOwner(config, app, owner, clusterKey)
+}
+
+// provisionConfigWithOwner is provisionConfigWithApp that also stamps
+// "owner_account": the account that will own the resource (the app's, or
+// the resolved owner of an unattached one). A plugin uses it to authorize an
+// unattached follow of a leader that account owns (NEW-27). A caller-supplied
+// value is always replaced or removed.
+func provisionConfigWithOwner(config []byte, app *ct.App, owner string, clusterKey bool) []byte {
 	var obj map[string]any
 	if len(config) == 0 {
 		obj = map[string]any{}
@@ -300,6 +313,11 @@ func provisionConfigWithApp(config []byte, app *ct.App, clusterKey bool) []byte 
 	} else {
 		delete(obj, "app")
 		delete(obj, "tenant")
+	}
+	if owner = strings.TrimSpace(owner); owner != "" {
+		obj["owner_account"] = owner
+	} else {
+		delete(obj, "owner_account")
 	}
 	out, err := json.Marshal(obj)
 	if err != nil {
