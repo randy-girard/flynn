@@ -692,9 +692,20 @@ name) on the app's current release is also allowed. A release may only
 declare service names the app owns: `$APPNAME` or `$APPNAME-*`, not a
 platform service (`controller`, `blobstore`, `acme-challenge`, ...) or a name
 another app owns. The controller rejects any other name with a validation
-error, and flynn-host refuses to start a user job that declares one. If you
-rename an app, update custom service names on its release to the new prefix
-before the next deploy. Cluster administrators
+error, and flynn-host refuses to start a user job that declares one.
+
+Renaming an app (`POST /apps/:id` with a new `name`; there is no CLI verb)
+follows the same rule. The controller refuses the rename with a 400 on
+`name` while the app's current release, or a release that still has
+processes scaled up, declares a service named after the old name
+(`$OLDNAME` or `$OLDNAME-*`): those jobs could not be restarted or carried
+into the next push under the new name. Create a new app under the new name
+instead. When no live release declares such a service (for example an app
+that was never deployed, or only runs workers), the rename goes ahead and
+the app's routes to `$OLDNAME-*` services move to `$NEWNAME-*` in the same
+transaction, so the next push is routed. Route domains are not changed: the
+old `$OLDNAME.<cluster domain>` hostname keeps pointing at the app and the
+new included hostname is created the next time the app's routes are listed (`flynn route`). Cluster administrators
 may still create routes for platform apps (dashboard, www, discovery,
 controller). TCP routes use the same ownership rule.
 

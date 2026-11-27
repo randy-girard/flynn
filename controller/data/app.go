@@ -181,12 +181,23 @@ func (r *AppRepo) Update(id string, data map[string]interface{}) (interface{}, e
 				tx.Rollback()
 				return nil, err
 			}
+			// Service names follow the app name (CORE-17, NEW-59): see
+			// app_rename.go.
+			if err := checkRename(tx, app, next); err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			prevName := app.Name
 			app.Name = next
 			if err := tx.Exec("app_update_name", app.ID, app.Name); err != nil {
 				tx.Rollback()
 				if postgres.IsUniquenessError(err, "apps_name_idx") {
 					return nil, httphelper.ObjectExistsErr(fmt.Sprintf("application %q already exists", next))
 				}
+				return nil, err
+			}
+			if err := r.moveRenamedRoutes(tx, app, prevName, next); err != nil {
+				tx.Rollback()
 				return nil, err
 			}
 		case "strategy":
