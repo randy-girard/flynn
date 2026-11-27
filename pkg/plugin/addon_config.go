@@ -89,6 +89,11 @@ func (a *AddonSpec) resolveRuntime(in CreateInput, cat dbruntime.Catalog) (strin
 	if customSet && !rt.CustomSizing {
 		return "", dbruntime.Size{}, fmt.Errorf("%s addons do not take --cpu, --memory, or --disk", a.Type)
 	}
+	// A follower with no size flags sends no runtime, so the plugin gives it
+	// the leader's runtime (NEW-27) instead of the type's default.
+	if !customSet && name == "" && strings.TrimSpace(in.Follow) != "" {
+		return "", dbruntime.Size{}, nil
+	}
 	if !customSet && name == "" {
 		name = rt.Default
 	}
