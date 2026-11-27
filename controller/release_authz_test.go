@@ -16,58 +16,61 @@ import (
 	"golang.org/x/net/context"
 )
 
-func TestCreateReleaseRejectsMissingAppIDForAppToken(t *testing.T) {
+// Migration 27 forbids a live release with no app_id (CHECK app_id IS NOT
+// NULL OR deleted_at IS NOT NULL), so POST /releases without app_id is a
+// validation error for every caller, the cluster key included (NEW-60). It
+// used to pass the cluster key through to the insert and answer 500.
+func postReleaseWithoutAppID(t *testing.T, tok *authorizer.Token, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	api := &controllerAPI{}
-	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{
-		AppID:       "app-1",
-		Permissions: []string{authz.PermAppEnvWrite},
-	}}}
 	ctx := context.WithValue(context.Background(), authz.TokenContextKey, tok)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/releases", strings.NewReader(`{"processes":{"web":{"host_network":true,"args":["web"]}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/releases", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	api.CreateRelease(ctx, rec, req)
-	if rec.Code != 403 {
-		t.Fatalf("status = %d, body = %s, want 403", rec.Code, rec.Body.String())
+	return rec
+}
+
+func assertAppIDRequired(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if rec.Code != 400 {
+		t.Fatalf("status = %d, body = %s, want 400", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "app_id is required") {
-		t.Fatalf("body = %s", rec.Body.String())
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Detail  struct {
+			Field string `json:"field"`
+		} `json:"detail"`
 	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %s: %s", rec.Body.String(), err)
+	}
+	if body.Code != "validation_error" || body.Detail.Field != "app_id" || body.Message != "app_id is required: every release belongs to an app" {
+		t.Fatalf("body = %s, want a validation_error on app_id saying app_id is required", rec.Body.String())
+	}
+}
+
+func TestCreateReleaseRejectsMissingAppIDForAppToken(t *testing.T) {
+	assertAppIDRequired(t, postReleaseWithoutAppID(t, &authorizer.Token{AppGrants: []authorizer.AppGrant{{
+		AppID:       "app-1",
+		Permissions: []string{authz.PermAppEnvWrite},
+	}}}, `{"processes":{"web":{"host_network":true,"args":["web"]}}}`))
 }
 
 func TestCreateReleaseRejectsMissingAppIDForScaleToken(t *testing.T) {
-	api := &controllerAPI{}
-	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{
+	assertAppIDRequired(t, postReleaseWithoutAppID(t, &authorizer.Token{AppGrants: []authorizer.AppGrant{{
 		AppID:       "app-1",
 		Permissions: []string{authz.PermAppScaleWrite},
-	}}}
-	ctx := context.WithValue(context.Background(), authz.TokenContextKey, tok)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/releases", strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	api.CreateRelease(ctx, rec, req)
-	if rec.Code != 403 {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
+	}}}, `{}`))
 }
 
-func TestCreateReleaseAdminMissingAppIDNotForbidden(t *testing.T) {
-	api := &controllerAPI{}
-	tok := &authorizer.Token{ClusterKey: true}
-	ctx := context.WithValue(context.Background(), authz.TokenContextKey, tok)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/releases", strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	defer func() {
-		_ = recover()
-		if rec.Code == 403 {
-			t.Fatalf("cluster key without app_id must not be forbidden, body = %s", rec.Body.String())
-		}
-	}()
-	api.CreateRelease(ctx, rec, req)
-	if rec.Code == 403 {
-		t.Fatalf("cluster key without app_id must not be forbidden, body = %s", rec.Body.String())
-	}
+func TestCreateUnscopedReleaseByClusterKey(t *testing.T) {
+	assertAppIDRequired(t, postReleaseWithoutAppID(t, &authorizer.Token{ClusterKey: true}, `{}`))
+}
+
+func TestCreateReleaseWithoutTokenOrAppID(t *testing.T) {
+	assertAppIDRequired(t, postReleaseWithoutAppID(t, nil, `{}`))
 }
 
 func TestMayCreateReleaseForApp(t *testing.T) {

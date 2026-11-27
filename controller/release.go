@@ -17,6 +17,11 @@ type releaseID struct {
 	ID string `json:"id"`
 }
 
+var errReleaseAppIDRequired = ct.ValidationError{
+	Field:   "app_id",
+	Message: "is required: every release belongs to an app",
+}
+
 func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	release := &ct.Release{}
 	if err := httphelper.DecodeJSON(req, release); err != nil {
@@ -24,39 +29,37 @@ func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter
 		return
 	}
 
-	tok := authz.TokenFromContext(ctx)
+	// Every release belongs to an app. Migration 27 forbids a live release
+	// without one, so the cluster key gets the same 400 as anyone else
+	// instead of a 500 from the insert (NEW-60).
 	if release.AppID == "" {
-		if tok == nil || !tok.HasClusterAdmin() {
-			httphelper.Forbidden(w, "app_id is required to create a release")
-			return
-		}
+		respondWithError(w, errReleaseAppIDRequired)
+		return
 	}
+	tok := authz.TokenFromContext(ctx)
 
-	var app *ct.App
-	if release.AppID != "" {
-		data, err := c.appRepo.Get(release.AppID)
-		if err != nil {
-			respondWithError(w, err)
-			return
-		}
-		app = data.(*ct.App)
-		if !mayCreateReleaseForApp(tok, app) {
-			if !authz.SystemAppAllowed(tok, app.System()) {
-				httphelper.Forbidden(w, "system apps require the cluster controller credential")
-				return
-			}
-			httphelper.Forbidden(w, "this credential is not allowed to create a release for this app")
-			return
-		}
-		if !authz.CanManageInternalProcessLimits(tok, app.ID) && !authz.CanManageInternalProcessLimits(tok, app.Name) {
-			prev, err := c.appRepo.GetRelease(app.ID)
-			if err != nil {
-				prev = nil
-			}
-			release.Processes = preserveInternalProcessTypes(release.Processes, prev)
-		}
-		sanitizeReleaseProcesses(app, release)
+	data, err := c.appRepo.Get(release.AppID)
+	if err != nil {
+		respondWithError(w, err)
+		return
 	}
+	app := data.(*ct.App)
+	if !mayCreateReleaseForApp(tok, app) {
+		if !authz.SystemAppAllowed(tok, app.System()) {
+			httphelper.Forbidden(w, "system apps require the cluster controller credential")
+			return
+		}
+		httphelper.Forbidden(w, "this credential is not allowed to create a release for this app")
+		return
+	}
+	if !authz.CanManageInternalProcessLimits(tok, app.ID) && !authz.CanManageInternalProcessLimits(tok, app.Name) {
+		prev, err := c.appRepo.GetRelease(app.ID)
+		if err != nil {
+			prev = nil
+		}
+		release.Processes = preserveInternalProcessTypes(release.Processes, prev)
+	}
+	sanitizeReleaseProcesses(app, release)
 
 	if err := schema.Validate(release); err != nil {
 		respondWithError(w, err)

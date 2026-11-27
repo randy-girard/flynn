@@ -942,7 +942,9 @@ the app name `builder` alone is never trusted. The controller strips privileged 
 from user-app releases at create and again before `PUT /apps/:id/release`
 attaches a release; a cluster-admin or controller key can still create
 privileged releases for system apps. `POST /releases` requires `app_id`
-for app-scoped tokens, and minting a release needs `app:env:write` (the
+for every caller, the cluster key included: without it the controller answers
+400 `validation_error` on `app_id` (gRPC `CreateRelease`: `InvalidArgument`),
+because a live release must belong to an app. Minting a release needs `app:env:write` (the
 Manage and Admin roles include it). `app:scale:write` alone cannot mint
 a release. `GET /apps/:id/release` and release lists stay available to any
 grant on the app, but `env` and per-process `env` are omitted unless the

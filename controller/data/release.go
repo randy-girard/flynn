@@ -87,6 +87,14 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 		release.Processes[typ] = proc
 	}
 
+	// Migration 27 forbids a live release without an app (NEW-60). Say so
+	// instead of letting the insert fail with "no rows in result set".
+	if release.AppID == "" {
+		return ct.ValidationError{
+			Field:   "app_id",
+			Message: "is required: every release belongs to an app",
+		}
+	}
 	if release.ID == "" {
 		release.ID = random.UUID()
 	}
