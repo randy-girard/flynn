@@ -937,6 +937,26 @@ cannot list the artifacts. To run it in the blobstore server, set
 flynn -a blobstore env:set LAYER_GC_INTERVAL=6h
 ```
 
+### Legacy shared slug and manifest directories
+
+Slugs and image manifests stored before they went under each app's prefix sit
+in the shared `/slugs/layers/`, `/slugs/images/` and `/tarreceive/images/`
+directories, where no `APP_QUOTA` counts them and nothing deleted them once
+their release was gone. They are not moved: an app whose current release was
+built then keeps using them where they are. `cleanup-legacy` deletes those
+that no live artifact names (as a layer or as its image manifest), that are
+older than the grace period (default `168h`) and that have no upload running.
+It lists them unless you pass `--delete`:
+
+```text
+flynn -a blobstore run /bin/flynn-blobstore cleanup-legacy
+flynn -a blobstore run /bin/flynn-blobstore cleanup-legacy --delete --grace 168h
+```
+
+It deletes nothing and exits non-zero when the controller cannot list the
+artifacts. The shared `/tarreceive/layers/` store is handled by
+`cleanup-layers` above.
+
 A blobstore upload holds no database transaction or row lock while its body
 arrives: the data goes to a new object first, and a short transaction swaps it
 in at the end. A slow or stalled uploader therefore neither blocks the next

@@ -97,6 +97,22 @@ each delete, so a layer tarreceive reuses meanwhile (it re-puts the config) is
 kept. With `LAYER_GC_INTERVAL` set (off by default) the server runs it on that
 interval with `LAYER_GC_GRACE` (default `24h`).
 
+`flynn-blobstore cleanup-legacy [--delete] [--grace=168h]` handles the legacy
+shared directories that slugs and image manifests used before they were
+stored per app: `/slugs/layers/`, `/slugs/images/` and `/tarreceive/images/`.
+Those objects count toward no `APP_QUOTA`. They are not moved (a release's
+artifact names them by URL); an object is deleted once no live artifact names
+it, as a layer or as its URI, it is older than the grace period (default 7
+days) and no upload of it is running, checked again under the upload locks
+before each delete. Without `--delete` it only lists what it would delete. Like
+`cleanup-layers` it refuses to delete anything when the controller cannot list
+the artifacts.
+
+A DELETE of `/a.b` removes `/a.b` and everything under `/a.b/`; the name, a
+`GET /?dir=` directory and the `migrate --prefix` prefix are compared as
+literal strings (no regular expression or `LIKE` pattern), so names with `.`,
+`+`, `*`, `%`, `_` and the like only match themselves.
+
 ```shell
 # create /file1.txt
 echo data | curl -u :$AUTH_KEY -X PUT --data-binary @- http://blobstore.discoverd/file1.txt
