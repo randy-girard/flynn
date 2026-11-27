@@ -192,22 +192,31 @@ start_one_cluster_node() {
 # wait_cluster_stable retries probe_live_cluster until hosts, controller, and
 # status.<domain> are healthy. Used between rolling node reloads. A third
 # argument of 1 also waits for postgres peers and for every service to be back
-# at its formation count.
+# at its formation count. It needs STABLE_HOLD_PASSES (default 3) passing
+# probes in a row, 5 s apart: a sync that is about to find its WAL recycled
+# and reseed answers healthy once before it goes down (NEW-40).
 wait_cluster_stable() {
   local label="${1:-cluster}"
   local tries="${2:-60}"
   local sirenia="${3:-}"
-  local i st=0
+  local hold="${STABLE_HOLD_PASSES:-3}"
+  local i st=0 passes=0
   for i in $(seq 1 "${tries}"); do
     set +e
     PROBE_QUICK=1 PROBE_SIRENIA="${sirenia}" PROBE_FULL_STRENGTH="${sirenia}" probe_live_cluster
     st=$?
     set -e
     if [[ "${st}" -eq 0 ]]; then
-      echo "cluster is stable after ${label}"
-      return 0
+      passes=$((passes + 1))
+      if [[ "${passes}" -ge "${hold}" ]]; then
+        echo "cluster is stable after ${label}"
+        return 0
+      fi
+      echo "cluster healthy after ${label} (${passes}/${hold} in a row)"
+    else
+      passes=0
+      echo "waiting for Flynn to settle after ${label} (${i}/${tries})"
     fi
-    echo "waiting for Flynn to settle after ${label} (${i}/${tries})"
     sleep 5
   done
   echo "cluster did not return to a stable state after ${label}" >&2

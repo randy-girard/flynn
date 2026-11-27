@@ -49,6 +49,12 @@ flynn_vagrant_reload_one() { echo "reload $1" >> "${log}"; }
 start_one_cluster_node() { echo "start $1" >> "${log}"; return "${STUB_START:-0}"; }
 probe_live_cluster() {
   echo "probe sirenia=${PROBE_SIRENIA:-} full=${PROBE_FULL_STRENGTH:-}" >> "${log}"
+  if [[ -n "${STUB_PROBE_SEQ:-}" ]]; then
+    local n seq
+    n="$(grep -c "^probe " "${log}")"
+    read -r -a seq <<< "${STUB_PROBE_SEQ}"
+    return "${seq[$((n - 1))]:-0}"
+  fi
   return "${STUB_PROBE:-0}"
 }
 probe_live_cluster_retry() { echo "probe-retry $1" >> "${log}"; }
@@ -103,6 +109,23 @@ grep -Fq 'probe sirenia=1 full=1' "${log}" \
   || fail "the preflight must check postgres peers and formation counts"
 [[ "$(grep -c '^probe ' "${log}")" -eq 2 ]] \
   || fail "the preflight must retry RELOAD_PREFLIGHT_TRIES times"
+
+# NEW-40: one passing probe is not stable. A sync that is about to find its
+# WAL recycled and reseed answers healthy once, so the gate needs
+# STABLE_HOLD_PASSES (default 3) passes in a row; a failure starts over.
+STUB_PROBE_SEQ="0 1 0 0 1 0 0 0" RELOAD_PREFLIGHT_TRIES=20 run flapping wait_cluster_stable preflight 20 1
+[[ "$(st)" -eq 0 ]] || fail "a cluster that holds healthy must pass after the flaps"
+[[ "$(grep -c '^probe ' "${log}")" -eq 8 ]] \
+  || fail "wait_cluster_stable must need 3 passes in a row (8 probes for 0 1 0 0 1 0 0 0), got $(grep -c '^probe ' "${log}")"
+STUB_PROBE_SEQ="0 1 0 1 0 1 0 1 0 1" run neverholds wait_cluster_stable reboot 10 1
+[[ "$(st)" -ne 0 ]] || fail "a cluster that never holds healthy for 3 probes must not count as stable"
+STUB_PROBE_SEQ="0 1 0 0" STABLE_HOLD_PASSES=2 run hold2 wait_cluster_stable reboot 10 1
+[[ "$(st)" -eq 0 && "$(grep -c '^probe ' "${log}")" -eq 4 ]] \
+  || fail "STABLE_HOLD_PASSES must set the passes in a row"
+# The gate before the first reboot holds too.
+STUB_PROBE_SEQ="0 1 1" RELOAD_PREFLIGHT_TRIES=3 run preflightflap reload_cluster_rolling
+[[ "$(st)" -ne 0 ]] || fail "a preflight that passed once and then failed must not reboot"
+grep -q '^reload dev-node' "${log}" && fail "no node may be rebooted on a single passing preflight probe"
 
 # The tenant app list cannot be read: no cluster node is rebooted.
 STUB_LIST=1 run nolist reload_cluster_rolling
