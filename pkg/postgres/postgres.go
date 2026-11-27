@@ -24,6 +24,7 @@ const (
 	UniqueViolation           = "23505"
 	RaiseException            = "P0001"
 	ForeignKeyViolation       = "23503"
+	ReadOnlySQLTransaction    = "25006"
 
 	// postgresReconnectBudget caps how long we retry transient discoverd/DNS
 	// failures before failing hard. Restarts normally settle sooner; callers
@@ -332,9 +333,40 @@ func (db *DB) DialHost() string {
 	return db.dialHost
 }
 
+// resetOnReadOnly drops every pooled connection when err is
+// read_only_sql_transaction (25006): the connection reached a peer that is
+// read-only now (the old primary after a failover), while a new connection
+// dials the current leader. Connections in use close when they are
+// released. Without this the pool kept writing to the old primary until the
+// connection died, about a minute after a failover (NEW-46).
+func (db *DB) resetOnReadOnly(err error) error {
+	if err != nil && db != nil && db.ConnPool != nil && IsPostgresCode(err, ReadOnlySQLTransaction) {
+		db.ConnPool.Reset()
+	}
+	return err
+}
+
+// watchRows resets the pool when rows end with a read-only error. It runs
+// before the pool releases the connection, so that one is closed too.
+func (db *DB) watchRows(rows *pgx.Rows) {
+	if rows != nil {
+		rows.AfterClose(func(r *pgx.Rows) { db.resetOnReadOnly(r.Err()) })
+	}
+}
+
 func (db *DB) Exec(query string, args ...interface{}) error {
 	_, err := db.ConnPool.Exec(query, args...)
-	return err
+	return db.resetOnReadOnly(err)
+}
+
+func (db *DB) Query(query string, args ...interface{}) (*pgx.Rows, error) {
+	rows, err := db.ConnPool.Query(query, args...)
+	if err != nil {
+		db.resetOnReadOnly(err)
+		return rows, err
+	}
+	db.watchRows(rows)
+	return rows, nil
 }
 
 func (db *DB) ExecRetry(query string, args ...interface{}) error {
@@ -347,7 +379,7 @@ func (db *DB) ExecRetry(query string, args ...interface{}) error {
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		return err
+		return db.resetOnReadOnly(err)
 	}
 }
 
@@ -356,23 +388,42 @@ type Scanner interface {
 }
 
 func (db *DB) QueryRow(query string, args ...interface{}) Scanner {
-	return rowErrFixer{db.ConnPool.QueryRow(query, args...)}
+	rows, _ := db.Query(query, args...)
+	return rowErrFixer{(*pgx.Row)(rows)}
 }
 
 func (db *DB) Begin() (*DBTx, error) {
 	tx, err := db.ConnPool.Begin()
-	return &DBTx{tx}, err
+	return &DBTx{tx, db}, err
 }
 
-type DBTx struct{ *pgx.Tx }
+type DBTx struct {
+	*pgx.Tx
+	db *DB
+}
 
 func (tx *DBTx) Exec(query string, args ...interface{}) error {
 	_, err := tx.Tx.Exec(query, args...)
-	return err
+	return tx.db.resetOnReadOnly(err)
+}
+
+func (tx *DBTx) Query(query string, args ...interface{}) (*pgx.Rows, error) {
+	rows, err := tx.Tx.Query(query, args...)
+	if err != nil {
+		tx.db.resetOnReadOnly(err)
+		return rows, err
+	}
+	tx.db.watchRows(rows)
+	return rows, nil
 }
 
 func (tx *DBTx) QueryRow(query string, args ...interface{}) Scanner {
-	return rowErrFixer{tx.Tx.QueryRow(query, args...)}
+	rows, _ := tx.Query(query, args...)
+	return rowErrFixer{(*pgx.Row)(rows)}
+}
+
+func (tx *DBTx) Commit() error {
+	return tx.db.resetOnReadOnly(tx.Tx.Commit())
 }
 
 type rowErrFixer struct {
