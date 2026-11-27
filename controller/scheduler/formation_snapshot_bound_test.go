@@ -50,8 +50,8 @@ func TestStreamFormationEventsReconnectsAndExitsWhenSnapshotNeverArrives(t *test
 	l.SetHandler(log15.DiscardHandler())
 	cc := &silentFormationController{FakeControllerClient: testutils.NewFakeControllerClient()}
 	s := NewScheduler(newTestCluster(nil), cc, newFakeDiscoverd(true), l)
-	s.formationSnapshotTimeout = 40 * time.Millisecond
-	s.formationSnapshotGiveUp = 400 * time.Millisecond
+	s.snapshotTimeout = 40 * time.Millisecond
+	s.snapshotGiveUp = 400 * time.Millisecond
 	exited := make(chan struct{})
 	var once sync.Once
 	s.exit = func() { once.Do(func() { close(exited) }) }
@@ -83,8 +83,8 @@ func TestStoppedSchedulerDoesNotExitWaitingForFormations(t *testing.T) {
 	l.SetHandler(log15.DiscardHandler())
 	cc := &silentFormationController{FakeControllerClient: testutils.NewFakeControllerClient()}
 	s := NewScheduler(newTestCluster(nil), cc, newFakeDiscoverd(true), l)
-	s.formationSnapshotTimeout = 40 * time.Millisecond
-	s.formationSnapshotGiveUp = 300 * time.Millisecond
+	s.snapshotTimeout = 40 * time.Millisecond
+	s.snapshotGiveUp = 300 * time.Millisecond
 	var exits int32
 	s.exit = func() { atomic.AddInt32(&exits, 1) }
 
@@ -109,8 +109,8 @@ func TestStoppedSchedulerDoesNotExitWaitingForFormations(t *testing.T) {
 
 func TestFormationSnapshotBoundsDefaults(t *testing.T) {
 	s := NewScheduler(nil, nil, nil, log15.New())
-	if s.formationSnapshotTimeout <= 0 || s.formationSnapshotGiveUp <= s.formationSnapshotTimeout {
-		t.Fatalf("bad defaults: timeout=%s giveUp=%s", s.formationSnapshotTimeout, s.formationSnapshotGiveUp)
+	if s.snapshotTimeout <= 0 || s.snapshotGiveUp <= s.snapshotTimeout {
+		t.Fatalf("bad defaults: timeout=%s giveUp=%s", s.snapshotTimeout, s.snapshotGiveUp)
 	}
 	if s.exit == nil {
 		t.Fatal("exit hook not set")

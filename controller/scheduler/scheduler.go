@@ -79,14 +79,14 @@ type Scheduler struct {
 
 	maxHostChecks int
 
-	// formationSnapshotTimeout bounds one formation stream connection: if
-	// the current-list marker has not arrived by then the stream is dropped
-	// and reconnected. formationSnapshotGiveUp bounds the whole wait; past
+	// snapshotTimeout bounds one formation or volume stream connection:
+	// if the current-list marker has not arrived by then the stream is
+	// dropped and reconnected. snapshotGiveUp bounds the whole wait; past
 	// it the scheduler exits (deregistering from discoverd) so another
 	// scheduler can lead. exit is the exit hook, replaced in tests.
-	formationSnapshotTimeout time.Duration
-	formationSnapshotGiveUp  time.Duration
-	exit                     func()
+	snapshotTimeout time.Duration
+	snapshotGiveUp  time.Duration
+	exit            func()
 
 	formations Formations
 	sinks      map[string]*ct.Sink
@@ -263,64 +263,64 @@ type Scheduler struct {
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {
 	return &Scheduler{
-		ControllerClient:         cc,
-		ClusterClient:            cluster,
-		discoverd:                disc,
-		logger:                   l,
-		maxHostChecks:            defaultMaxHostChecks,
-		formationSnapshotTimeout: defaultFormationSnapshotTimeout,
-		formationSnapshotGiveUp:  defaultFormationSnapshotGiveUp,
-		exit:                     func() { shutdown.ExitWithCode(1) },
-		profileReserve:           make(map[string]bool),
-		profileTags:              make(map[string]map[string]string),
-		restartsExhausted:        make(map[utils.FormationKey]Processes),
-		hosts:                    make(map[string]*Host),
-		routers:                  make(map[string]*Router),
-		jobs:                     make(map[string]*Job),
-		seenProcessTypes:         make(map[processTypeKey]struct{}),
-		downInFlight:             make(map[string]int),
-		downPersistFailed:        make(map[string]struct{}),
-		downPersistResults:       make(chan downPersistResult, eventBufferSize),
-		volumes:                  make(map[string]*Volume),
-		hostVolumeIDs:            make(map[string]map[string]struct{}),
-		volumeMisses:             make(map[string]int),
-		services:                 make(map[string]*Service),
-		routes:                   make(map[string]map[string]struct{}),
-		formations:               make(Formations),
-		sinks:                    make(map[string]*ct.Sink),
-		jobEvents:                make(chan *host.Event, eventBufferSize),
-		volumeEvents:             make(chan *VolumeEvent, eventBufferSize),
-		stop:                     make(chan struct{}),
-		syncJobs:                 make(chan struct{}, 1),
-		syncFormations:           make(chan struct{}, 1),
-		syncSinks:                make(chan struct{}, 1),
-		syncVolumes:              make(chan struct{}, 1),
-		syncHosts:                make(chan struct{}, 1),
-		hostChecks:               make(chan struct{}, 1),
-		rectifyBatch:             make(map[utils.FormationKey]struct{}),
-		rectify:                  make(chan struct{}, 1),
-		rebalanceCh:              make(chan struct{}, 1),
-		sendTelemetry:            make(chan struct{}, 1),
-		formationEvents:          make(chan *ct.ExpandedFormation, eventBufferSize),
-		hostEvents:               make(chan *discoverd.Event, eventBufferSize),
-		serviceEvents:            make(chan *discoverd.Event, eventBufferSize),
-		routerServiceEvents:      make(chan *discoverd.Event, eventBufferSize),
-		routerStreamEvents:       make(chan *RouterEvent, eventBufferSize),
-		sinkEvents:               make(chan *ct.Sink, eventBufferSize),
-		controllerPersist:        make(chan interface{}, eventBufferSize),
-		placementRequests:        make(chan *PlacementRequest, eventBufferSize),
-		internalStateRequests:    make(chan *InternalStateRequest, eventBufferSize),
-		formationlessJobs:        make(map[utils.FormationKey]map[string]*Job),
-		pause:                    make(chan struct{}),
-		resume:                   make(chan struct{}),
-		generateJobUUID:          random.UUID,
-		routerBackends:           make(map[string]*RouterBackend),
-		loopApply:                make(chan func(), eventBufferSize),
-		hostFollowInFlight:       make(map[string]struct{}),
-		volListInFlight:          make(map[string]struct{}),
-		volSnap:                  make(map[string]map[string]struct{}),
-		volSnapFailed:            make(map[string]struct{}),
-		buildStarting:            make(map[string]struct{}),
+		ControllerClient:      cc,
+		ClusterClient:         cluster,
+		discoverd:             disc,
+		logger:                l,
+		maxHostChecks:         defaultMaxHostChecks,
+		snapshotTimeout:       defaultSnapshotTimeout,
+		snapshotGiveUp:        defaultSnapshotGiveUp,
+		exit:                  func() { shutdown.ExitWithCode(1) },
+		profileReserve:        make(map[string]bool),
+		profileTags:           make(map[string]map[string]string),
+		restartsExhausted:     make(map[utils.FormationKey]Processes),
+		hosts:                 make(map[string]*Host),
+		routers:               make(map[string]*Router),
+		jobs:                  make(map[string]*Job),
+		seenProcessTypes:      make(map[processTypeKey]struct{}),
+		downInFlight:          make(map[string]int),
+		downPersistFailed:     make(map[string]struct{}),
+		downPersistResults:    make(chan downPersistResult, eventBufferSize),
+		volumes:               make(map[string]*Volume),
+		hostVolumeIDs:         make(map[string]map[string]struct{}),
+		volumeMisses:          make(map[string]int),
+		services:              make(map[string]*Service),
+		routes:                make(map[string]map[string]struct{}),
+		formations:            make(Formations),
+		sinks:                 make(map[string]*ct.Sink),
+		jobEvents:             make(chan *host.Event, eventBufferSize),
+		volumeEvents:          make(chan *VolumeEvent, eventBufferSize),
+		stop:                  make(chan struct{}),
+		syncJobs:              make(chan struct{}, 1),
+		syncFormations:        make(chan struct{}, 1),
+		syncSinks:             make(chan struct{}, 1),
+		syncVolumes:           make(chan struct{}, 1),
+		syncHosts:             make(chan struct{}, 1),
+		hostChecks:            make(chan struct{}, 1),
+		rectifyBatch:          make(map[utils.FormationKey]struct{}),
+		rectify:               make(chan struct{}, 1),
+		rebalanceCh:           make(chan struct{}, 1),
+		sendTelemetry:         make(chan struct{}, 1),
+		formationEvents:       make(chan *ct.ExpandedFormation, eventBufferSize),
+		hostEvents:            make(chan *discoverd.Event, eventBufferSize),
+		serviceEvents:         make(chan *discoverd.Event, eventBufferSize),
+		routerServiceEvents:   make(chan *discoverd.Event, eventBufferSize),
+		routerStreamEvents:    make(chan *RouterEvent, eventBufferSize),
+		sinkEvents:            make(chan *ct.Sink, eventBufferSize),
+		controllerPersist:     make(chan interface{}, eventBufferSize),
+		placementRequests:     make(chan *PlacementRequest, eventBufferSize),
+		internalStateRequests: make(chan *InternalStateRequest, eventBufferSize),
+		formationlessJobs:     make(map[utils.FormationKey]map[string]*Job),
+		pause:                 make(chan struct{}),
+		resume:                make(chan struct{}),
+		generateJobUUID:       random.UUID,
+		routerBackends:        make(map[string]*RouterBackend),
+		loopApply:             make(chan func(), eventBufferSize),
+		hostFollowInFlight:    make(map[string]struct{}),
+		volListInFlight:       make(map[string]struct{}),
+		volSnap:               make(map[string]map[string]struct{}),
+		volSnapFailed:         make(map[string]struct{}),
+		buildStarting:         make(map[string]struct{}),
 	}
 }
 
@@ -366,8 +366,8 @@ const (
 	// A healthy snapshot is one query and arrives in seconds. The
 	// controller keeps a stream whose database query hangs open with
 	// keepalives, so only a deadline notices it.
-	defaultFormationSnapshotTimeout = 90 * time.Second
-	defaultFormationSnapshotGiveUp  = 5 * time.Minute
+	defaultSnapshotTimeout = 90 * time.Second
+	defaultSnapshotGiveUp  = 5 * time.Minute
 )
 
 // formationReconnectWait is the pause before another formation-stream connect.
@@ -387,120 +387,17 @@ func formationReconnectWait(attempt int) time.Duration {
 }
 
 func (s *Scheduler) streamFormationEvents() {
-	log := s.logger.New("fn", "streamFormationEvents")
-
-	var events chan *ct.ExpandedFormation
-	var stream stream.Stream
-	var since *time.Time
-	connect := func() (err error) {
-		log.Info("connecting formation event stream")
-		events = make(chan *ct.ExpandedFormation, eventBufferSize)
-		stream, err = s.StreamFormations(since, events)
-		if err != nil {
-			log.Error("error connecting formation event stream", "err", err)
-		}
-		return
-	}
-
-	current := make(chan struct{})
-	go func() {
-		var isCurrent bool
-		attempt := 0
-		for {
-			for {
-				if err := connect(); err == nil {
-					break
-				}
-				time.Sleep(formationReconnectWait(attempt))
-				attempt++
-			}
-			// Until the current marker arrives, each connection has a
-			// deadline. A stream that stays open but never sends the
-			// snapshot is dropped and reconnected.
-			var deadline <-chan time.Time
-			var timer *time.Timer
-			if !isCurrent {
-				timer = time.NewTimer(s.formationSnapshotTimeout)
-				deadline = timer.C
-			}
-		recv:
-			for {
-				select {
-				case formation, ok := <-events:
-					if !ok {
-						break recv
-					}
-					// an empty formation indicates we now have the
-					// current list of formations.
-					if formation.App == nil {
-						if !isCurrent {
-							isCurrent = true
-							close(current)
-							deadline = nil
-						}
-						attempt = 0
-						continue
-					}
-					since = &formation.UpdatedAt
-					// if we are not current, explicitly handle the event
-					// so that the scheduler has the current list of
-					// formations before starting the main loop.
-					if !isCurrent {
-						s.HandleFormationChange(formation)
-						continue
-					}
-					s.formationEvents <- formation
-				case <-deadline:
-					deadline = nil
-					log.Warn("formation snapshot did not arrive in time, reconnecting", "timeout", s.formationSnapshotTimeout)
-					// closing the stream closes events, which ends this loop
-					stream.Close()
-				}
-			}
-			if timer != nil {
-				timer.Stop()
-			}
-			log.Warn("formation event stream disconnected", "err", stream.Err())
-			// A stream that ends before the current marker must not be
-			// retried immediately. That storm keeps the controller from
-			// finishing the snapshot, so this process never registers.
-			if !isCurrent {
-				time.Sleep(formationReconnectWait(attempt))
-				attempt++
-			}
-		}
-	}()
-
-	// wait until we have the current list of formations before
-	// starting the main scheduler loop. A scheduler that registered in
-	// discoverd but cannot get the list must not stay registered: it
-	// would be counted by rolling reloads and can be the only scheduler.
-	start := time.Now()
-	tick := time.NewTicker(30 * time.Second)
-	defer tick.Stop()
-	giveUp := time.NewTimer(s.formationSnapshotGiveUp)
-	defer giveUp.Stop()
-	for {
-		select {
-		case <-current:
-			return
-		case <-s.stop:
-			// a stopped scheduler is leaving anyway; exiting the
-			// process here would end whatever else runs in it
-			return
-		case <-tick.C:
-			log.Warn("still waiting for current formation list", "duration", time.Since(start))
-		case <-giveUp.C:
-			log.Crit("no current formation list, exiting so another scheduler can take over", "duration", time.Since(start))
-			s.exit()
-			// exit may return in tests; keep waiting only if it did
-			select {
-			case <-current:
-				return
-			case <-time.After(time.Hour):
-			}
-		}
-	}
+	followSnapshotStream(s, s.logger.New("fn", "streamFormationEvents"), snapshotStream[*ct.ExpandedFormation]{
+		name: "formation",
+		connect: func(since *time.Time, ch chan *ct.ExpandedFormation) (stream.Stream, error) {
+			return s.StreamFormations(since, ch)
+		},
+		// an empty formation indicates we now have the current list
+		isMarker:  func(f *ct.ExpandedFormation) bool { return f.App == nil },
+		updatedAt: func(f *ct.ExpandedFormation) *time.Time { return &f.UpdatedAt },
+		initial:   s.HandleFormationChange,
+		deliver:   func(f *ct.ExpandedFormation) { s.formationEvents <- f },
+	})
 }
 
 func (s *Scheduler) streamHostEvents() {
@@ -565,71 +462,18 @@ func (s *Scheduler) streamHostEvents() {
 }
 
 func (s *Scheduler) streamVolumeEvents() {
-	log := s.logger.New("fn", "streamVolumeEvents")
-
-	var events chan *ct.Volume
-	var stream stream.Stream
-	var since *time.Time
-	connect := func() (err error) {
-		log.Info("connecting volume event stream")
-		events = make(chan *ct.Volume, eventBufferSize)
-		stream, err = s.StreamVolumes(since, events)
-		if err != nil {
-			log.Error("error connecting volume event stream", "err", err)
-		}
-		return
+	event := func(v *ct.Volume) *VolumeEvent {
+		return &VolumeEvent{Type: VolumeEventTypeController, Volume: &Volume{Volume: *v}}
 	}
-
-	current := make(chan struct{})
-	go func() {
-		var isCurrent bool
-		for {
-			for {
-				if err := connect(); err == nil {
-					break
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-			for volume := range events {
-				// a volume without an ID indicates we now have
-				// the current list of volumes.
-				if volume.ID == "" {
-					if !isCurrent {
-						isCurrent = true
-						close(current)
-					}
-					continue
-				}
-				event := &VolumeEvent{
-					Type:   VolumeEventTypeController,
-					Volume: &Volume{Volume: *volume},
-				}
-				since = volume.UpdatedAt
-				// if we are not current, explicitly handle the event
-				// so that the scheduler has the current list of
-				// volumes before starting the main loop.
-				if !isCurrent {
-					s.HandleVolumeEvent(event)
-					continue
-				}
-				s.volumeEvents <- event
-			}
-			log.Warn("volume event stream disconnected", "err", stream.Err())
-		}
-	}()
-
-	// wait until we have the current list of volumes before
-	// starting the main scheduler loop
-	start := time.Now()
-	tick := time.Tick(30 * time.Second)
-	for {
-		select {
-		case <-current:
-			return
-		case <-tick:
-			log.Warn("still waiting for current volume list", "duration", time.Since(start))
-		}
-	}
+	followSnapshotStream(s, s.logger.New("fn", "streamVolumeEvents"), snapshotStream[*ct.Volume]{
+		name:    "volume",
+		connect: s.StreamVolumes,
+		// a volume without an ID indicates we now have the current list
+		isMarker:  func(v *ct.Volume) bool { return v.ID == "" },
+		updatedAt: func(v *ct.Volume) *time.Time { return v.UpdatedAt },
+		initial:   func(v *ct.Volume) { s.HandleVolumeEvent(event(v)) },
+		deliver:   func(v *ct.Volume) { s.volumeEvents <- event(v) },
+	})
 }
 
 func (s *Scheduler) streamRouterEvents() {
