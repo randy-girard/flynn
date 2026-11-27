@@ -55,7 +55,7 @@ func runPluginCommand(name string, args []string) error {
 
 	// pg:psql pg-harbor-kxmnpq selects that instance. The token is not part of
 	// the docopt usage, so redis-cli PING stays a redis argument.
-	resourceName, args := peelResourceName(name, args)
+	resourceName, args := peelResourceNameFor(spec.DocoptUsage(), name, args)
 
 	// DocoptUsage lists colon form first (canonical) and space form as a
 	// fallback. Flynn still passes argv as ["pg", "psql"] after expanding
@@ -78,6 +78,52 @@ func runPluginCommand(name string, args []string) error {
 		parsed.String["<name>"] = resourceName
 	}
 	return executePluginCLI(client, spec, parsed, args)
+}
+
+// peelResourceNameFor is peelResourceName unless the plugin's usage gives
+// the verb a leading resource operand (mysql:follow <resource>): docopt then
+// needs the token and the action reads it from <resource>.
+func peelResourceNameFor(usage, command string, args []string) (string, []string) {
+	if len(args) > 0 && usageTakesResourceOperand(usage, command, args[0]) {
+		return "", args
+	}
+	return peelResourceName(command, args)
+}
+
+// usageTakesResourceOperand is true when a usage line (not an example) for
+// <command>:<verb> starts with <resource>, <follower> or <primary>.
+func usageTakesResourceOperand(usage, command, verb string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
+	verb = strings.ToLower(strings.TrimSpace(verb))
+	if command == "" || verb == "" || strings.HasPrefix(verb, "-") {
+		return false
+	}
+	for _, line := range strings.Split(usage, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && strings.EqualFold(fields[0], "usage:") {
+			fields = fields[1:]
+		}
+		if len(fields) < 3 || fields[0] != "flynn" {
+			continue
+		}
+		rest := fields[1:]
+		switch {
+		case strings.EqualFold(rest[0], command+":"+verb):
+			rest = rest[1:]
+		case len(rest) > 2 && strings.EqualFold(rest[0], command) && strings.EqualFold(rest[1], verb):
+			rest = rest[2:]
+		default:
+			continue
+		}
+		if len(rest) == 0 {
+			continue
+		}
+		switch rest[0] {
+		case "<resource>", "<follower>", "<primary>":
+			return true
+		}
+	}
+	return false
 }
 
 // peelResourceName removes one full resource app name (redis-kelp-20218,

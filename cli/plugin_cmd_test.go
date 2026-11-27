@@ -1425,3 +1425,28 @@ func TestOwnedMaintenanceWithoutPluginKeyNamesFlynnHost(t *testing.T) {
 		}
 	}
 }
+
+// DATA-57 / NEW-10: mysql:follow's usage has <resource>, so peeling the
+// instance name out left docopt with no operand and it printed the usage.
+// pg:follow and redis:follow have no positional and still peel.
+func TestPeelResourceNameKeepsFollowOperand(t *testing.T) {
+	mysqlUsage := "usage: flynn mysql:follow <resource> [--runtime <name>] [--auto-failover]\n       flynn mysql:wait <resource>\n"
+	name, rest := peelResourceNameFor(mysqlUsage, "mysql", []string{"follow", "mysql-gorge-85967"})
+	if name != "" || strings.Join(rest, " ") != "follow mysql-gorge-85967" {
+		t.Fatalf("mysql:follow must keep <resource>: name %q rest %#v", name, rest)
+	}
+	parsed, err := docopt.Parse(mysqlUsage, append([]string{"mysql:follow"}, rest[1:]...), true, "", false)
+	if err != nil || parsed.String["<resource>"] != "mysql-gorge-85967" {
+		t.Fatalf("docopt must get <resource>: %#v %v", parsed, err)
+	}
+	redisUsage := "usage: flynn redis:follow [--runtime <name>] [--auto-failover]\n"
+	name, rest = peelResourceNameFor(redisUsage, "redis", []string{"follow", "redis-kelp-20218"})
+	if name != "redis-kelp-20218" || strings.Join(rest, " ") != "follow" {
+		t.Fatalf("redis:follow has no positional and still peels: name %q rest %#v", name, rest)
+	}
+	// An example line ($ flynn ...) is not the usage.
+	name, _ = peelResourceNameFor("usage: flynn redis:follow [--runtime <name>]\n\n  $ flynn redis:follow <resource> --runtime perf-l\n", "redis", []string{"follow", "redis-kelp-20218"})
+	if name != "redis-kelp-20218" {
+		t.Fatalf("examples must not count as usage: %q", name)
+	}
+}
