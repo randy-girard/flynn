@@ -5,6 +5,9 @@
 # that listens on a port, so worker-only apps are left out) and exits non-zero
 # when discoverd or any host cannot be read. TENANT_APPS pins
 # that list so wait still covers apps whose jobs died with the host.
+# TENANT_APPS_PINNED=1 pins it even when it is empty: an app created after
+# the snapshot (part-way through a reload) is not waited for. Without it an
+# empty TENANT_APPS lists the apps now (a snapshot that could not be taken).
 # A pinned app that has no route any more (deleted while the snapshot was
 # taken: the router fails TLS for its hostname and answers HTTP with 404) is
 # dropped after GONE_TRIES consecutive rounds instead of timing out the wait.
@@ -137,7 +140,7 @@ def no_route(app, ip=None):
 
 pinned = [a for a in os.environ.get("TENANT_APPS", "").split() if a]
 list_only = os.environ.get("LIST_ONLY") == "1"
-if pinned:
+if pinned or (os.environ.get("TENANT_APPS_PINNED") == "1" and not list_only):
     apps = pinned
 else:
     try:

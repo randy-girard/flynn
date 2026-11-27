@@ -28,6 +28,7 @@ printf '%s' "${code}"
 exit 0
 SH
 chmod +x "${tmp}/bin/curl"
+cp "${tmp}/bin/curl" "${tmp}/curl.codes"
 echo '{"env":{}}' > "${tmp}/host.json"
 
 run() {
@@ -178,5 +179,29 @@ fi
 if list_with no-hosts; then
   fail "LIST_ONLY must fail when discoverd lists no hosts"
 fi
+
+# TENANT_APPS_PINNED=1 with an empty TENANT_APPS is the pre-reload snapshot
+# of a cluster with no tenant HTTP apps (NEW-50). The wait must not list the
+# apps again: app-one appeared part-way through the reload and is not
+# serving (503), so a re-list would wait for it and fail the reload.
+wait_with() { # wait_with <pinned> : the fake lists app-one, which answers 503
+  local pid st=0
+  cp "${tmp}/curl.codes" "${tmp}/bin/curl"
+  rm -f "${port_file}"
+  python3 "${tmp}/fake.py" "${port_file}" ok &
+  pid=$!
+  for _ in $(seq 1 50); do [[ -s "${port_file}" ]] && break; sleep 0.1; done
+  DISCOVERD_URL="http://127.0.0.1:$(cat "${port_file}")" TENANT_APPS="" TENANT_APPS_PINNED="$1" \
+    STUB_app_one_https=503 run || st=$?
+  kill "${pid}" 2>/dev/null || true
+  wait "${pid}" 2>/dev/null || true
+  return "${st}"
+}
+wait_with 1 || fail "an empty pinned list must pass without listing the apps again"
+grep -Fxq "no tenant HTTP apps to wait for" "${tmp}/out" || fail "an empty pinned list must say there is nothing to wait for"
+if wait_with 0; then
+  fail "an unpinned empty list must list the apps and wait for app-one"
+fi
+grep -Fq "tenant HTTP still down: app-one=503" "${tmp}/out" || fail "the unpinned wait must report app-one"
 
 echo "wait-tenant-http ok"

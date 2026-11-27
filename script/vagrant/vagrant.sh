@@ -234,15 +234,19 @@ list_tenant_apps() {
   run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} LIST_ONLY=1 script/vagrant/guest/wait-tenant-http.sh"
 }
 
+# wait_tenant_http <label> <apps> <pinned>: pinned=1 waits for exactly
+# <apps> (the pre-reload snapshot, even when empty); pinned=0 lists the
+# tenant apps again on the node (the snapshot could not be taken).
 wait_tenant_http() {
   local label="${1:-cluster}"
   local apps="${2:-}"
+  local pinned="${3:-0}"
   local node domain ip
   node="${FLYNN_VAGRANT_NODE_PREFIX}1"
   domain="$(flynn_vagrant_cluster_domain)"
   ip="$(flynn_vagrant_cluster_ip)"
   echo "waiting for tenant HTTP after ${label}"
-  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} TENANT_APPS=$(printf '%q' "${apps}") TRIES=60 script/vagrant/guest/wait-tenant-http.sh"
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} TENANT_APPS=$(printf '%q' "${apps}") TENANT_APPS_PINNED=${pinned} TRIES=60 script/vagrant/guest/wait-tenant-http.sh"
 }
 
 # reload_preflight runs before the first cluster node is rebooted. A
@@ -316,14 +320,18 @@ reload_cluster_rolling() {
     fi
   done
   local i=0 n="${#nodes[@]}" st=0
-  local TENANT_APPS="" apps=""
+  local TENANT_APPS="" TENANT_APPS_PINNED=0 apps=""
   # Check before any reboot, the builder included: booting it first only
   # delays the check and lets a degraded cluster drift further.
   # bash 3.2 + set -u: empty "${arr[@]}" is unbound (make vagrant-reload VM=dev-node2).
   if [[ ${#nodes[@]} -gt 0 ]]; then
     RELOAD_STRICT=1
     reload_preflight
-    if ! apps="$(list_tenant_apps)"; then
+    if apps="$(list_tenant_apps)"; then
+      # Pinned even when empty: an app created part-way through the roll
+      # was not serving before it and is not waited for (NEW-50).
+      TENANT_APPS_PINNED=1
+    else
       if [[ "${RELOAD_STRICT}" == "1" ]]; then
         echo "not rebooting any cluster node: could not list tenant apps before the reload" >&2
         exit 1
@@ -360,7 +368,7 @@ reload_cluster_rolling() {
     # 180 tries: a rebooted postgres peer may need a full basebackup before
     # the primary reports a caught-up sync again.
     wait_cluster_stable "${name}" 180 1
-    wait_tenant_http "${name}" "${TENANT_APPS}"
+    wait_tenant_http "${name}" "${TENANT_APPS}" "${TENANT_APPS_PINNED}"
   done
 }
 

@@ -76,7 +76,7 @@ run_as_root_on() {
 run_as_root() { echo "builder $1" >> "${log}"; }
 halt_builder() { echo "halt-builder" >> "${log}"; }
 update_running_cluster() { echo "update-nodes" >> "${log}"; }
-wait_tenant_http() { echo "tenant $1 [$2]" >> "${log}"; }
+wait_tenant_http() { echo "tenant $1 [$2] pinned=${3:-0}" >> "${log}"; }
 '"${fns}"'
 "$@"
 ' _ "${log}" "$@" > "${tmp}/out" 2>&1
@@ -145,14 +145,20 @@ first_node="$(grep -n '^reload ' "${log}" | head -1 | cut -d: -f1)"
 grep -Fxq "reload dev-builder" "${log}" || fail "the builder must still be rebooted"
 for n in 1 2 3; do
   grep -Fxq "reload dev-node${n}" "${log}" || fail "dev-node${n} must be rebooted"
-  grep -Fxq "tenant dev-node${n} [app-one app-two]" "${log}" \
+  grep -Fxq "tenant dev-node${n} [app-one app-two] pinned=1" "${log}" \
     || fail "tenant wait after dev-node${n} must use the pre-crash list"
 done
 
-# No tenant apps (empty list, listing succeeded) is not an error.
+# No tenant apps (empty list, listing succeeded) is not an error, and the
+# empty list is pinned too (NEW-50): an app created part-way through the
+# roll (another agent's app with a route and no web job yet) must not be
+# picked up by a re-list after a node and fail the reload.
 run empty reload_cluster_rolling
 [[ "$(st)" -eq 0 ]] || fail "an empty tenant app list must not fail the reload"
-grep -Fxq "tenant dev-node1 []" "${log}" || fail "empty list must still wait (re-list) after each node"
+for n in 1 2 3; do
+  grep -Fxq "tenant dev-node${n} [] pinned=1" "${log}" \
+    || fail "an empty pre-reload list must be pinned after dev-node${n}, not re-listed"
+done
 
 # Not bootstrapped yet: there is nothing to protect, so no gate; the
 # tenant list is best effort (it cannot be read without host.json).
@@ -182,6 +188,8 @@ FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT=1 STUB_LIST=1 run override reload_cluster_ro
 [[ "$(st)" -eq 0 ]] || fail "FLYNN_VAGRANT_RELOAD_SKIP_PREFLIGHT=1 must reboot without the gate"
 [[ "$(grep -v '^reload dev-builder' "${log}" | sed -n 2p)" == "reload dev-node1" ]] \
   || fail "the override must skip the preflight probe"
+grep -Fxq "tenant dev-node1 [] pinned=0" "${log}" \
+  || fail "a list that could not be read must not be pinned (the wait re-lists)"
 
 # Builder-only reload (VM=dev-builder) needs no live cluster.
 STUB_TARGETS=dev-builder STUB_PROBE=1 run builderonly reload_cluster_rolling
