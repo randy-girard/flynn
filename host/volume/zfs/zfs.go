@@ -380,6 +380,12 @@ func (p *Provider) destroy(vol *zfsVolume) error {
 			time.Sleep(1 * time.Second)
 			err = vol.dataset.Destroy(zfs.DestroyForceUmount)
 		}
+		if isDatasetNotExistsError(err) {
+			// Already gone (removed by hand, or by an earlier attempt
+			// that died before the record was dropped): drop the record
+			// so the destroy is idempotent (NEW-35).
+			err = nil
+		}
 		if err != nil {
 			// DestroyForceUmount / the explicit Unmount above can leave the
 			// dataset unmounted while still busy. Put the mount back so
