@@ -1644,6 +1644,14 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 			expires_at timestamptz NOT NULL
 		)`,
 	)
+
+	// Volume capacity in bytes, the ZFS refquota the host gave the volume
+	// (NEW-28). 0 means unknown: rows from before 103 until the scheduler
+	// re-persists them from the host listing, and legacy host volumes that
+	// were created without a size (uncapped).
+	migrations.Add(103,
+		`ALTER TABLE volumes ADD COLUMN size bigint NOT NULL DEFAULT 0`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

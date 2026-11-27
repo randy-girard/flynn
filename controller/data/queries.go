@@ -1042,31 +1042,33 @@ INSERT INTO sinks (sink_id, kind, config, app_id) VALUES ($1, $2, $3, $4) RETURN
 	sinkDeleteQuery = `
 UPDATE sinks SET deleted_at = now() WHERE sink_id = $1 AND deleted_at IS NULL`
 	volumeListQuery = `
-SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at FROM volumes ORDER BY updated_at DESC`
+SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, size, created_at, updated_at, decommissioned_at FROM volumes ORDER BY updated_at DESC`
 	volumeAppListQuery = `
-SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at FROM volumes WHERE app_id = $1 ORDER BY updated_at DESC`
+SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, size, created_at, updated_at, decommissioned_at FROM volumes WHERE app_id = $1 ORDER BY updated_at DESC`
 	volumeListSinceQuery = `
-SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at FROM volumes WHERE updated_at >= $1 ORDER BY updated_at DESC`
+SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, size, created_at, updated_at, decommissioned_at FROM volumes WHERE updated_at >= $1 ORDER BY updated_at DESC`
 	volumeSelectQuery = `
-SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at FROM volumes WHERE app_id = $1 AND volume_id = $2`
+SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, size, created_at, updated_at, decommissioned_at FROM volumes WHERE app_id = $1 AND volume_id = $2`
 	// The scheduler persists state through this upsert. destroyed is final,
 	// so a late "created" from a stale scheduler view cannot bring a
-	// destroyed row back.
+	// destroyed row back. A size of 0 (unknown) never clears a stored one,
+	// and a known size backfills rows from before migration 103.
 	volumeInsertQuery = `
-INSERT INTO volumes (volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO volumes (volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, size) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (volume_id) DO UPDATE SET job_id = $7,
   state = CASE WHEN volumes.state = 'destroyed' THEN volumes.state ELSE EXCLUDED.state END,
+  size = CASE WHEN EXCLUDED.size > 0 THEN EXCLUDED.size ELSE volumes.size END,
   updated_at = now()
 RETURNING created_at, updated_at`
 	volumeDecommissionAppQuery = `
 UPDATE volumes SET updated_at = now(), decommissioned_at = now()
 WHERE app_id = $1 AND decommissioned_at IS NULL AND state <> 'destroyed'
-RETURNING volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at`
+RETURNING volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, size, created_at, updated_at, decommissioned_at`
 	// Volumes of apps deleted more than $1 seconds ago that were never
 	// decommissioned (apps deleted before NEW-35, or kept volumes once the
 	// keep-volumes meta is gone). Apps with keep-volumes stay out.
 	volumeListOrphanedQuery = `
-SELECT v.volume_id, v.host_id, v.type, v.state, v.app_id, v.release_id, v.job_id, v.job_type, v.path, v.delete_on_stop, v.meta, v.created_at, v.updated_at, v.decommissioned_at
+SELECT v.volume_id, v.host_id, v.type, v.state, v.app_id, v.release_id, v.job_id, v.job_type, v.path, v.delete_on_stop, v.meta, v.size, v.created_at, v.updated_at, v.decommissioned_at
 FROM volumes v JOIN apps a ON a.app_id = v.app_id
 WHERE a.deleted_at IS NOT NULL AND a.deleted_at <= now() - ($1::bigint * interval '1 second')
   AND COALESCE(a.meta->>'flynn-controller.keep-volumes', '') <> 'true'

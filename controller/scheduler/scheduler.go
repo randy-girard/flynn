@@ -2273,7 +2273,8 @@ outer:
 		for _, vol := range req.Volumes {
 			if vol.GetState() == ct.VolumeStatePending {
 				log.Info("creating new volume", "host.id", req.Host.ID, "vol.id", vol.ID, "vol.path", vol.Path)
-				if err := req.Host.client.CreateVolume("default", vol.Info()); err != nil {
+				info := vol.Info()
+				if err := req.Host.client.CreateVolume("default", info); err != nil {
 					log.Error("error creating new volume", "vol.id", vol.ID, "err", err)
 					// HostID was stored before the create. Leaving a pending
 					// volume in place makes the retry pin this host forever.
@@ -2285,7 +2286,13 @@ outer:
 					continue outer
 				}
 				created := vol
+				// The host answers with the size it gave the volume (its
+				// default when the request had none); persist that (NEW-28).
+				hostSize := info.Size
 				s.onLoop(func() {
+					if hostSize > 0 {
+						created.Size = hostSize
+					}
 					created.SetState(ct.VolumeStateCreated)
 					s.persistVolume(created)
 				})

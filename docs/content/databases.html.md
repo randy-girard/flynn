@@ -131,6 +131,13 @@ has room for the leader's data. Members added by `mongodb:scale`, `kafka:scale`,
 `clickhouse:scale` get the resource's size. A volume with no size gets the
 host default, 20 GiB.
 
+The controller records each volume's size (`size`, bytes, on `GET /volumes`
+and `GET /apps/:id/volumes`), and `flynn volume`, `flynn volume:show` and
+`flynn-host volume:list` print it. Volumes recorded before the controller
+stored sizes are filled in from the host when the scheduler next follows
+that host (for example after `flynn-host update`). A legacy volume created
+without a refquota stays at 0 and prints `-`.
+
 Changing a definition does not resize instances already created from it.
 There is no in-place resize; provision a new resource to get a new size.
 Volumes that already exist keep their size, including instances created

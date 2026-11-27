@@ -40,6 +40,7 @@ func (r *VolumeRepo) Add(vol *ct.Volume) error {
 		vol.Path,
 		vol.DeleteOnStop,
 		vol.Meta,
+		vol.Size,
 	).Scan(&vol.CreatedAt, &vol.UpdatedAt)
 	if err != nil {
 		tx.Rollback()
@@ -73,6 +74,7 @@ func scanVolume(s postgres.Scanner) (*ct.Volume, error) {
 		&vol.Path,
 		&vol.DeleteOnStop,
 		&vol.Meta,
+		&vol.Size,
 		&vol.CreatedAt,
 		&vol.UpdatedAt,
 		&vol.DecommissionedAt,

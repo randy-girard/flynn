@@ -257,6 +257,9 @@ func (c *FakeHostClient) CreateVolume(providerID string, info *volume.Info) erro
 		}
 	}
 	info.ID = random.UUID()
+	// Like flynn-host, answer with the size the volume got: the request's,
+	// or the default refquota.
+	info.Size = volume.RefquotaBytes(info)
 	c.volumes[info.ID] = info
 	return nil
 }
