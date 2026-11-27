@@ -663,6 +663,10 @@ fetch for it (the manifest URI, the layer URL template, each layer's URL,
 and any `layer_url.*` override). Each must be a plain
 `http://blobstore.discoverd` URL in the app's own prefix or the shared
 tarreceive layer store, because hosts fetch layers with the cluster key.
+A host adds that key only to requests for `blobstore.discoverd`, and not to
+one it reaches by following a redirect from another host, so an artifact URL
+elsewhere that redirects to the blobstore gets `401`; a redirect out of the
+blobstore (to a signed S3 or GCS URL) does not carry the key either.
 The cluster key is not limited. Neither a cache
 token nor a build token may send `Blobstore-Copy-From` (the copy source is not
 authorized separately, so it would read any object); such a PUT is `403`. Only

@@ -417,8 +417,25 @@ func IsBlobstoreURL(u *url.URL) bool {
 }
 
 // Transport injects blobstore credentials on requests to blobstore.discoverd.
+// A request that an http.Client created by following a redirect gets the key
+// only when every earlier request in its chain was to the blobstore too
+// (NEW-48): an artifact URL on another host that redirects to
+// blobstore.discoverd must not read blobs with the cluster key. The key is
+// added per request, never copied, so a redirect out of the blobstore (to a
+// presigned S3/GCS URL, say) does not carry it either.
 type Transport struct {
 	Base http.RoundTripper
+}
+
+// redirectedFromElsewhere reports whether req was created by following a
+// redirect from a request that was not to the blobstore.
+func redirectedFromElsewhere(req *http.Request) bool {
+	for res := req.Response; res != nil && res.Request != nil; res = res.Request.Response {
+		if !IsBlobstoreURL(res.Request.URL) {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -426,7 +443,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	if req != nil && IsBlobstoreURL(req.URL) {
+	if req != nil && IsBlobstoreURL(req.URL) && !redirectedFromElsewhere(req) {
 		req = req.Clone(req.Context())
 		Apply(req)
 	}
