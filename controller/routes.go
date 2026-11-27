@@ -281,6 +281,9 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 		respondWithError(w, err)
 		return
 	}
+	if tok := authz.TokenFromContext(ctx); authz.HasACMEIssue(tok) && !tok.HasClusterAdmin() {
+		route = acmeIssueRouteUpdate(existing, &route)
+	}
 	app := c.getApp(ctx)
 	if data.IsIncludedHTTPRoute(existing, app, c.appRepo.DefaultDomain()) {
 		if incoming := strings.TrimSpace(route.Domain); incoming != "" && !strings.EqualFold(incoming, existing.Domain) {
@@ -437,4 +440,23 @@ func (c *controllerAPI) DeleteRoute(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 	w.WriteHeader(200)
+}
+
+// acmeIssueRouteUpdate is the route an acme:issue PUT may write: the
+// stored route with only HTTPS turned on or off. The token may set or clear
+// managed_certificate_domain and clear a static certificate when it turns
+// HTTPS on. Every other field in the body is ignored (NEW-30).
+func acmeIssueRouteUpdate(existing, incoming *router.Route) router.Route {
+	out := *existing
+	out.ManagedCertificateDomain = incoming.ManagedCertificateDomain
+	if incoming.ManagedCertificateDomain != nil {
+		if incoming.Certificate == nil {
+			out.Certificate = nil
+		}
+		if incoming.LegacyTLSCert == "" && incoming.LegacyTLSKey == "" {
+			out.LegacyTLSCert = ""
+			out.LegacyTLSKey = ""
+		}
+	}
+	return out
 }

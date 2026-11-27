@@ -196,6 +196,11 @@ func (r Requirement) Allows(tok *authorizer.Token, appRef string, resolve func(r
 	case rkBuildArtifact:
 		return hasScopedBuildArtifact(tok)
 	case rkAnyAuth:
+		// The ACME token reaches only the rows that name its scope, not
+		// the read-only cluster catalogs (NEW-30).
+		if hasScope(tok, ScopeACMEIssue) {
+			return r.hasScope(ScopeACMEIssue)
+		}
 		return true
 	case rkCreateRelease:
 		return hasAnyReleaseWrite(tok)
@@ -375,4 +380,13 @@ func (t *RouteTable) Each(fn func(method, pattern string, req Requirement)) {
 			fn(m, row.pattern, row.req)
 		}
 	}
+}
+
+func (r Requirement) hasScope(scope string) bool {
+	for _, s := range r.scopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
 }

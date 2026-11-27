@@ -789,8 +789,14 @@ Until that release is deployed, a billing process that still has
 
 Router route sync stays on the cluster key in the router release. Certificate
 issuance runs in the letsencrypt plugin. Scope `acme:issue` (`ACME_TOKEN`)
-may list and update managed certificates, read `GET /acme/config`, list apps
-and routes, and create or change routes. `GET /routes` (paged or not) gives
+reaches six routes and nothing else: `GET /managed-certificates` (list and
+stream), `PUT /managed-certificates/:id`, `GET /acme/config`, `GET /apps`,
+`GET /routes`, and `PUT /apps/:app/routes/:type/:id`. That route `PUT` only
+turns HTTPS on or off: the controller keeps every field of the stored route
+except `managed_certificate_domain`, and the static certificate it clears
+when HTTPS goes on. The token cannot create, delete or read single routes,
+and it does not get the read-only cluster catalogs (hosts, providers,
+runtimes) other credentials see. `GET /routes` (paged or not) gives
 it the routes of every app its `GET /apps` returns, whatever the owner, and
 hides bootstrap system apps. A system app's routes stay closed to it by id
 too. It may not read release env, change a formation, or `PUT /acme/config`. Install strips `CONTROLLER_KEY` and the

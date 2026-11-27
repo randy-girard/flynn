@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
@@ -376,8 +377,11 @@ func TestACMEIssueScopeIsNotClusterAdmin(t *testing.T) {
 	if !httpAllowed(tok, http.MethodGet, "/managed-certificates") || !httpAllowed(tok, http.MethodPut, "/managed-certificates/cert-1") {
 		t.Fatal("acme:issue must list and update managed certificates")
 	}
-	if !httpAllowed(tok, http.MethodGet, "/acme/config") || !httpAllowed(tok, http.MethodPost, "/apps/app-a/routes") || !httpAllowed(tok, http.MethodDelete, "/apps/app-a/routes/http/r1") {
-		t.Fatal("acme:issue must read ACME config and update routes")
+	if !httpAllowed(tok, http.MethodGet, "/acme/config") || !httpAllowed(tok, http.MethodPut, "/apps/app-a/routes/http/r1") {
+		t.Fatal("acme:issue must read ACME config and update a route")
+	}
+	if httpAllowed(tok, http.MethodPost, "/apps/app-a/routes") || httpAllowed(tok, http.MethodDelete, "/apps/app-a/routes/http/r1") {
+		t.Fatal("acme:issue must not create or delete routes (NEW-30)")
 	}
 	if httpAllowed(tok, http.MethodPut, "/acme/config") || httpAllowed(tok, http.MethodPut, "/apps/app-a/formation") || httpAllowed(tok, http.MethodGet, "/apps/app-a/release") {
 		t.Fatal("acme:issue must not change ACME config, formations, or release env")
@@ -572,5 +576,47 @@ func TestRouteAuthzResolvesPathRefToID(t *testing.T) {
 	legacy := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: victim, Permissions: []string{"app:write"}}}}
 	if httpAllowedResolved(legacy, http.MethodGet, "/apps/"+victim+"/releases", resolve) {
 		t.Error("a grant keyed by another app's id must not cover the victim app")
+	}
+}
+
+// acmeIssueRoutes is every route the acme:issue token needs: the
+// letsencrypt plugin lists apps and routes and turns HTTPS on with a route
+// PUT; the ACME worker (router/acme) lists, streams and updates managed
+// certificates and reads the ACME config.
+var acmeIssueRoutes = map[string]bool{
+	"GET /apps":   true,
+	"GET /routes": true,
+	"PUT /apps/:apps_id/routes/:routes_type/:routes_id": true,
+	"GET /managed-certificates":                         true,
+	"PUT /managed-certificates/:managed_certificate_id": true,
+	"GET /acme/config":                                  true,
+}
+
+// TestACMEIssueReachesOnlyItsRoutes walks every registered route: the
+// acme:issue token gets in on exactly acmeIssueRoutes and nowhere else
+// (NEW-30).
+func TestACMEIssueReachesOnlyItsRoutes(t *testing.T) {
+	tok := &authorizer.Token{UserID: "acme", Scopes: []string{authz.ScopeACMEIssue}}
+	seen := map[string]bool{}
+	for _, r := range registeredTestRoutes(t).routes {
+		key := r.Method + " " + r.Pattern
+		if r.Req.IsPublic() {
+			continue
+		}
+		for _, path := range expandPattern(r.Pattern) {
+			if strings.HasPrefix(path, "/apps/controller") {
+				continue
+			}
+			got := httpAllowed(tok, r.Method, path)
+			if got != acmeIssueRoutes[key] {
+				t.Errorf("acme:issue %s %s = %v, want %v", r.Method, path, got, acmeIssueRoutes[key])
+			}
+		}
+		seen[key] = true
+	}
+	for key := range acmeIssueRoutes {
+		if !seen[key] {
+			t.Errorf("%s is not a registered route", key)
+		}
 	}
 }

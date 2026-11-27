@@ -23,7 +23,6 @@ import (
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/attempt"
 	"github.com/randy-girard/flynn/pkg/stream"
-	router "github.com/randy-girard/flynn/router/types"
 )
 
 // DefaultDirectoryURL is the default ACME directory URL (Let's Encrypt production)
@@ -33,15 +32,13 @@ const DefaultDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
 const StagingDirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
 // ControllerClient is an interface that provides streaming and updating of managed
-// certificates, and the creation and deletion of routes
+// certificates. The acme:issue token reaches no route API (NEW-30)
 type ControllerClient interface {
 	StreamManagedCertificates(since *time.Time, output chan *ct.ManagedCertificate) (stream.Stream, error)
 	UpdateManagedCertificate(cert *ct.ManagedCertificate) error
 	ListExpiringManagedCertificates(before time.Time) ([]*ct.ManagedCertificate, error)
 	ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error)
 	ListPendingManagedCertificates() ([]*ct.ManagedCertificate, error)
-	CreateRoute(appID string, route *router.Route) error
-	DeleteRoute(appID string, routeID string) error
 }
 
 // controllerClientWrapper wraps a controller.Client to implement ControllerClient
@@ -67,14 +64,6 @@ func (w *controllerClientWrapper) ListFailedManagedCertificates() ([]*ct.Managed
 
 func (w *controllerClientWrapper) ListPendingManagedCertificates() ([]*ct.ManagedCertificate, error) {
 	return w.client.ListPendingManagedCertificates()
-}
-
-func (w *controllerClientWrapper) CreateRoute(appID string, route *router.Route) error {
-	return w.client.CreateRoute(appID, route)
-}
-
-func (w *controllerClientWrapper) DeleteRoute(appID string, routeID string) error {
-	return w.client.DeleteRoute(appID, routeID)
 }
 
 // ACME manages ACME accounts and starts services for handling certificate issuance

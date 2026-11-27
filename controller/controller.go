@@ -601,11 +601,13 @@ func registerRoutes(rt *routeTable, api *controllerAPI, ping func() error) {
 	rt.DELETE("/apps/:apps_id/plugin-addons/:addon_type", authz.App(authz.PermAppResourcesWrite), httphelper.WrapHandler(api.appLookup(api.DeletePluginAddon)))
 
 	rt.GET("/routes", authz.UserSession().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.GetRouteList))
-	rt.POST("/apps/:apps_id/routes", authz.App(authz.PermAppRoutesWrite).Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.appLookup(api.CreateRoute)))
-	rt.GET("/apps/:apps_id/routes", authz.App(authz.PermAppRoutesRead).Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.appLookup(api.GetAppRouteList)))
-	rt.GET("/apps/:apps_id/routes/:routes_type/:routes_id", authz.App(authz.PermAppRoutesRead).Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.appLookup(api.GetRoute)))
+	rt.POST("/apps/:apps_id/routes", authz.App(authz.PermAppRoutesWrite), httphelper.WrapHandler(api.appLookup(api.CreateRoute)))
+	rt.GET("/apps/:apps_id/routes", authz.App(authz.PermAppRoutesRead), httphelper.WrapHandler(api.appLookup(api.GetAppRouteList)))
+	rt.GET("/apps/:apps_id/routes/:routes_type/:routes_id", authz.App(authz.PermAppRoutesRead), httphelper.WrapHandler(api.appLookup(api.GetRoute)))
+	// acme:issue (the letsencrypt plugin) may only turn HTTPS on or off with
+	// this PUT; UpdateRoute keeps every other field (NEW-30).
 	rt.PUT("/apps/:apps_id/routes/:routes_type/:routes_id", authz.App(authz.PermAppRoutesWrite).Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.appLookup(api.UpdateRoute)))
-	rt.DELETE("/apps/:apps_id/routes/:routes_type/:routes_id", authz.App(authz.PermAppRoutesWrite).Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.appLookup(api.DeleteRoute)))
+	rt.DELETE("/apps/:apps_id/routes/:routes_type/:routes_id", authz.App(authz.PermAppRoutesWrite), httphelper.WrapHandler(api.appLookup(api.DeleteRoute)))
 
 	rt.POST("/apps/:apps_id/meta", authz.App(authz.PermAppWrite), httphelper.WrapHandler(api.appLookup(api.UpdateApp)))
 	// The build lease (EDGE-09) is gitreceive's and flynn-receiver's with the
@@ -632,7 +634,7 @@ func registerRoutes(rt *routeTable, api *controllerAPI, ping func() error) {
 	rt.DELETE("/sinks/:sink_id", authz.ClusterOnly(), httphelper.WrapHandler(api.DeleteSink))
 
 	rt.GET("/managed-certificates", authz.ClusterOnly().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.GetManagedCertificates))
-	rt.GET("/managed-certificates/:managed_certificate_id", authz.ClusterOnly().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.GetManagedCertificate))
+	rt.GET("/managed-certificates/:managed_certificate_id", authz.ClusterOnly(), httphelper.WrapHandler(api.GetManagedCertificate))
 	rt.PUT("/managed-certificates/:managed_certificate_id", authz.ClusterOnly().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.UpdateManagedCertificate))
 
 	rt.GET("/acme/config", authz.ClusterOnly().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.GetACMEConfig))

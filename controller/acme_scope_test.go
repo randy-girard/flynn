@@ -112,3 +112,65 @@ func (s *S) TestACMEIssueTokenSeesUserAppRoutes(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(got.ManagedCertificateDomain, IsNil)
 }
+
+// TestACMEIssueTokenOnlyTogglesHTTPS is NEW-30: the acme:issue token may
+// turn HTTPS on for a tenant route with a PUT, but the PUT keeps every
+// field other than the certificate ones, and the token cannot create or
+// delete routes or read the cluster catalogs.
+func (s *S) TestACMEIssueTokenOnlyTogglesHTTPS(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "new30-tenant-app", OwnerAccount: "user:new30-tenant"})
+	rt := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: "new30.example.com", Service: "new30-tenant-app-web"}).ToRoute())
+	now := time.Now()
+	raw, err := s.tokenSigner.Sign(&api.AccessToken{
+		UserId:     "acme",
+		UserEmail:  "acme@flynn.local",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(15 * time.Minute)),
+		Scopes:     []string{authz.ScopeACMEIssue},
+	})
+	c.Assert(err, IsNil)
+
+	acmeRepo := data.NewACMEConfigRepo(s.hc.db)
+	prev, err := acmeRepo.Get()
+	c.Assert(err, IsNil)
+	enabled := *prev
+	enabled.Enabled = true
+	c.Assert(acmeRepo.Update(&enabled), IsNil)
+	defer func() { c.Assert(acmeRepo.Update(prev), IsNil) }()
+
+	client, err := controller.NewClientWithToken(s.srv.URL, raw)
+	c.Assert(err, IsNil)
+	got, err := s.c.GetRoute(app.ID, "http/"+rt.ID)
+	c.Assert(err, IsNil)
+	domain := got.Domain
+	got.ManagedCertificateDomain = &domain
+	got.Service = "new30-tenant-app-other"
+	got.Sticky = true
+	c.Assert(client.UpdateRoute(app.Name, "http/"+rt.ID, got), IsNil)
+	after, err := s.c.GetRoute(app.ID, "http/"+rt.ID)
+	c.Assert(err, IsNil)
+	c.Assert(after.ManagedCertificateDomain, NotNil)
+	c.Assert(*after.ManagedCertificateDomain, Equals, domain)
+	c.Assert(after.Service, Equals, "new30-tenant-app-web")
+	c.Assert(after.Sticky, Equals, false)
+
+	// Turning HTTPS off is the other change it may make.
+	after.ManagedCertificateDomain = nil
+	c.Assert(client.UpdateRoute(app.Name, "http/"+rt.ID, after), IsNil)
+	off, err := s.c.GetRoute(app.ID, "http/"+rt.ID)
+	c.Assert(err, IsNil)
+	c.Assert(off.ManagedCertificateDomain, IsNil)
+
+	for _, req := range [][3]string{
+		{http.MethodPost, "/apps/" + app.ID + "/routes", `{"type":"http","domain":"new30-extra.example.com","service":"attacker-web"}`},
+		{http.MethodDelete, "/apps/" + app.ID + "/routes/http/" + rt.ID, ""},
+		{http.MethodGet, "/apps/" + app.ID + "/routes/http/" + rt.ID, ""},
+		{http.MethodGet, "/hosts", ""},
+		{http.MethodGet, "/providers", ""},
+	} {
+		code, _ := s.scopedStatus(c, req[0], raw, req[1], req[2])
+		c.Assert(code, Equals, http.StatusForbidden, Commentf("%s %s", req[0], req[1]))
+	}
+	_, err = s.c.GetRoute(app.ID, "http/"+rt.ID)
+	c.Assert(err, IsNil)
+}

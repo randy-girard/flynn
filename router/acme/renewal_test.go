@@ -8,7 +8,6 @@ import (
 	"github.com/inconshreveable/log15"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/stream"
-	router "github.com/randy-girard/flynn/router/types"
 )
 
 type stubStream struct{}
@@ -70,9 +69,6 @@ func (c *stubController) ListPendingManagedCertificates() ([]*ct.ManagedCertific
 	defer c.mu.Unlock()
 	return c.pending, c.listPendingErr
 }
-
-func (c *stubController) CreateRoute(string, *router.Route) error { return nil }
-func (c *stubController) DeleteRoute(string, string) error        { return nil }
 
 func (c *stubController) waitStream(t *testing.T) chan *ct.ManagedCertificate {
 	t.Helper()
