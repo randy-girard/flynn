@@ -111,7 +111,11 @@ Scaling down first moves the instance's `CLICKHOUSE_URL` host
 node ids, then runs `SYSTEM SYNC DATABASE
 REPLICA` and `SYSTEM SYNC REPLICA` on the remaining nodes so they fetch every
 part the drained node holds. If they do not catch up within 10 minutes the
-scale-down stops with an error and the drained node keeps running. Only then
+scale-down stops with an error and the drained node is put back in
+discoverd, so it serves again and a retry sees every node (the same happens
+when the leadership cannot move; a node started before this plugin release
+cannot be put back and stays drained until `clickhouse:maintenance` or a
+restart of its job). The error text is shown by `clickhouse:scale`. Only then
 is the node removed from the Keeper voters: if it is the Keeper leader, it
 hands the leadership to another node first, and the node is stopped only after
 a remaining node leads exactly the remaining voters. Its replicas are dropped
