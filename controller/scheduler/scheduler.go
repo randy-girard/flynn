@@ -113,10 +113,16 @@ type Scheduler struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 
-	syncJobs              chan struct{}
-	syncFormations        chan struct{}
-	syncSinks             chan struct{}
-	syncVolumes           chan struct{}
+	syncJobs       chan struct{}
+	syncFormations chan struct{}
+	syncSinks      chan struct{}
+	syncVolumes    chan struct{}
+
+	// volumeReaps tracks in-flight host destroys of decommissioned
+	// volumes; volumeReaping holds their IDs so a pass does not start a
+	// second destroy of the same volume (volume_reap.go).
+	volumeReaps           sync.WaitGroup
+	volumeReaping         map[string]struct{}
 	syncHosts             chan struct{}
 	hostChecks            chan struct{}
 	rectify               chan struct{}
@@ -1138,6 +1144,9 @@ func (s *Scheduler) SyncVolumes() {
 
 	// ensure we know about all decommissioned volumes
 	s.importControllerVolumes()
+
+	// destroy decommissioned volumes no job holds any more (NEW-35)
+	s.reapDecommissionedVolumes(time.Now())
 }
 
 func (s *Scheduler) SyncHosts() (err error) {

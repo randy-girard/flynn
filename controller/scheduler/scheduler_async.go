@@ -544,6 +544,7 @@ func (s *Scheduler) applyVolumeFetch(fetch volumeFetch) {
 	if fetch.fetchedControl {
 		s.applyControllerVolumeList(fetch.controller, fetch.controllerErr)
 	}
+	s.reapDecommissionedVolumes(time.Now())
 	s.finishVolumeSync(stale)
 }
 

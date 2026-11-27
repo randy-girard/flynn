@@ -10,6 +10,7 @@ import (
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/host/volume"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/stream"
 )
@@ -53,7 +54,11 @@ type FakeHostClient struct {
 	OnGetStatus      func()
 	OnAddJob         func(*host.Job)
 	OnCreateVolume   func() error
-	AddJobErr        error
+	// OnDestroyVolume, when set, can fail a DestroyVolume.
+	OnDestroyVolume func(id string) error
+	AddJobErr       error
+
+	destroyed []string
 }
 
 func (c *FakeHostClient) ID() string { return c.hostID }
@@ -292,6 +297,38 @@ func (c *FakeHostClient) ListVolumes() ([]*volume.Info, error) {
 		c.OnListVolumes()
 	}
 	return out, nil
+}
+
+// DestroyVolume removes the volume, or returns the host's 404 when it does
+// not exist.
+func (c *FakeHostClient) DestroyVolume(id string) error {
+	if c.OnDestroyVolume != nil {
+		if err := c.OnDestroyVolume(id); err != nil {
+			return err
+		}
+	}
+	c.jobsMtx.Lock()
+	defer c.jobsMtx.Unlock()
+	if _, ok := c.volumes[id]; !ok {
+		return httphelper.JSONError{Code: httphelper.ObjectNotFoundErrorCode, Message: fmt.Sprintf("no volume with id %q", id)}
+	}
+	delete(c.volumes, id)
+	c.destroyed = append(c.destroyed, id)
+	return nil
+}
+
+// DestroyedVolumes lists the volumes DestroyVolume removed, in order.
+func (c *FakeHostClient) DestroyedVolumes() []string {
+	c.jobsMtx.RLock()
+	defer c.jobsMtx.RUnlock()
+	return append([]string(nil), c.destroyed...)
+}
+
+// RemoveVolume drops a volume as if it was destroyed out of band.
+func (c *FakeHostClient) RemoveVolume(id string) {
+	c.jobsMtx.Lock()
+	defer c.jobsMtx.Unlock()
+	delete(c.volumes, id)
 }
 
 func (c *FakeHostClient) StreamVolumes(ch chan *volume.Event) (stream.Stream, error) {

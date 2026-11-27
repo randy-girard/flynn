@@ -348,6 +348,7 @@ type HostClient interface {
 	ListActiveJobs() (map[string]host.ActiveJob, error)
 	StreamEvents(id string, ch chan *host.Event) (stream.Stream, error)
 	ListVolumes() ([]*volume.Info, error)
+	DestroyVolume(id string) error
 	StreamVolumes(ch chan *volume.Event) (stream.Stream, error)
 	GetStatus() (*host.HostStatus, error)
 	GetStats() (*host.HostResourceStats, error)
