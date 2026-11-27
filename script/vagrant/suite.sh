@@ -546,6 +546,9 @@ SMOKE_UNIT_PACKAGES=(
   ./updater/
 )
 
+# Database-free controller tests of the route authz table (CORE-15).
+SMOKE_ROUTE_AUTHZ_TESTS='^(TestRouteAuthz|TestEveryRouteHasExplicitRequirement|TestRoutesRegisterOnlyThroughTheTable|TestACMEIssue|TestRegionRouteAuth|TestDefaultAppRolesHTTP|TestAppScopedToken|TestBuildLockIsClusterOnly)'
+
 RESULT_NAMES=()
 RESULT_STATUS=()
 RESULT_SECONDS=()
@@ -3076,6 +3079,22 @@ step_host_unit_tests() {
       failed=1
     fi
   done
+
+  # Route authz lives in the controller package (each route declares its
+  # requirement where it is registered). Its table tests need no database;
+  # the gocheck suite (Test) does, so it is not run here.
+  echo "==> go test ./controller/ -run ${SMOKE_ROUTE_AUTHZ_TESTS}"
+  start="$(date +%s)"
+  # shellcheck disable=SC2086
+  if go test -mod=vendor -count=1 ${FLYNN_GO_TEST_FLAGS:-} -run "${SMOKE_ROUTE_AUTHZ_TESTS}" ./controller/; then
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "go" "./controller/ route authz" "PASS" "${elapsed}s"
+  else
+    rc=$?
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "go" "./controller/ route authz" "FAIL" "exit ${rc} ${elapsed}s"
+    failed=1
+  fi
 
   echo "==> go test test/apps/upgrade-smoke"
   start="$(date +%s)"

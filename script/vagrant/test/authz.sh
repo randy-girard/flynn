@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 smoke="${ROOT}/script/vagrant/suite.sh"
 authz="${ROOT}/controller/authz/http_test.go"
+routes="${ROOT}/controller/route_authz_test.go"
 pgapi="${ROOT}/appliance/postgresql/cmd/flynn-postgres-api/main_test.go"
 httphelper="${ROOT}/pkg/httphelper/response_writer_test.go"
 
@@ -25,15 +26,19 @@ need "${smoke}" './appliance/postgresql/cmd/flynn-postgres-api/' \
   "host unit gate must run postgres-api quoteIdent/REVOKE CONNECT tests"
 need "${smoke}" './pkg/httphelper/' \
   "host unit gate must run httphelper SetContext (token stashed for appLookup)"
-need "${authz}" 'TestHTTPAllowed' \
-  "authz must keep HTTPAllowed table tests"
-need "${authz}" 'app_write_cannot_psql_controller' \
+need "${smoke}" 'SMOKE_ROUTE_AUTHZ_TESTS=.*TestRouteAuthz.*TestEveryRouteHasExplicitRequirement' \
+  "host unit gate must run the controller route authz table tests"
+need "${smoke}" 'run "\$\{SMOKE_ROUTE_AUTHZ_TESTS\}" \./controller/' \
+  "host unit gate must run the route authz tests in ./controller/"
+need "${routes}" 'TestRouteAuthzCases' \
+  "controller must keep the route authz case table"
+need "${routes}" 'app_write_cannot_psql_controller' \
   "authz must deny flynn run / pg psql on controller for app-scoped tokens"
-need "${authz}" 'app_write_cannot_psql_blobstore' \
+need "${routes}" 'app_write_cannot_psql_blobstore' \
   "authz must deny flynn run / pg psql on blobstore for app-scoped tokens"
-need "${authz}" 'app_write_cannot_psql_router' \
+need "${routes}" 'app_write_cannot_psql_router' \
   "authz must deny flynn run / pg psql on router for app-scoped tokens"
-need "${authz}" 'cluster_key_can_psql_controller' \
+need "${routes}" 'cluster_key_can_psql_controller' \
   "cluster key must still open controller jobs (pg psql)"
 need "${authz}" 'TestSystemAppAllowed' \
   "appLookup UUID path must keep SystemAppAllowed tests"
