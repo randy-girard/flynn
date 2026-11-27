@@ -148,6 +148,36 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 	return tx.Commit()
 }
 
+// followersFirst orders resources that follow a leader (a FLYNN_<ENGINE>_LEADER
+// key) before the others. A datastore plugin refuses to remove a primary
+// while its follower exists, so an app with both must deprovision the
+// follower first (CORE-57). The order is otherwise kept.
+func followersFirst(resources []*ct.Resource) []*ct.Resource {
+	follows := func(r *ct.Resource) bool {
+		if r == nil {
+			return false
+		}
+		for k, v := range r.Env {
+			if strings.HasPrefix(k, "FLYNN_") && strings.HasSuffix(k, "_LEADER") && strings.TrimSpace(v) != "" {
+				return true
+			}
+		}
+		return false
+	}
+	out := make([]*ct.Resource, 0, len(resources))
+	for _, r := range resources {
+		if follows(r) {
+			out = append(out, r)
+		}
+	}
+	for _, r := range resources {
+		if !follows(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // deleteResources deprovisions the resources only this app uses. A resource
 // another app is attached to stays; the app row deletion detaches it.
 func (c *context) deleteResources(log log15.Logger, a *ct.AppDeletion) error {
@@ -157,6 +187,7 @@ func (c *context) deleteResources(log log15.Logger, a *ct.AppDeletion) error {
 		log.Error("error getting app resources", "err", err)
 		return err
 	}
+	resources = followersFirst(resources)
 	for _, resource := range resources {
 		if len(resource.Apps) > 1 {
 			continue
