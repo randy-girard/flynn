@@ -200,7 +200,7 @@ func ResolveCommand(name string, args []string) (string, []string, string) {
 	if name == "" {
 		return name, args, ""
 	}
-	name, args = clihelp.RewriteHelpList(name, args)
+	name, args = RewriteHelpList(name, args)
 	if len(args) >= 2 {
 		if subs, ok := subAliases[name+":"+args[0]]; ok {
 			if target, ok := subs[args[1]]; ok {
@@ -249,4 +249,15 @@ func PrintCommandRename(from, to string) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "flynn-host %s is now flynn-host %s\n", from, to)
+}
+
+// RewriteHelpList maps noun:help to noun --help and an unregistered
+// noun:list to noun (clihelp.RewriteHelpList). A registered command such as
+// user:list or region:list keeps its name: rewriting it ran the parent and
+// printed its help instead of the list.
+func RewriteHelpList(name string, args []string) (string, []string) {
+	if strings.HasSuffix(name, ":list") && commands[name] != nil {
+		return name, args
+	}
+	return clihelp.RewriteHelpList(name, args)
 }

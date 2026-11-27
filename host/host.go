@@ -29,7 +29,6 @@ import (
 	volumeapi "github.com/randy-girard/flynn/host/volume/api"
 	volumemanager "github.com/randy-girard/flynn/host/volume/manager"
 	zfsVolume "github.com/randy-girard/flynn/host/volume/zfs"
-	"github.com/randy-girard/flynn/pkg/clihelp"
 	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/controllerkey"
 	"github.com/randy-girard/flynn/pkg/instanceport"
@@ -109,7 +108,7 @@ Options:
 	cmd := args.String["<command>"]
 	cmdArgs := cliutil.List(args, "<args>")
 	globalHelp := args != nil && (args.Bool["--help"] || args.Bool["-h"])
-	cmd, cmdArgs = clihelp.RewriteHelpList(cmd, cmdArgs)
+	cmd, cmdArgs = cli.RewriteHelpList(cmd, cmdArgs)
 
 	if cmd == "" || (cmd == "help" && len(cmdArgs) == 0) {
 		fmt.Print(cli.RootHelp())
