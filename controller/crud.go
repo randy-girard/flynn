@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -23,15 +22,15 @@ type Remover interface {
 	Remove(string) error
 }
 
-func crud(r *httprouter.Router, resource string, example interface{}, repo Repository) {
+func crud(r *routeTable, resource string, example interface{}, repo Repository) {
 	crudRegister(r, resource, example, repo, true)
 }
 
-func crudNoCreate(r *httprouter.Router, resource string, example interface{}, repo Repository) {
+func crudNoCreate(r *routeTable, resource string, example interface{}, repo Repository) {
 	crudRegister(r, resource, example, repo, false)
 }
 
-func crudRegister(r *httprouter.Router, resource string, example interface{}, repo Repository, create bool) {
+func crudRegister(r *routeTable, resource string, example interface{}, repo Repository, create bool) {
 	resourceType := reflect.TypeOf(example)
 	prefix := "/" + resource
 

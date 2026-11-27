@@ -17,7 +17,6 @@ import (
 	"github.com/flynn/que-go"
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
 	"github.com/inconshreveable/log15"
-	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/data"
@@ -257,223 +256,9 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 
 	shutdown.BeforeExit(api.Shutdown)
 
-	httpRouter := httprouter.New()
-
-	crud(httpRouter, "apps", ct.App{}, appRepo)
-	crudNoCreate(httpRouter, "releases", ct.Release{}, releaseRepo)
-	crud(httpRouter, "providers", ct.Provider{}, providerRepo)
-	crud(httpRouter, "artifacts", ct.Artifact{}, artifactRepo)
-
-	httpRouter.Handler("GET", status.Path, status.Handler(func() status.Status {
-		if err := c.db.Exec("ping"); err != nil {
-			return status.Unhealthy
-		}
-		return status.Healthy
-	}))
-
-	httpRouter.GET("/ca-cert", httphelper.WrapHandler(api.GetCACert))
-	httpRouter.GET("/.well-known/oauth-authorization-server", httphelper.WrapHandler(api.OAuthMetadata))
-	httpRouter.GET("/oauth/authorize", httphelper.WrapHandler(api.OAuthAuthorize))
-	httpRouter.POST("/oauth/authorize", httphelper.WrapHandler(api.OAuthAuthorize))
-	httpRouter.POST("/oauth/token", httphelper.WrapHandler(api.OAuthToken))
-	httpRouter.GET("/oauth/audiences", httphelper.WrapHandler(api.OAuthAudiences))
-
-	httpRouter.GET("/backup", httphelper.WrapHandler(api.GetBackup))
-
-	httpRouter.PUT("/domain", httphelper.WrapHandler(api.MigrateDomain))
-
-	httpRouter.POST("/apps/:apps_id", httphelper.WrapHandler(api.UpdateApp))
-	httpRouter.GET("/apps/:apps_id/log", httphelper.WrapHandler(api.appLookup(api.AppLog)))
-	httpRouter.DELETE("/apps/:apps_id", httphelper.WrapHandler(api.appLookup(api.DeleteApp)))
-	httpRouter.DELETE("/apps/:apps_id/releases/:releases_id", httphelper.WrapHandler(api.appLookup(api.DeleteRelease)))
-	httpRouter.POST("/apps/:apps_id/gc", httphelper.WrapHandler(api.appLookup(api.ScheduleAppGarbageCollection)))
-
-	httpRouter.PUT("/apps/:apps_id/formations/:releases_id", httphelper.WrapHandler(api.appLookup(api.PutFormation)))
-	httpRouter.GET("/apps/:apps_id/formations/:releases_id", httphelper.WrapHandler(api.appLookup(api.GetFormation)))
-	httpRouter.DELETE("/apps/:apps_id/formations/:releases_id", httphelper.WrapHandler(api.appLookup(api.DeleteFormation)))
-	httpRouter.GET("/apps/:apps_id/formations", httphelper.WrapHandler(api.appLookup(api.ListFormations)))
-	httpRouter.GET("/formations", httphelper.WrapHandler(api.GetFormations))
-
-	httpRouter.PUT("/apps/:apps_id/scale/:releases_id", httphelper.WrapHandler(api.appLookup(api.PutScaleRequest)))
-
-	httpRouter.POST("/apps/:apps_id/jobs", httphelper.WrapHandler(api.appLookup(api.RunJob)))
-	httpRouter.POST("/apps/:apps_id/builds", httphelper.WrapHandler(api.appLookup(api.CreateBuild)))
-	httpRouter.GET("/apps/:apps_id/builds/:jobs_id/spec", httphelper.WrapHandler(api.appLookup(api.GetBuildSpec)))
-	httpRouter.POST("/apps/:apps_id/builds/:jobs_id/token", httphelper.WrapHandler(api.appLookup(api.MintBuildToken)))
-	httpRouter.GET("/builds/pending", httphelper.WrapHandler(api.ListPendingBuilds))
-	httpRouter.GET("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.GetJob))
-	httpRouter.PUT("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.PutJob))
-	httpRouter.GET("/apps/:apps_id/jobs/:jobs_id/output", httphelper.WrapHandler(api.appLookup(api.GetJobOutput)))
-	httpRouter.GET("/apps/:apps_id/jobs", httphelper.WrapHandler(api.appLookup(api.ListJobs)))
-	httpRouter.DELETE("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.appLookup(api.KillJob)))
-	httpRouter.GET("/apps/:apps_id/releases/:releases_id/output", httphelper.WrapHandler(api.appLookup(api.GetReleaseOutput)))
-	httpRouter.PUT("/apps/:apps_id/releases/:releases_id/output", httphelper.WrapHandler(api.appLookup(api.PutReleaseOutput)))
-	httpRouter.GET("/active-jobs", httphelper.WrapHandler(api.ListActiveJobs))
-
-	httpRouter.POST("/apps/:apps_id/deploy", httphelper.WrapHandler(api.appLookup(api.CreateDeployment)))
-	httpRouter.GET("/apps/:apps_id/deployments", httphelper.WrapHandler(api.appLookup(api.ListDeployments)))
-	httpRouter.GET("/deployments/:deployment_id", httphelper.WrapHandler(api.GetDeployment))
-
-	httpRouter.PUT("/apps/:apps_id/release", httphelper.WrapHandler(api.appLookup(api.SetAppRelease)))
-	httpRouter.GET("/apps/:apps_id/release", httphelper.WrapHandler(api.appLookup(api.GetAppRelease)))
-	httpRouter.GET("/apps/:apps_id/releases", httphelper.WrapHandler(api.appLookup(api.GetAppReleases)))
-	httpRouter.POST("/releases", httphelper.WrapHandler(api.CreateRelease))
-
-	httpRouter.GET("/resources", httphelper.WrapHandler(api.GetResources))
-	httpRouter.GET("/plugin-catalog", httphelper.WrapHandler(api.GetPluginCatalog))
-	httpRouter.PUT("/providers/:providers_id", httphelper.WrapHandler(api.UpdateProvider))
-	httpRouter.POST("/providers/:providers_id/resources", httphelper.WrapHandler(api.ProvisionResource))
-	httpRouter.GET("/providers/:providers_id/resources", httphelper.WrapHandler(api.GetProviderResources))
-	httpRouter.GET("/providers/:providers_id/resources/:resources_id", httphelper.WrapHandler(api.GetResource))
-	httpRouter.PUT("/providers/:providers_id/resources/:resources_id", httphelper.WrapHandler(api.PutResource))
-	httpRouter.DELETE("/providers/:providers_id/resources/:resources_id", httphelper.WrapHandler(api.DeleteResource))
-	httpRouter.PUT("/providers/:providers_id/resources/:resources_id/apps/:app_id", httphelper.WrapHandler(api.AddResourceApp))
-	httpRouter.DELETE("/providers/:providers_id/resources/:resources_id/apps/:app_id", httphelper.WrapHandler(api.DeleteResourceApp))
-	httpRouter.GET("/apps/:apps_id/resources", httphelper.WrapHandler(api.appLookup(api.GetAppResources)))
-	httpRouter.GET("/apps/:apps_id/plugin-addons", httphelper.WrapHandler(api.appLookup(api.GetPluginAddons)))
-	httpRouter.PUT("/apps/:apps_id/plugin-addons/:addon_type", httphelper.WrapHandler(api.appLookup(api.PutPluginAddon)))
-	httpRouter.DELETE("/apps/:apps_id/plugin-addons/:addon_type", httphelper.WrapHandler(api.appLookup(api.DeletePluginAddon)))
-
-	httpRouter.GET("/routes", httphelper.WrapHandler(api.GetRouteList))
-	httpRouter.POST("/apps/:apps_id/routes", httphelper.WrapHandler(api.appLookup(api.CreateRoute)))
-	httpRouter.GET("/apps/:apps_id/routes", httphelper.WrapHandler(api.appLookup(api.GetAppRouteList)))
-	httpRouter.GET("/apps/:apps_id/routes/:routes_type/:routes_id", httphelper.WrapHandler(api.appLookup(api.GetRoute)))
-	httpRouter.PUT("/apps/:apps_id/routes/:routes_type/:routes_id", httphelper.WrapHandler(api.appLookup(api.UpdateRoute)))
-	httpRouter.DELETE("/apps/:apps_id/routes/:routes_type/:routes_id", httphelper.WrapHandler(api.appLookup(api.DeleteRoute)))
-
-	httpRouter.POST("/apps/:apps_id/meta", httphelper.WrapHandler(api.appLookup(api.UpdateApp)))
-	httpRouter.PUT("/apps/:apps_id/build-lock", httphelper.WrapHandler(api.appLookup(api.AcquireBuildLock)))
-	httpRouter.DELETE("/apps/:apps_id/build-lock/:holder", httphelper.WrapHandler(api.appLookup(api.ReleaseBuildLock)))
-	httpRouter.PUT("/build-locks/:key", httphelper.WrapHandler(api.AcquireKeyedBuildLock))
-	httpRouter.DELETE("/build-locks/:key/:holder", httphelper.WrapHandler(api.ReleaseKeyedBuildLock))
-
-	httpRouter.GET("/events", httphelper.WrapHandler(api.Events))
-	httpRouter.GET("/events/:id", httphelper.WrapHandler(api.GetEvent))
-	httpRouter.POST("/apps/:apps_id/scheduler-events", httphelper.WrapHandler(api.appLookup(api.CreateSchedulerEvent)))
-	httpRouter.POST("/apps/:apps_id/job-restart-events", httphelper.WrapHandler(api.appLookup(api.CreateJobRestartEvent)))
-
-	httpRouter.GET("/volumes", httphelper.WrapHandler(api.GetVolumes))
-	httpRouter.PUT("/volumes/:volume_id", httphelper.WrapHandler(api.PutVolume))
-	httpRouter.GET("/apps/:apps_id/volumes", httphelper.WrapHandler(api.appLookup(api.GetAppVolumes)))
-	httpRouter.GET("/apps/:apps_id/volumes/:volume_id", httphelper.WrapHandler(api.appLookup(api.GetVolume)))
-	httpRouter.PUT("/apps/:apps_id/volumes/:volume_id/decommission", httphelper.WrapHandler(api.appLookup(api.DecommissionVolume)))
-
-	httpRouter.POST("/sinks", httphelper.WrapHandler(api.CreateSink))
-	httpRouter.GET("/sinks", httphelper.WrapHandler(api.GetSinks))
-	httpRouter.GET("/sinks/:sink_id", httphelper.WrapHandler(api.GetSink))
-	httpRouter.DELETE("/sinks/:sink_id", httphelper.WrapHandler(api.DeleteSink))
-
-	httpRouter.GET("/managed-certificates", httphelper.WrapHandler(api.GetManagedCertificates))
-	httpRouter.GET("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.GetManagedCertificate))
-	httpRouter.PUT("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.UpdateManagedCertificate))
-
-	httpRouter.GET("/acme/config", httphelper.WrapHandler(api.GetACMEConfig))
-	httpRouter.PUT("/acme/config", httphelper.WrapHandler(api.UpdateACMEConfig))
-
-	httpRouter.GET("/db-runtimes", httphelper.WrapHandler(api.ListDBRuntimes))
-	httpRouter.POST("/db-runtimes", httphelper.WrapHandler(api.CreateDBRuntime))
-	httpRouter.PUT("/db-runtimes", httphelper.WrapHandler(api.ReplaceDBRuntimes))
-	httpRouter.PUT("/db-runtimes/:engine/:name", httphelper.WrapHandler(api.UpdateDBRuntime))
-	httpRouter.DELETE("/db-runtimes/:engine/:name", httphelper.WrapHandler(api.DeleteDBRuntime))
-	httpRouter.PUT("/cluster/db-runtime-settings", httphelper.WrapHandler(api.UpdateDBRuntimeSettings))
-
-	httpRouter.GET("/runtimes", httphelper.WrapHandler(api.ListRuntimeProfiles))
-	httpRouter.POST("/runtimes", httphelper.WrapHandler(api.CreateRuntimeProfile))
-	httpRouter.GET("/runtimes/:runtimes_id", httphelper.WrapHandler(api.GetRuntimeProfile))
-	httpRouter.PUT("/runtimes/:runtimes_id", httphelper.WrapHandler(api.UpdateRuntimeProfile))
-	httpRouter.DELETE("/runtimes/:runtimes_id", httphelper.WrapHandler(api.DeleteRuntimeProfile))
-	httpRouter.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
-	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
-	httpRouter.GET("/cluster/app-domain", httphelper.WrapHandler(api.GetAppDomain))
-	httpRouter.PUT("/cluster/app-domain", httphelper.WrapHandler(api.PutAppDomain))
-	httpRouter.GET("/cluster/region", httphelper.WrapHandler(api.GetClusterRegion))
-	httpRouter.PUT("/cluster/region", httphelper.WrapHandler(api.PutClusterRegion))
-	httpRouter.GET("/cluster/regions", httphelper.WrapHandler(api.GetClusterRegions))
-	httpRouter.POST("/cluster/regions", httphelper.WrapHandler(api.PostClusterRegion))
-	httpRouter.DELETE("/cluster/regions/:region", httphelper.WrapHandler(api.DeleteClusterRegion))
-	httpRouter.GET("/cluster/postgres-availability", httphelper.WrapHandler(api.GetPostgresAvailability))
-	httpRouter.PUT("/cluster/postgres-availability", httphelper.WrapHandler(api.PutPostgresAvailability))
-	httpRouter.GET("/cluster/mysql-availability", httphelper.WrapHandler(api.GetMySQLAvailability))
-	httpRouter.PUT("/cluster/mysql-availability", httphelper.WrapHandler(api.PutMySQLAvailability))
-	httpRouter.GET("/cluster/redis-availability", httphelper.WrapHandler(api.GetRedisAvailability))
-	httpRouter.PUT("/cluster/redis-availability", httphelper.WrapHandler(api.PutRedisAvailability))
-	httpRouter.GET("/cluster/mongodb-availability", httphelper.WrapHandler(api.GetMongoDBAvailability))
-	httpRouter.PUT("/cluster/mongodb-availability", httphelper.WrapHandler(api.PutMongoDBAvailability))
-	httpRouter.GET("/cluster/kafka-availability", httphelper.WrapHandler(api.GetKafkaAvailability))
-	httpRouter.PUT("/cluster/kafka-availability", httphelper.WrapHandler(api.PutKafkaAvailability))
-	httpRouter.GET("/cluster/clickhouse-availability", httphelper.WrapHandler(api.GetClickHouseAvailability))
-	httpRouter.PUT("/cluster/clickhouse-availability", httphelper.WrapHandler(api.PutClickHouseAvailability))
-	httpRouter.GET("/cluster/policy", httphelper.WrapHandler(api.GetClusterPolicy))
-	httpRouter.PUT("/cluster/policy", httphelper.WrapHandler(api.PutClusterPolicy))
-	httpRouter.GET("/cluster/audit", httphelper.WrapHandler(api.ListClusterAudit))
-	httpRouter.DELETE("/cluster/audit", httphelper.WrapHandler(api.PruneClusterAudit))
-
-	httpRouter.GET("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GetGitHubApp)))
-	httpRouter.PUT("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.UpdateGitHubApp)))
-	httpRouter.GET("/github/installations", httphelper.WrapHandler(api.maybeGitHubPlugin(api.ListGitHubInstallations)))
-	httpRouter.GET("/github/installations/:installation_id/repos", httphelper.WrapHandler(api.maybeGitHubPlugin(api.ListGitHubInstallationRepos)))
-	httpRouter.POST("/github/webhook", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GitHubWebhook)))
-	httpRouter.GET("/github/export", httphelper.WrapHandler(api.ExportGitHub))
-	httpRouter.GET("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.GetAppGitHub))))
-	httpRouter.PUT("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.PutAppGitHub))))
-	httpRouter.DELETE("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.DeleteAppGitHub))))
-	httpRouter.POST("/apps/:apps_id/github/deploy", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.DeployAppGitHub))))
-
-	// Host and stats endpoints
-	httpRouter.GET("/hosts", httphelper.WrapHandler(api.GetHosts))
-	httpRouter.PUT("/hosts/:host_id", httphelper.WrapHandler(api.UpdateHost))
-	httpRouter.GET("/hosts/:host_id/stats", httphelper.WrapHandler(api.GetHostStats))
-	httpRouter.GET("/cluster/stats", httphelper.WrapHandler(api.GetClusterStats))
-	httpRouter.GET("/cluster/jobs-stats", httphelper.WrapHandler(api.GetClusterJobsStats))
-	httpRouter.GET("/cluster/router-metrics", httphelper.WrapHandler(api.GetRouterMetrics))
-	httpRouter.GET("/apps/:apps_id/jobs-stats", httphelper.WrapHandler(api.appLookup(api.GetAppJobsStats)))
-
-	httpRouter.GET("/tenancy", httphelper.WrapHandler(api.GetTenancy))
-	httpRouter.PUT("/tenancy", httphelper.WrapHandler(api.PutTenancy))
-	httpRouter.GET("/cluster/placement", httphelper.WrapHandler(api.GetClusterPlacement))
-	httpRouter.GET("/cluster/capacity", httphelper.WrapHandler(api.GetClusterCapacity))
-	httpRouter.GET("/cluster/cross-app-releases", httphelper.WrapHandler(api.ListCrossAppReleases))
-	httpRouter.PUT("/cluster/placement", httphelper.WrapHandler(api.PutClusterPlacement))
-	httpRouter.GET("/tenant-backups", httphelper.WrapHandler(api.ListTenantBackups))
-	httpRouter.GET("/tenant-backups/:resource_id", httphelper.WrapHandler(api.GetTenantBackup))
-	httpRouter.POST("/tenant-backups/:resource_id/begin", httphelper.WrapHandler(api.BeginTenantBackup))
-	httpRouter.POST("/tenant-backups/:resource_id/heartbeat", httphelper.WrapHandler(api.HeartbeatTenantBackup))
-	httpRouter.POST("/tenant-backups/:resource_id/finish", httphelper.WrapHandler(api.FinishTenantBackup))
-	httpRouter.POST("/tenant-backups/:resource_id/fail", httphelper.WrapHandler(api.FailTenantBackup))
-	httpRouter.GET("/tenant-backups/:resource_id/dumps", httphelper.WrapHandler(api.ListTenantBackupDumps))
-	httpRouter.DELETE("/tenant-backups/:resource_id/dumps/:timestamp", httphelper.WrapHandler(api.DeleteTenantBackupDump))
-	httpRouter.POST("/users", httphelper.WrapHandler(api.CreateUser))
-	httpRouter.GET("/users", httphelper.WrapHandler(api.ListUsers))
-	httpRouter.GET("/users/:users_id", httphelper.WrapHandler(api.GetUser))
-	httpRouter.PATCH("/users/:users_id", httphelper.WrapHandler(api.PatchUser))
-	httpRouter.DELETE("/users/:users_id", httphelper.WrapHandler(api.DeleteUser))
-	httpRouter.POST("/users/:users_id/bootstrap-token", httphelper.WrapHandler(api.BootstrapUserToken))
-	httpRouter.POST("/accounts/:accounts_id/suspend", httphelper.WrapHandler(api.SuspendAccount))
-	httpRouter.POST("/accounts/:accounts_id/unsuspend", httphelper.WrapHandler(api.UnsuspendAccount))
-	httpRouter.GET("/accounts/:accounts_id/quota", httphelper.WrapHandler(api.GetQuota))
-	httpRouter.PUT("/accounts/:accounts_id/quota", httphelper.WrapHandler(api.PutQuota))
-	httpRouter.GET("/accounts/:accounts_id/collaborators", httphelper.WrapHandler(api.ListAccountCollaborators))
-	httpRouter.POST("/accounts/:accounts_id/collaborators", httphelper.WrapHandler(api.AddAccountCollaborator))
-	httpRouter.DELETE("/accounts/:accounts_id/collaborators/:users_id", httphelper.WrapHandler(api.DeleteAccountCollaborator))
-	httpRouter.POST("/handles", httphelper.WrapHandler(api.CreateHandle))
-	httpRouter.GET("/handles/:handles_id", httphelper.WrapHandler(api.GetHandle))
-	httpRouter.DELETE("/handles/:handles_id", httphelper.WrapHandler(api.DeleteHandle))
-	httpRouter.PUT("/memberships", httphelper.WrapHandler(api.PutMembership))
-	httpRouter.DELETE("/memberships", httphelper.WrapHandler(api.DeleteMembership))
-	httpRouter.GET("/memberships", httphelper.WrapHandler(api.ListMemberships))
-	httpRouter.GET("/whoami", httphelper.WrapHandler(api.WhoAmI))
-	httpRouter.GET("/whoami/grants", httphelper.WrapHandler(api.WhoAmIGrants))
-	httpRouter.POST("/tokens", httphelper.WrapHandler(api.CreateToken))
-	httpRouter.GET("/tokens", httphelper.WrapHandler(api.ListTokens))
-	httpRouter.DELETE("/tokens/:tokens_id", httphelper.WrapHandler(api.DeleteToken))
-	httpRouter.POST("/apps/:apps_id/transfer", httphelper.WrapHandler(api.appLookup(api.TransferApp)))
-	httpRouter.GET("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.ListAppCollaborators)))
-	httpRouter.POST("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.AddAppCollaborator)))
-	httpRouter.DELETE("/apps/:apps_id/collaborators/:users_id", httphelper.WrapHandler(api.appLookup(api.DeleteAppCollaborator)))
-	httpRouter.GET("/domains", httphelper.WrapHandler(api.ListDomains))
-	httpRouter.DELETE("/domains/:hostname", httphelper.WrapHandler(api.DeleteDomain))
-	httpRouter.POST("/domains/verify", httphelper.WrapHandler(api.VerifyDomain))
-	httpRouter.POST("/domains/verify/:hostname/check", httphelper.WrapHandler(api.CheckDomain))
+	rt := newRouteTable()
+	registerRoutes(rt, &api, func() error { return c.db.Exec("ping") })
+	httpRouter := rt.router
 
 	grpcAPI := &grpcAPI{&api, c.db}
 	grpcSrv := grpcAPI.grpcServer()
@@ -499,10 +284,6 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			w.WriteHeader(200)
 			return
 		}
-		if r.URL.Path == "/github/webhook" && r.Method == http.MethodPost {
-			main.ServeHTTP(w, r)
-			return
-		}
 
 		// handle grpcweb requests before auth (grpc does its own auth)
 		if grpcWeb.IsGrpcWebRequest(r) {
@@ -510,20 +291,7 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			return
 		}
 
-		// GET /ca-cert is TOFU: cluster:add must download the CA before the
-		// key is known to be valid. A wrong Basic password used to 401 here
-		// even though the same request with no credentials succeeded.
-		if r.URL.Path == "/ca-cert" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
-			main.ServeHTTP(w, r)
-			return
-		}
-		// GET /cluster/region is the peer dial. A wrong Basic password must
-		// not 401 it, and the handler must not require CONTROLLER_KEY.
-		if authz.ClusterRegionPublic(r.Method, r.URL.Path) {
-			main.ServeHTTP(w, r)
-			return
-		}
-		if oauthPublicPath(r.Method, r.URL.Path) {
+		if preAuthPublic(r.Method, r.URL.Path) {
 			main.ServeHTTP(w, r)
 			return
 		}
@@ -571,7 +339,7 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 				return ""
 			}
 		}
-		if !authz.HTTPAllowedResolved(auth, r.Method, r.URL.Path, resolveApp) {
+		if !routeAllowed(auth, r.Method, r.URL.Path, resolveApp) {
 			if auth != nil && !auth.HasClusterAdmin() && len(auth.Scopes) > 0 {
 				authz.NoteScopedReject(auth, r.Method, r.URL.Path, "route")
 				logger.Info("scoped token rejected", "scope", strings.Join(auth.Scopes, ","), "caller", auth.UserID, "method", r.Method, "path", r.URL.Path, "reason", "route")
@@ -720,4 +488,224 @@ func (c *controllerAPI) Shutdown() {
 	if c.eventListener != nil {
 		c.eventListener.CloseWithError(ErrShutdown)
 	}
+}
+
+// registerRoutes adds every controller HTTP route to rt. ping is the
+// database check behind the status route.
+func registerRoutes(rt *routeTable, api *controllerAPI, ping func() error) {
+	crud(rt, "apps", ct.App{}, api.appRepo)
+	crudNoCreate(rt, "releases", ct.Release{}, api.releaseRepo)
+	crud(rt, "providers", ct.Provider{}, api.providerRepo)
+	crud(rt, "artifacts", ct.Artifact{}, api.artifactRepo)
+
+	rt.handler("GET", status.Path, status.Handler(func() status.Status {
+		if err := ping(); err != nil {
+			return status.Unhealthy
+		}
+		return status.Healthy
+	}))
+
+	rt.GET("/ca-cert", httphelper.WrapHandler(api.GetCACert))
+	rt.GET("/.well-known/oauth-authorization-server", httphelper.WrapHandler(api.OAuthMetadata))
+	rt.GET("/oauth/authorize", httphelper.WrapHandler(api.OAuthAuthorize))
+	rt.POST("/oauth/authorize", httphelper.WrapHandler(api.OAuthAuthorize))
+	rt.POST("/oauth/token", httphelper.WrapHandler(api.OAuthToken))
+	rt.GET("/oauth/audiences", httphelper.WrapHandler(api.OAuthAudiences))
+
+	rt.GET("/backup", httphelper.WrapHandler(api.GetBackup))
+
+	rt.PUT("/domain", httphelper.WrapHandler(api.MigrateDomain))
+
+	rt.POST("/apps/:apps_id", httphelper.WrapHandler(api.UpdateApp))
+	rt.GET("/apps/:apps_id/log", httphelper.WrapHandler(api.appLookup(api.AppLog)))
+	rt.DELETE("/apps/:apps_id", httphelper.WrapHandler(api.appLookup(api.DeleteApp)))
+	rt.DELETE("/apps/:apps_id/releases/:releases_id", httphelper.WrapHandler(api.appLookup(api.DeleteRelease)))
+	rt.POST("/apps/:apps_id/gc", httphelper.WrapHandler(api.appLookup(api.ScheduleAppGarbageCollection)))
+
+	rt.PUT("/apps/:apps_id/formations/:releases_id", httphelper.WrapHandler(api.appLookup(api.PutFormation)))
+	rt.GET("/apps/:apps_id/formations/:releases_id", httphelper.WrapHandler(api.appLookup(api.GetFormation)))
+	rt.DELETE("/apps/:apps_id/formations/:releases_id", httphelper.WrapHandler(api.appLookup(api.DeleteFormation)))
+	rt.GET("/apps/:apps_id/formations", httphelper.WrapHandler(api.appLookup(api.ListFormations)))
+	rt.GET("/formations", httphelper.WrapHandler(api.GetFormations))
+
+	rt.PUT("/apps/:apps_id/scale/:releases_id", httphelper.WrapHandler(api.appLookup(api.PutScaleRequest)))
+
+	rt.POST("/apps/:apps_id/jobs", httphelper.WrapHandler(api.appLookup(api.RunJob)))
+	rt.POST("/apps/:apps_id/builds", httphelper.WrapHandler(api.appLookup(api.CreateBuild)))
+	rt.GET("/apps/:apps_id/builds/:jobs_id/spec", httphelper.WrapHandler(api.appLookup(api.GetBuildSpec)))
+	rt.POST("/apps/:apps_id/builds/:jobs_id/token", httphelper.WrapHandler(api.appLookup(api.MintBuildToken)))
+	rt.GET("/builds/pending", httphelper.WrapHandler(api.ListPendingBuilds))
+	rt.GET("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.GetJob))
+	rt.PUT("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.PutJob))
+	rt.GET("/apps/:apps_id/jobs/:jobs_id/output", httphelper.WrapHandler(api.appLookup(api.GetJobOutput)))
+	rt.GET("/apps/:apps_id/jobs", httphelper.WrapHandler(api.appLookup(api.ListJobs)))
+	rt.DELETE("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.appLookup(api.KillJob)))
+	rt.GET("/apps/:apps_id/releases/:releases_id/output", httphelper.WrapHandler(api.appLookup(api.GetReleaseOutput)))
+	rt.PUT("/apps/:apps_id/releases/:releases_id/output", httphelper.WrapHandler(api.appLookup(api.PutReleaseOutput)))
+	rt.GET("/active-jobs", httphelper.WrapHandler(api.ListActiveJobs))
+
+	rt.POST("/apps/:apps_id/deploy", httphelper.WrapHandler(api.appLookup(api.CreateDeployment)))
+	rt.GET("/apps/:apps_id/deployments", httphelper.WrapHandler(api.appLookup(api.ListDeployments)))
+	rt.GET("/deployments/:deployment_id", httphelper.WrapHandler(api.GetDeployment))
+
+	rt.PUT("/apps/:apps_id/release", httphelper.WrapHandler(api.appLookup(api.SetAppRelease)))
+	rt.GET("/apps/:apps_id/release", httphelper.WrapHandler(api.appLookup(api.GetAppRelease)))
+	rt.GET("/apps/:apps_id/releases", httphelper.WrapHandler(api.appLookup(api.GetAppReleases)))
+	rt.POST("/releases", httphelper.WrapHandler(api.CreateRelease))
+
+	rt.GET("/resources", httphelper.WrapHandler(api.GetResources))
+	rt.GET("/plugin-catalog", httphelper.WrapHandler(api.GetPluginCatalog))
+	rt.PUT("/providers/:providers_id", httphelper.WrapHandler(api.UpdateProvider))
+	rt.POST("/providers/:providers_id/resources", httphelper.WrapHandler(api.ProvisionResource))
+	rt.GET("/providers/:providers_id/resources", httphelper.WrapHandler(api.GetProviderResources))
+	rt.GET("/providers/:providers_id/resources/:resources_id", httphelper.WrapHandler(api.GetResource))
+	rt.PUT("/providers/:providers_id/resources/:resources_id", httphelper.WrapHandler(api.PutResource))
+	rt.DELETE("/providers/:providers_id/resources/:resources_id", httphelper.WrapHandler(api.DeleteResource))
+	rt.PUT("/providers/:providers_id/resources/:resources_id/apps/:app_id", httphelper.WrapHandler(api.AddResourceApp))
+	rt.DELETE("/providers/:providers_id/resources/:resources_id/apps/:app_id", httphelper.WrapHandler(api.DeleteResourceApp))
+	rt.GET("/apps/:apps_id/resources", httphelper.WrapHandler(api.appLookup(api.GetAppResources)))
+	rt.GET("/apps/:apps_id/plugin-addons", httphelper.WrapHandler(api.appLookup(api.GetPluginAddons)))
+	rt.PUT("/apps/:apps_id/plugin-addons/:addon_type", httphelper.WrapHandler(api.appLookup(api.PutPluginAddon)))
+	rt.DELETE("/apps/:apps_id/plugin-addons/:addon_type", httphelper.WrapHandler(api.appLookup(api.DeletePluginAddon)))
+
+	rt.GET("/routes", httphelper.WrapHandler(api.GetRouteList))
+	rt.POST("/apps/:apps_id/routes", httphelper.WrapHandler(api.appLookup(api.CreateRoute)))
+	rt.GET("/apps/:apps_id/routes", httphelper.WrapHandler(api.appLookup(api.GetAppRouteList)))
+	rt.GET("/apps/:apps_id/routes/:routes_type/:routes_id", httphelper.WrapHandler(api.appLookup(api.GetRoute)))
+	rt.PUT("/apps/:apps_id/routes/:routes_type/:routes_id", httphelper.WrapHandler(api.appLookup(api.UpdateRoute)))
+	rt.DELETE("/apps/:apps_id/routes/:routes_type/:routes_id", httphelper.WrapHandler(api.appLookup(api.DeleteRoute)))
+
+	rt.POST("/apps/:apps_id/meta", httphelper.WrapHandler(api.appLookup(api.UpdateApp)))
+	rt.PUT("/apps/:apps_id/build-lock", httphelper.WrapHandler(api.appLookup(api.AcquireBuildLock)))
+	rt.DELETE("/apps/:apps_id/build-lock/:holder", httphelper.WrapHandler(api.appLookup(api.ReleaseBuildLock)))
+	rt.PUT("/build-locks/:key", httphelper.WrapHandler(api.AcquireKeyedBuildLock))
+	rt.DELETE("/build-locks/:key/:holder", httphelper.WrapHandler(api.ReleaseKeyedBuildLock))
+
+	rt.GET("/events", httphelper.WrapHandler(api.Events))
+	rt.GET("/events/:id", httphelper.WrapHandler(api.GetEvent))
+	rt.POST("/apps/:apps_id/scheduler-events", httphelper.WrapHandler(api.appLookup(api.CreateSchedulerEvent)))
+	rt.POST("/apps/:apps_id/job-restart-events", httphelper.WrapHandler(api.appLookup(api.CreateJobRestartEvent)))
+
+	rt.GET("/volumes", httphelper.WrapHandler(api.GetVolumes))
+	rt.PUT("/volumes/:volume_id", httphelper.WrapHandler(api.PutVolume))
+	rt.GET("/apps/:apps_id/volumes", httphelper.WrapHandler(api.appLookup(api.GetAppVolumes)))
+	rt.GET("/apps/:apps_id/volumes/:volume_id", httphelper.WrapHandler(api.appLookup(api.GetVolume)))
+	rt.PUT("/apps/:apps_id/volumes/:volume_id/decommission", httphelper.WrapHandler(api.appLookup(api.DecommissionVolume)))
+
+	rt.POST("/sinks", httphelper.WrapHandler(api.CreateSink))
+	rt.GET("/sinks", httphelper.WrapHandler(api.GetSinks))
+	rt.GET("/sinks/:sink_id", httphelper.WrapHandler(api.GetSink))
+	rt.DELETE("/sinks/:sink_id", httphelper.WrapHandler(api.DeleteSink))
+
+	rt.GET("/managed-certificates", httphelper.WrapHandler(api.GetManagedCertificates))
+	rt.GET("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.GetManagedCertificate))
+	rt.PUT("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.UpdateManagedCertificate))
+
+	rt.GET("/acme/config", httphelper.WrapHandler(api.GetACMEConfig))
+	rt.PUT("/acme/config", httphelper.WrapHandler(api.UpdateACMEConfig))
+
+	rt.GET("/db-runtimes", httphelper.WrapHandler(api.ListDBRuntimes))
+	rt.POST("/db-runtimes", httphelper.WrapHandler(api.CreateDBRuntime))
+	rt.PUT("/db-runtimes", httphelper.WrapHandler(api.ReplaceDBRuntimes))
+	rt.PUT("/db-runtimes/:engine/:name", httphelper.WrapHandler(api.UpdateDBRuntime))
+	rt.DELETE("/db-runtimes/:engine/:name", httphelper.WrapHandler(api.DeleteDBRuntime))
+	rt.PUT("/cluster/db-runtime-settings", httphelper.WrapHandler(api.UpdateDBRuntimeSettings))
+
+	rt.GET("/runtimes", httphelper.WrapHandler(api.ListRuntimeProfiles))
+	rt.POST("/runtimes", httphelper.WrapHandler(api.CreateRuntimeProfile))
+	rt.GET("/runtimes/:runtimes_id", httphelper.WrapHandler(api.GetRuntimeProfile))
+	rt.PUT("/runtimes/:runtimes_id", httphelper.WrapHandler(api.UpdateRuntimeProfile))
+	rt.DELETE("/runtimes/:runtimes_id", httphelper.WrapHandler(api.DeleteRuntimeProfile))
+	rt.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
+	rt.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
+	rt.GET("/cluster/app-domain", httphelper.WrapHandler(api.GetAppDomain))
+	rt.PUT("/cluster/app-domain", httphelper.WrapHandler(api.PutAppDomain))
+	rt.GET("/cluster/region", httphelper.WrapHandler(api.GetClusterRegion))
+	rt.PUT("/cluster/region", httphelper.WrapHandler(api.PutClusterRegion))
+	rt.GET("/cluster/regions", httphelper.WrapHandler(api.GetClusterRegions))
+	rt.POST("/cluster/regions", httphelper.WrapHandler(api.PostClusterRegion))
+	rt.DELETE("/cluster/regions/:region", httphelper.WrapHandler(api.DeleteClusterRegion))
+	rt.GET("/cluster/postgres-availability", httphelper.WrapHandler(api.GetPostgresAvailability))
+	rt.PUT("/cluster/postgres-availability", httphelper.WrapHandler(api.PutPostgresAvailability))
+	rt.GET("/cluster/mysql-availability", httphelper.WrapHandler(api.GetMySQLAvailability))
+	rt.PUT("/cluster/mysql-availability", httphelper.WrapHandler(api.PutMySQLAvailability))
+	rt.GET("/cluster/redis-availability", httphelper.WrapHandler(api.GetRedisAvailability))
+	rt.PUT("/cluster/redis-availability", httphelper.WrapHandler(api.PutRedisAvailability))
+	rt.GET("/cluster/mongodb-availability", httphelper.WrapHandler(api.GetMongoDBAvailability))
+	rt.PUT("/cluster/mongodb-availability", httphelper.WrapHandler(api.PutMongoDBAvailability))
+	rt.GET("/cluster/kafka-availability", httphelper.WrapHandler(api.GetKafkaAvailability))
+	rt.PUT("/cluster/kafka-availability", httphelper.WrapHandler(api.PutKafkaAvailability))
+	rt.GET("/cluster/clickhouse-availability", httphelper.WrapHandler(api.GetClickHouseAvailability))
+	rt.PUT("/cluster/clickhouse-availability", httphelper.WrapHandler(api.PutClickHouseAvailability))
+	rt.GET("/cluster/policy", httphelper.WrapHandler(api.GetClusterPolicy))
+	rt.PUT("/cluster/policy", httphelper.WrapHandler(api.PutClusterPolicy))
+	rt.GET("/cluster/audit", httphelper.WrapHandler(api.ListClusterAudit))
+	rt.DELETE("/cluster/audit", httphelper.WrapHandler(api.PruneClusterAudit))
+
+	rt.GET("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GetGitHubApp)))
+	rt.PUT("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.UpdateGitHubApp)))
+	rt.GET("/github/installations", httphelper.WrapHandler(api.maybeGitHubPlugin(api.ListGitHubInstallations)))
+	rt.GET("/github/installations/:installation_id/repos", httphelper.WrapHandler(api.maybeGitHubPlugin(api.ListGitHubInstallationRepos)))
+	rt.POST("/github/webhook", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GitHubWebhook)))
+	rt.GET("/github/export", httphelper.WrapHandler(api.ExportGitHub))
+	rt.GET("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.GetAppGitHub))))
+	rt.PUT("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.PutAppGitHub))))
+	rt.DELETE("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.DeleteAppGitHub))))
+	rt.POST("/apps/:apps_id/github/deploy", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.DeployAppGitHub))))
+
+	// Host and stats endpoints
+	rt.GET("/hosts", httphelper.WrapHandler(api.GetHosts))
+	rt.PUT("/hosts/:host_id", httphelper.WrapHandler(api.UpdateHost))
+	rt.GET("/hosts/:host_id/stats", httphelper.WrapHandler(api.GetHostStats))
+	rt.GET("/cluster/stats", httphelper.WrapHandler(api.GetClusterStats))
+	rt.GET("/cluster/jobs-stats", httphelper.WrapHandler(api.GetClusterJobsStats))
+	rt.GET("/cluster/router-metrics", httphelper.WrapHandler(api.GetRouterMetrics))
+	rt.GET("/apps/:apps_id/jobs-stats", httphelper.WrapHandler(api.appLookup(api.GetAppJobsStats)))
+
+	rt.GET("/tenancy", httphelper.WrapHandler(api.GetTenancy))
+	rt.PUT("/tenancy", httphelper.WrapHandler(api.PutTenancy))
+	rt.GET("/cluster/placement", httphelper.WrapHandler(api.GetClusterPlacement))
+	rt.GET("/cluster/capacity", httphelper.WrapHandler(api.GetClusterCapacity))
+	rt.GET("/cluster/cross-app-releases", httphelper.WrapHandler(api.ListCrossAppReleases))
+	rt.PUT("/cluster/placement", httphelper.WrapHandler(api.PutClusterPlacement))
+	rt.GET("/tenant-backups", httphelper.WrapHandler(api.ListTenantBackups))
+	rt.GET("/tenant-backups/:resource_id", httphelper.WrapHandler(api.GetTenantBackup))
+	rt.POST("/tenant-backups/:resource_id/begin", httphelper.WrapHandler(api.BeginTenantBackup))
+	rt.POST("/tenant-backups/:resource_id/heartbeat", httphelper.WrapHandler(api.HeartbeatTenantBackup))
+	rt.POST("/tenant-backups/:resource_id/finish", httphelper.WrapHandler(api.FinishTenantBackup))
+	rt.POST("/tenant-backups/:resource_id/fail", httphelper.WrapHandler(api.FailTenantBackup))
+	rt.GET("/tenant-backups/:resource_id/dumps", httphelper.WrapHandler(api.ListTenantBackupDumps))
+	rt.DELETE("/tenant-backups/:resource_id/dumps/:timestamp", httphelper.WrapHandler(api.DeleteTenantBackupDump))
+	rt.POST("/users", httphelper.WrapHandler(api.CreateUser))
+	rt.GET("/users", httphelper.WrapHandler(api.ListUsers))
+	rt.GET("/users/:users_id", httphelper.WrapHandler(api.GetUser))
+	rt.PATCH("/users/:users_id", httphelper.WrapHandler(api.PatchUser))
+	rt.DELETE("/users/:users_id", httphelper.WrapHandler(api.DeleteUser))
+	rt.POST("/users/:users_id/bootstrap-token", httphelper.WrapHandler(api.BootstrapUserToken))
+	rt.POST("/accounts/:accounts_id/suspend", httphelper.WrapHandler(api.SuspendAccount))
+	rt.POST("/accounts/:accounts_id/unsuspend", httphelper.WrapHandler(api.UnsuspendAccount))
+	rt.GET("/accounts/:accounts_id/quota", httphelper.WrapHandler(api.GetQuota))
+	rt.PUT("/accounts/:accounts_id/quota", httphelper.WrapHandler(api.PutQuota))
+	rt.GET("/accounts/:accounts_id/collaborators", httphelper.WrapHandler(api.ListAccountCollaborators))
+	rt.POST("/accounts/:accounts_id/collaborators", httphelper.WrapHandler(api.AddAccountCollaborator))
+	rt.DELETE("/accounts/:accounts_id/collaborators/:users_id", httphelper.WrapHandler(api.DeleteAccountCollaborator))
+	rt.POST("/handles", httphelper.WrapHandler(api.CreateHandle))
+	rt.GET("/handles/:handles_id", httphelper.WrapHandler(api.GetHandle))
+	rt.DELETE("/handles/:handles_id", httphelper.WrapHandler(api.DeleteHandle))
+	rt.PUT("/memberships", httphelper.WrapHandler(api.PutMembership))
+	rt.DELETE("/memberships", httphelper.WrapHandler(api.DeleteMembership))
+	rt.GET("/memberships", httphelper.WrapHandler(api.ListMemberships))
+	rt.GET("/whoami", httphelper.WrapHandler(api.WhoAmI))
+	rt.GET("/whoami/grants", httphelper.WrapHandler(api.WhoAmIGrants))
+	rt.POST("/tokens", httphelper.WrapHandler(api.CreateToken))
+	rt.GET("/tokens", httphelper.WrapHandler(api.ListTokens))
+	rt.DELETE("/tokens/:tokens_id", httphelper.WrapHandler(api.DeleteToken))
+	rt.POST("/apps/:apps_id/transfer", httphelper.WrapHandler(api.appLookup(api.TransferApp)))
+	rt.GET("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.ListAppCollaborators)))
+	rt.POST("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.AddAppCollaborator)))
+	rt.DELETE("/apps/:apps_id/collaborators/:users_id", httphelper.WrapHandler(api.appLookup(api.DeleteAppCollaborator)))
+	rt.GET("/domains", httphelper.WrapHandler(api.ListDomains))
+	rt.DELETE("/domains/:hostname", httphelper.WrapHandler(api.DeleteDomain))
+	rt.POST("/domains/verify", httphelper.WrapHandler(api.VerifyDomain))
+	rt.POST("/domains/verify/:hostname/check", httphelper.WrapHandler(api.CheckDomain))
 }
