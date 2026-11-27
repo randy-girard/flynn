@@ -637,7 +637,9 @@ func registerRoutes(rt *routeTable, api *controllerAPI, ping func() error) {
 	rt.GET("/managed-certificates/:managed_certificate_id", authz.ClusterOnly(), httphelper.WrapHandler(api.GetManagedCertificate))
 	rt.PUT("/managed-certificates/:managed_certificate_id", authz.ClusterOnly().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.UpdateManagedCertificate))
 
-	rt.GET("/acme/config", authz.ClusterOnly().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.GetACMEConfig))
+	// A user reads only whether ACME is on (flynn letsencrypt:enable and
+	// :status, NEW-29); GetACMEConfig hides the rest from non-operators.
+	rt.GET("/acme/config", authz.UserSession().Also(authz.ScopeACMEIssue), httphelper.WrapHandler(api.GetACMEConfig))
 	rt.PUT("/acme/config", authz.ClusterOnly(), httphelper.WrapHandler(api.UpdateACMEConfig))
 
 	rt.GET("/db-runtimes", authz.AnyAuth(), httphelper.WrapHandler(api.ListDBRuntimes))

@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 
+	"github.com/randy-girard/flynn/controller/authz"
+
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
@@ -13,6 +15,13 @@ func (c *controllerAPI) GetACMEConfig(ctx context.Context, w http.ResponseWriter
 	config, err := c.acmeConfigRepo.Get()
 	if err != nil {
 		respondWithError(w, err)
+		return
+	}
+	// A user who is not an operator sees only whether ACME is on. The
+	// contact email, directory and account state stay with operators and
+	// the ACME worker (NEW-29).
+	if tok := authz.TokenFromContext(ctx); tok != nil && !tok.HasClusterAdmin() && !authz.HasACMEIssue(tok) {
+		httphelper.JSON(w, 200, map[string]bool{"enabled": config.Enabled})
 		return
 	}
 	// Set HasAccountKey before stripping the key for security

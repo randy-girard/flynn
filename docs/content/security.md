@@ -806,10 +806,11 @@ works during a rolling update. There is no DNS-01 issuer in this tree.
 Rotate with `flynn-host token:rotate letsencrypt-plugin ACME_TOKEN acme:issue`.
 `flynn letsencrypt:list`, `:enable`, `:disable`, and `:status` run in the
 CLI with the caller's own token, so the controller checks the caller's
-route permissions. They never borrow `ACME_TOKEN`. The plugin's own
-`letsencrypt-cli` needs the plugin credential and is an operator tool on
-the plugin app; its `FLYNN_APP_ID` app filter is a convenience, not a
-tenant boundary.
+route permissions. They never borrow `ACME_TOKEN`. A tenant can run them:
+the CLI finds the plugin in `GET /plugin-catalog` (a tenant's `GET /apps`
+never lists `letsencrypt-plugin`), and `GET /acme/config` answers a user who
+is not an operator with only `{"enabled": ...}`; the contact email,
+directory and account state stay with operators and the ACME worker.
 
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, taffy

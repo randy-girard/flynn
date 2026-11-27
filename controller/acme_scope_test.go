@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -173,4 +174,32 @@ func (s *S) TestACMEIssueTokenOnlyTogglesHTTPS(c *C) {
 	}
 	_, err = s.c.GetRoute(app.ID, "http/"+rt.ID)
 	c.Assert(err, IsNil)
+}
+
+// TestTenantReadsOnlyACMEEnabled is NEW-29: `flynn letsencrypt:enable` and
+// `:status` read GET /acme/config with the caller's own token. A tenant
+// user may read it and sees only whether ACME is on; the contact email,
+// directory and account state stay with operators.
+func (s *S) TestTenantReadsOnlyACMEEnabled(c *C) {
+	acmeRepo := data.NewACMEConfigRepo(s.hc.db)
+	prev, err := acmeRepo.Get()
+	c.Assert(err, IsNil)
+	cfg := *prev
+	cfg.Enabled = true
+	cfg.ContactEmail = "ops-new29@example.com"
+	cfg.TermsOfServiceAgreed = true
+	c.Assert(acmeRepo.Update(&cfg), IsNil)
+	defer func() { c.Assert(acmeRepo.Update(prev), IsNil) }()
+
+	tenant := s.signUser(c, "new29-tenant", nil)
+	code, body := s.scopedStatus(c, http.MethodGet, tenant, "/acme/config", "")
+	c.Assert(code, Equals, http.StatusOK)
+	var got map[string]interface{}
+	c.Assert(json.Unmarshal([]byte(body), &got), IsNil)
+	c.Assert(got["enabled"], Equals, true)
+	c.Assert(len(got), Equals, 1, Commentf("tenant view %s", body))
+	c.Assert(strings.Contains(body, "ops-new29"), Equals, false)
+
+	code, _ = s.scopedStatus(c, http.MethodPut, tenant, "/acme/config", `{"enabled":false}`)
+	c.Assert(code, Equals, http.StatusForbidden)
 }

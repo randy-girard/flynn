@@ -172,15 +172,23 @@ func toggleLetsEncrypt(client controller.Client, target string, enable bool) err
 	return nil
 }
 
+// requireLetsEncryptPlugin checks the plugin catalog, which a tenant can
+// read. A tenant's GET /apps lists only its own apps, so it never showed
+// letsencrypt-plugin and every tenant was told the plugin was missing
+// (NEW-29). GET /apps is still consulted for the legacy acme system app.
 func requireLetsEncryptPlugin(client controller.Client) error {
-	apps, err := client.AppList()
+	cat, err := plugin.LoadCatalog(client)
+	if err == nil && cat.HasCommand("letsencrypt") {
+		return nil
+	}
+	apps, appErr := client.AppList()
+	if appErr == nil && letsEncryptPluginInstalled(apps) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if !letsEncryptPluginInstalled(apps) {
-		return fmt.Errorf("Let's Encrypt plugin is not installed. Run: sudo flynn-host plugin:install letsencrypt")
-	}
-	return nil
+	return fmt.Errorf("Let's Encrypt plugin is not installed. Run: sudo flynn-host plugin:install letsencrypt")
 }
 
 func letsEncryptPluginInstalled(apps []*ct.App) bool {

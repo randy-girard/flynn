@@ -57,7 +57,7 @@ GET /.well-known/oauth-authorization-server: public
 GET /.well-known/status: allow=cluster-key,cluster-admin-jwt
 GET /accounts/x-accounts-id/collaborators: allow=cluster-key,cluster-admin-jwt,user,user-app-admin
 GET /accounts/x-accounts-id/quota: allow=cluster-key,cluster-admin-jwt,quota
-GET /acme/config: allow=cluster-key,cluster-admin-jwt,acme
+GET /acme/config: allow=cluster-key,cluster-admin-jwt,user,user-app-admin,acme
 GET /active-jobs: allow=cluster-key,cluster-admin-jwt
 GET /apps/app-a/builds/x-jobs-id/spec: allow=cluster-key,cluster-admin-jwt
 GET /apps/app-a/collaborators: allow=cluster-key,cluster-admin-jwt,user,user-app-admin
@@ -212,7 +212,7 @@ HEAD /.well-known/oauth-authorization-server: public
 HEAD /.well-known/status: allow=cluster-key,cluster-admin-jwt
 HEAD /accounts/x-accounts-id/collaborators: allow=cluster-key,cluster-admin-jwt,user,user-app-admin
 HEAD /accounts/x-accounts-id/quota: allow=cluster-key,cluster-admin-jwt,quota
-HEAD /acme/config: allow=cluster-key,cluster-admin-jwt,acme
+HEAD /acme/config: allow=cluster-key,cluster-admin-jwt,user,user-app-admin,acme
 HEAD /active-jobs: allow=cluster-key,cluster-admin-jwt
 HEAD /apps/app-a/builds/x-jobs-id/spec: allow=cluster-key,cluster-admin-jwt
 HEAD /apps/app-a/collaborators: allow=cluster-key,cluster-admin-jwt,user,user-app-admin
