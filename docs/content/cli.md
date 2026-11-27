@@ -135,7 +135,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `clickhouse:cli` / `clickhouse:databases` / `clickhouse:databases:create` | Databases and client (after plugin install) |
 | `scheduler` / `scheduler:list` / `scheduler:add` / `scheduler:remove` / … | Cron and interval jobs for an app (after the scheduler plugin is installed). `scheduler` and `scheduler:list` are the same; `scheduler:help` is `scheduler --help` |
 | `log-sink` / `log-sink:add` / `log-sink:remove` | Per-app syslog sinks (`flynn-host log-sink` for cluster logs; `flynn-host otel` after installing the otel plugin). `logsink` is an alias. |
-| `volume` / `volume:show` / `volume:decommission` | Persistent volumes attached to the app |
+| `volume` / `volume:show` / `volume:decommission` | Persistent volumes attached to the app (with their size; `-` when none is recorded) |
 
 ### Account
 

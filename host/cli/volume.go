@@ -431,12 +431,21 @@ func runVolumeList(args *docopt.Args, client *cluster.Client) error {
 		return err
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
+	writeVolumeList(os.Stdout, volumes)
+	return nil
+}
+
+// writeVolumeList prints the host volumes. SIZE is the capacity the host
+// gave the volume (its ZFS refquota); "-" is a legacy volume created
+// without one.
+func writeVolumeList(out io.Writer, volumes sortVolumes) {
+	w := tabwriter.NewWriter(out, 1, 2, 2, ' ', 0)
 	defer w.Flush()
 	listRec(w,
 		"ID",
 		"TYPE",
 		"HOST",
+		"SIZE",
 		"CREATED",
 		"META",
 	)
@@ -446,13 +455,17 @@ func runVolumeList(args *docopt.Args, client *cluster.Client) error {
 		for k, v := range volume.Volume.Meta {
 			meta = append(meta, fmt.Sprintf("%s=%s", k, v))
 		}
+		size := "-"
+		if volume.Volume.Size > 0 {
+			size = units.BytesSize(float64(volume.Volume.Size))
+		}
 		listRec(w,
 			volume.Volume.ID,
 			volume.Volume.Type,
 			volume.Host.ID(),
+			size,
 			units.HumanDuration(time.Now().UTC().Sub(volume.Volume.CreatedAt))+" ago",
 			strings.Join(meta, " "),
 		)
 	}
-	return nil
 }

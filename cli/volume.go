@@ -45,7 +45,7 @@ func runVolumeList(args *docopt.Args, client controller.Client) error {
 	w := tabWriter()
 	defer w.Flush()
 
-	listRec(w, "ID", "HOST", "STATE", "ATTACHED JOB", "CREATED", "DECOMMISSIONED")
+	listRec(w, "ID", "HOST", "STATE", "SIZE", "ATTACHED JOB", "CREATED", "DECOMMISSIONED")
 	for _, v := range volumes {
 		var jobID string
 		if v.JobID != nil {
@@ -55,10 +55,20 @@ func runVolumeList(args *docopt.Args, client controller.Client) error {
 		if v.CreatedAt != nil {
 			created = units.HumanDuration(time.Now().UTC().Sub(*v.CreatedAt)) + " ago"
 		}
-		listRec(w, v.ID, v.HostID, v.State, jobID, created, v.DecommissionedAt != nil)
+		listRec(w, v.ID, v.HostID, v.State, volumeSize(v.Size), jobID, created, v.DecommissionedAt != nil)
 	}
 
 	return nil
+}
+
+// volumeSize is a volume's capacity for display. 0 means the controller has
+// no size for it: recorded before it stored sizes, or a legacy uncapped
+// dataset.
+func volumeSize(size int64) string {
+	if size <= 0 {
+		return "-"
+	}
+	return units.BytesSize(float64(size))
 }
 
 func runVolumeShow(args *docopt.Args, client controller.Client) error {
@@ -74,6 +84,7 @@ func runVolumeShow(args *docopt.Args, client controller.Client) error {
 	listRec(w, "ID:", vol.ID)
 	listRec(w, "State:", vol.State)
 	listRec(w, "HostID:", vol.HostID)
+	listRec(w, "Size:", volumeSize(vol.Size))
 	listRec(w, "AppID:", vol.AppID)
 	listRec(w, "ReleaseID:", vol.ReleaseID)
 	var jobID string
