@@ -101,7 +101,7 @@ func mkPostgresSudoWrappers() (string, error) {
 	}
 	for _, name := range []string{"initdb", "postgres", "pg_ctl", "pg_basebackup"} {
 		p := filepath.Join(dir, name)
-		script := fmt.Sprintf("#!/bin/sh\nexec sudo -n -u postgres -- %s%s \"$@\"\n", realBin, name)
+		script := fmt.Sprintf("#!/bin/sh\nexec sudo -n --preserve-env=PGPASSWORD -u postgres -- %s%s \"$@\"\n", realBin, name)
 		if err := os.WriteFile(p, []byte(script), 0755); err != nil {
 			os.RemoveAll(dir)
 			return "", err

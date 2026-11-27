@@ -776,9 +776,11 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 	cmd := exec.Command(
 		p.binPath("pg_basebackup"),
 		"--pgdata", staging,
+		// The password is in PGPASSWORD (below), not this conninfo: argv
+		// is readable by every host user via ps and /proc/<pid>/cmdline.
 		"--dbname", fmt.Sprintf(
-			"host=%s port=%s user=flynn password=%s application_name=%s %s",
-			upstream.Host(), upstream.Port(), p.password, upstream.Meta[IDKey],
+			"host=%s port=%s user=flynn application_name=%s %s",
+			upstream.Host(), upstream.Port(), upstream.Meta[IDKey],
 			basebackupConnTimeouts,
 		),
 		"--wal-method=stream",
@@ -791,6 +793,7 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 		"--progress",
 		"--verbose",
 	)
+	cmd.Env = envWithPGPassword(os.Environ(), p.password)
 	activity := &activityWriter{}
 	activity.touch()
 	cmd.Stderr = io.MultiWriter(os.Stderr, activity, &basebackupProgressWriter{dst: &p.basebackup})
@@ -829,6 +832,18 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 	// missing WAL. A short hang budget here would wipe a slow-but-valid backup.
 	p.justBasebackup = true
 	return nil
+}
+
+// envWithPGPassword is env with PGPASSWORD set to password, replacing any
+// inherited value.
+func envWithPGPassword(env []string, password string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "PGPASSWORD=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "PGPASSWORD="+password)
 }
 
 func (p *Process) verifyOrReseedStandby(log log15.Logger, upstream *discoverd.Instance) error {
