@@ -66,7 +66,9 @@ finishes starting in the background.
 A follower is a separate read-only instance, not a second process on the
 leader. It stays caught up asynchronously and has its own read-only login,
 not the leader's. Deleting the follower drops that login from the leader.
-Followers created before per-follower logins keep the leader's login.
+Followers created before per-follower logins keep the leader's login; to move
+one onto its own login, follow the leader again, wait, `addons:attach` the new
+follower to each app, then destroy the old one (do not promote the old one).
 
 ```text
 flynn addons:create mysql --follow <resource>
@@ -88,21 +90,27 @@ with all of them before the old primary is stopped and the name moves. Any
 failure before that point lifts the fence, deletes the new follower, and
 leaves the old primary serving.
 
-`flynn mysql:promote <follower>` (and the dashboard Promote button) restarts
-the follower's job as a primary; rewriting its release alone would leave the
+`flynn mysql:promote <follower>` (and the dashboard Promote button) is a
+switchover: the follower becomes the primary, the leader's apps follow it,
+and the old primary is retired. It restarts the follower's job as a primary; rewriting its release alone would leave the
 running server read-only and still replicating. The primary is fenced
 read-only and the follower must apply its final GTID within 20 seconds, or
 the promote is refused, the fence lifted and nothing else changed (run
 `mysql:wait` first). If the primary cannot be read, the promote is refused
 unless you pass `--force`, which loses any transaction the follower has not
-received. For an auto-failover follower the old primary is stopped and marked
-deposed, and the promoted server keeps `leader.<original>.discoverd`. The
+received. The old primary is then stopped and marked deposed (it never takes
+writes again); an auto-failover follower keeps `leader.<original>.discoverd`. The
 restarted server clears its old replica configuration (`RESET SLAVE ALL`) and
 must be writable, with the final GTID, and accept a write from its own login
 within 3 minutes; otherwise the follower goes back to its previous release
 and the old primary serves writes again. Only a verified promote changes the
-roles the plugin reports. A plain follower's old primary stays its own
-writable resource. `flynn mysql:unfollow <follower>` restarts the follower
+roles the plugin reports. For a plain follower the plugin then rewrites the
+old primary's attachments (`DATABASE_URL` and the rest) to the promoted host
+with the leader's login and database, deploys each app and waits for it; the
+result's `Rewritten` lists them and the CLI prints the apps and keys. Apps
+cannot write between the stop and their deploy; if a deploy fails, run the
+promote again to finish. The old primary stays stopped with its data;
+destroying its resource deletes it. `flynn mysql:unfollow <follower>` restarts the follower
 the same way as a standalone copy and leaves the old primary untouched.
 
 `--auto-failover` places the replica on another host. If the primary job

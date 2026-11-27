@@ -83,7 +83,22 @@ Each follower has its own password. The leader's password is used only for
 replication and is not in the follower's attachment env. After a keep-service
 failover the promoted primary also accepts the old leader's password, so the
 old leader's apps keep working. Followers created before per-follower
-passwords keep their leader's password until an upgrade replaces them.
+passwords keep their leader's password until an upgrade replaces them; to
+move one by hand, follow the leader again, wait, `addons:attach` the new
+follower to each app, then destroy the old one.
+
+`flynn redis:promote <follower>` (and the dashboard Promote button) is a
+switchover. It pauses writes on the primary, waits until the follower has
+the paused primary's replication offset (refused, and nothing changes,
+otherwise), restarts the follower as a primary and checks it takes a write,
+then stops the old primary and marks it deposed (it never takes writes
+again). For a plain follower the old primary's apps are rewritten to the
+promoted host and password and deployed; the result's `Rewritten` lists
+them, and if a deploy fails running the promote again finishes it. An
+auto-failover follower keeps the old primary's name instead.
+`flynn redis:unfollow` restarts the follower standalone and checks a write.
+`redis:info` reads roles from the releases, so it is right on either plugin
+process.
 
 ```text
 flynn redis:follow

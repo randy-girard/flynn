@@ -98,27 +98,40 @@ follower and on the leader (replication copies roles, so it is created on the
 leader). The follower's resource env never contains the leader's credentials.
 After an auto-failover promote the leader's apps keep their URL, which the
 promoted host now answers, with the leader's login (replication copies it).
-Apps attached to the follower keep the read-only login after promote or
-failover. Followers created before this change keep the leader's login until
-they are replaced. It cannot follow another follower. Its own `--as` does not replace the leader
+Apps attached to the follower keep the read-only login after a failover or
+unfollow. A follower created before per-follower logins used the leader's
+login, and the releases of its apps may still carry
+`FLYNN_POSTGRES_PRIMARY_URL`; `flynn pg:maintenance` (or plugin start with
+`MAINTENANCE_AUTO=true`) gives it its own read-only login, moves its apps
+onto it, removes that key from their releases when it points at the leader,
+and deploys them. Nothing in Flynn reads the key from an app; use the
+leader's own attachment (`DATABASE_URL`) to write. It cannot follow another follower. Its own `--as` does not replace the leader
 URL until promote.
 
-`flynn pg:promote [--force] <follower>` (and the dashboard Promote button)
-restarts the follower's job as a primary; rewriting its release alone would
-leave the running process a read-only standby. It first reads the primary's
+`flynn pg:promote [--force] <follower>` (and the dashboard Promote button) is
+a switchover: the follower becomes the primary, the leader's apps follow it,
+and the old primary is retired. It restarts the follower's job as a primary;
+rewriting its release alone would leave the running process a read-only
+standby. It first reads the primary's
 WAL position and waits up to 20 seconds for the follower to replay it. A
 follower that is behind or not streaming is refused and nothing changes, so
 run `flynn pg:wait <follower>` first. If the primary cannot be read, the
 promote is refused unless you pass `--force`, which skips that proof: writes
-the follower has not received are lost. For an auto-failover follower the
-current primary is stopped and marked deposed before the restart, and the
-promoted process keeps `leader.<original>.discoverd`. The restarted job must
+the follower has not received are lost. The current primary is then stopped
+and marked deposed before the restart (it never starts writable again), and
+the follower applies everything it received, so no acknowledged write is
+lost. An auto-failover follower keeps `leader.<original>.discoverd`. The restarted job must
 leave recovery and accept a write (a temp table, never a tenant table) within
 3 minutes; otherwise the follower goes back to its previous release and a
 stopped primary is started again. Only a verified promote changes the roles
-the plugin reports. A plain follower's old leader remains its own resource
-and its apps keep their URL. Running the promote again afterwards changes
-nothing.
+the plugin reports. For a plain follower the plugin then rewrites the old
+primary's attachments (`DATABASE_URL` and the rest) to the promoted host with
+the leader's login, moves the promoted resource's own attachments onto that
+writable login, deploys each app and waits for it; the result's `Rewritten`
+lists them and the CLI prints the apps and keys. Apps cannot write between
+the stop and their deploy. If a deploy fails, run the promote again to
+finish. The old primary stays stopped with its data; destroying its resource
+deletes it. Running the promote again afterwards changes nothing.
 
 `flynn pg:unfollow <follower>` restarts the follower as a standalone writable
 copy, checks that it accepts a write, and only then reports it standalone; if
