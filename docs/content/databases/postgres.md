@@ -159,7 +159,19 @@ is a real add-on. If another host can take the volume, it is placed there.
 If not, it starts on the primary's host and the page says so. When
 availability is `manual` and the primary job has been gone for about 30
 seconds, Flynn promotes that follower and leaves `DATABASE_URL` on the
-original discoverd name. When availability is `system`, add follower still
+original discoverd name. Both plugin API processes read the primary's WAL
+position every 5 seconds while it runs. The follower is promoted only when it
+has replayed the position the primary had when it was last seen running, no
+more than 30 seconds before its job stopped. With no such sighting (both API
+processes restarted during the outage) or a follower that is behind, nothing
+changes and the plugin logs why once; `flynn pg:promote --force` is the way
+out. The promote is the same verified sequence as `pg:promote`: the old
+primary is stopped and stamped `deposed` (it refuses to start writable)
+before the follower is restarted as the primary, which must leave recovery
+and accept a write; any failure puts both back. A replacement replica is
+then created for the tenant that owns the resource, on another host when one
+fits. Destroying that replacement turns auto-failover off for the primary,
+so no other one is created. When availability is `system`, add follower still
 works and those followers stay read-only. The watch does not promote them.
 The add-follower form does not offer automatic failover while `system` is on.
 

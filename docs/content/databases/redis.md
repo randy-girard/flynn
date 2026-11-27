@@ -129,7 +129,13 @@ Synchronous replication stays off, and `min-replicas-to-write` stays unset.
 **Remove** stops replication and deletes the replica, including while it is
 still copying. Unfollow still leaves a standalone copy. Auto-failover
 places the replica on another host, promotes it if the primary job is gone, then
-recreates a replica. The plugin worker holding the failover lease promotes only
+recreates a replica. When the old primary rejoins as the new primary's
+replica and its data volume is on the new primary's host (or on a host that
+is gone), the plugin decommissions that volume so the replica starts on
+another host with a new one and does a full sync; the old primary's unsynced
+writes are dropped either way. A follower counts as broken only when its
+INFO shows it is not a replica, never synced after two minutes, or has had
+its link down for 60 seconds; a follower whose INFO cannot be read is kept. The plugin worker holding the failover lease promotes only
 after it has itself seen the primary job gone on every 5-second check for 30
 seconds; a lease change, or a gap of more than 10 seconds between checks,
 starts the 30 seconds over. With the primary gone the replica's link is down, so the

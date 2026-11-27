@@ -107,7 +107,18 @@ the same way as a standalone copy and leaves the old primary untouched.
 
 `--auto-failover` places the replica on another host. If the primary job
 stays down for 30 seconds, Flynn promotes that follower, fences the old
-primary, and starts a replacement replica. One node, with no follower, does
+primary, and starts a replacement replica. Both plugin API processes read the
+primary's GTID position every 5 seconds while it runs; the follower is
+promoted only when it has applied the position the primary had when it was
+last seen running (no more than 30 seconds before its job stopped). Its IO
+thread cannot connect to a stopped primary, so that thread's state does not
+count. With no such sighting, or a follower that is behind, nothing changes
+and the plugin logs why; `flynn mysql:promote --force` is the way out. The
+promote is the verified `mysql:promote` sequence: the old primary is stopped
+and stamped `deposed` (it refuses to start) before the follower restarts as
+the primary, which must be writable with that GTID and accept a write. The
+replacement replica is owned by the tenant that owns the resource;
+destroying it turns auto-failover off for the primary. One node, with no follower, does
 not fail over. The dashboard Followers tab can remove a follower while it is
 still replicating. Remove stops replication and deletes the replica.
 
