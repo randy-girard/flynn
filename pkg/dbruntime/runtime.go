@@ -387,24 +387,38 @@ func Resolve(engine, name string, catalog Catalog, allowCustom bool) (Size, erro
 }
 
 // ResolveProvision sizes a new instance. Any non-zero custom field is a raw
-// size and is rejected unless allowCustom is set. Otherwise the published
-// runtime is used (default small).
+// size and is rejected unless allowCustom is set. A field left at zero comes
+// from the published runtime name (default small), so --memory alone keeps
+// that runtime's CPU and disk; the result is named "custom". Raw CPU and
+// memory below the engine minimum (MinCPU, MinMemory) are refused. Without
+// raw fields the published runtime is used (default small).
 func ResolveProvision(engine, name string, custom Size, catalog Catalog, allowCustom bool) (Size, string, error) {
 	if custom.CPU != 0 || custom.Memory != 0 || custom.Disk != 0 {
 		if !allowCustom {
 			return Size{}, "", ErrCustomSizesDisabled
 		}
-		if custom.CPU <= 0 || custom.Memory <= 0 || custom.Disk <= 0 {
-			return Size{}, "", fmt.Errorf("custom size requires cpu, memory, and disk")
+		if custom.CPU < 0 || custom.Memory < 0 || custom.Disk < 0 {
+			return Size{}, "", fmt.Errorf("custom cpu, memory, and disk must be positive values")
 		}
-		name = strings.ToLower(strings.TrimSpace(name))
-		if name == "" {
-			name = "custom"
+		if custom.CPU == 0 || custom.Memory == 0 || custom.Disk == 0 {
+			base, err := Resolve(engine, name, catalog, allowCustom)
+			if err != nil {
+				return Size{}, "", err
+			}
+			if custom.CPU == 0 {
+				custom.CPU = base.CPU
+			}
+			if custom.Memory == 0 {
+				custom.Memory = base.Memory
+			}
+			if custom.Disk == 0 {
+				custom.Disk = base.Disk
+			}
 		}
-		if err := ValidateName(name); err != nil {
+		if err := ValidateSize(engine, custom.CPU, custom.Memory); err != nil {
 			return Size{}, "", err
 		}
-		return custom, name, nil
+		return custom, "custom", nil
 	}
 	sz, err := Resolve(engine, name, catalog, allowCustom)
 	if err != nil {

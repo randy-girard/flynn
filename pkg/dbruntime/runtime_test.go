@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -171,11 +172,26 @@ func TestResolveProvisionStopsRawSizes(t *testing.T) {
 		t.Fatalf("partial raw: %v", err)
 	}
 	cat.AllowCustomSizes = true
-	_, _, err = ResolveProvision(EngineRedis, "", Size{CPU: 100}, cat, true)
-	if err == nil || errors.Is(err, ErrCustomSizesDisabled) {
-		t.Fatalf("incomplete custom: %v", err)
+	// Omitted fields come from --runtime (default small), so
+	// --cpu and --memory alone are enough (NEW-26).
+	small, _ := cat.Find(EngineRedis, "small")
+	sz, name, err := ResolveProvision(EngineRedis, "", Size{CPU: 300, Memory: 300 * mib}, cat, true)
+	if err != nil || name != "custom" || sz != (Size{CPU: 300, Memory: 300 * mib, Disk: small.Disk}) {
+		t.Fatalf("partial custom %#v %s %v", sz, name, err)
 	}
-	sz, name, err := ResolveProvision(EngineRedis, "", custom, cat, true)
+	medium, _ := cat.Find(EngineRedis, "medium")
+	sz, name, err = ResolveProvision(EngineRedis, "medium", Size{Memory: 300 * mib}, cat, true)
+	if err != nil || name != "custom" || sz != (Size{CPU: medium.CPU, Memory: 300 * mib, Disk: medium.Disk}) {
+		t.Fatalf("override on medium %#v %s %v", sz, name, err)
+	}
+	if _, _, err := ResolveProvision(EngineRedis, "", Size{CPU: 300, Memory: 1 * mib}, cat, true); err == nil || !strings.Contains(err.Error(), "at least") {
+		t.Fatalf("below the redis memory minimum: %v", err)
+	}
+	if _, _, err := ResolveProvision(EngineRedis, "gone", Size{CPU: 300}, cat, true); err == nil {
+		t.Fatal("unpublished base runtime")
+	}
+	custom = Size{CPU: 100, Memory: 128 * mib, Disk: 256 * mib}
+	sz, name, err = ResolveProvision(EngineRedis, "", custom, cat, true)
 	if err != nil || name != "custom" || sz != custom {
 		t.Fatalf("custom %#v %s %v", sz, name, err)
 	}

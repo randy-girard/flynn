@@ -64,6 +64,19 @@ func TestOfficialDatastoreAddonContracts(t *testing.T) {
 	if !strings.Contains(string(raw), `"runtime":"custom"`) {
 		t.Fatalf("custom %s", raw)
 	}
+	// --cpu and --memory alone take the disk from the default runtime (NEW-26).
+	raw, err = redis.ProvisionConfig(CreateInput{CPU: "300", Memory: "300MB"}, cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var partial map[string]any
+	if err := json.Unmarshal(raw, &partial); err != nil {
+		t.Fatal(err)
+	}
+	redisSmall, _ := cat.Find(dbruntime.EngineRedis, "small")
+	if partial["runtime"] != "custom" || int64(partial["cpu"].(float64)) != 300 || int64(partial["memory"].(float64)) != 300<<20 || int64(partial["disk"].(float64)) != redisSmall.Disk {
+		t.Fatalf("partial custom %s", raw)
+	}
 	if err := cat.Create(dbruntime.Runtime{Engine: dbruntime.EnginePostgres, Name: "db-small", CPU: 500, Memory: 1 << 30, Disk: 10 << 30, Dedicated: true, Tags: map[string]string{"size": "small"}}); err != nil {
 		t.Fatal(err)
 	}

@@ -136,9 +136,35 @@ There is no in-place resize; provision a new resource to get a new size.
 Volumes that already exist keep their size, including instances created
 before the plugins applied the runtime's disk (those have 20 GiB).
 
+The runtime's CPU and memory are the instance process's limits
+(`flynn -a <instance-app> release:show --json`, `processes.*.resources`) for
+every engine, including Kafka and ClickHouse. A dedicated runtime also
+reserves them on the host. The plugin sizes the engine from the memory
+limit, so a larger limit is used and a smaller one still starts:
+
+| Engine | Setting from the memory limit |
+| --- | --- |
+| postgres | `shared_buffers` 25%, `effective_cache_size` 75% |
+| mysql | `innodb_buffer_pool_size` 50% |
+| redis | `maxmemory` 75% |
+| mongodb | WiredTiger `cacheSizeGB` 50% of (limit - 1 GiB), at least 0.25 |
+| kafka | JVM heap 50% (`-Xms` = `-Xmx`) |
+| clickhouse | `max_server_memory_usage` 80% |
+
+The settings are computed when the instance release is created
+(`FLYNN_DB_*` and `KAFKA_HEAP_OPTS` on that release); an instance created
+before keeps the engine's own defaults until it is replaced.
+
 Tenants cannot set raw `--cpu`, `--memory`, or `--disk`, and they cannot
 request a runtime name that is not published. A cluster admin allows raw
-sizes with `sudo flynn-host db-runtime:allow-custom`.
+sizes with `sudo flynn-host db-runtime:allow-custom`. Each raw value then
+overrides the `--runtime` value (default `small`) on its own, so
+`flynn addons:create redis --cpu 300 --memory 384MB` keeps small's disk; the
+instance's runtime is `custom`, and a follower or upgrade copy of it keeps the
+leader's CPU and memory. The provider checks the values again (the provider
+config comes from the tenant), and refuses CPU below 100 milliCPU and memory
+below the engine minimum: redis 64 MB, postgres 128 MB, mysql 256 MB, mongodb
+and kafka 512 MB, clickhouse 1 GB.
 
 On a single-host cluster, the **platform** Postgres appliance runs one peer
 (`SINGLETON=true`). When a third host joins, the scheduler promotes that

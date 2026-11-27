@@ -39,6 +39,16 @@ listener requires SASL. The broker admin principal is not returned to the app.
 The provider sets `tenant_safe`, so hosted tenants may provision it. See
 [Plugins](../plugins.md).
 
+## Size
+
+`flynn addons:create kafka --runtime <name>` takes CPU, memory, and disk from a
+database runtime (`flynn addons:types`; default `small`). After
+`flynn-host db-runtime:allow-custom`, `--cpu`, `--memory`, and `--disk`
+override the runtime's values one at a time (the runtime is then `custom`).
+The CPU and memory are the instance job's limits; the broker JVM heap is 50% of the memory limit (`KAFKA_HEAP_OPTS=-Xms..m -Xmx..m`); the rest is page cache. Memory below
+512 MB is refused. See
+[database runtimes](../databases.html.md) for the rules.
+
 ## Usage
 
 ### Adding a cluster to an app

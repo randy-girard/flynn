@@ -34,6 +34,16 @@ connection budget (default 20) and rejects `max_connections` above
 `maxIncomingConnections` setting. The provider sets `tenant_safe`. See
 [Plugins](../plugins.md).
 
+## Size
+
+`flynn addons:create mongodb --runtime <name>` takes CPU, memory, and disk from a
+database runtime (`flynn addons:types`; default `small`). After
+`flynn-host db-runtime:allow-custom`, `--cpu`, `--memory`, and `--disk`
+override the runtime's values one at a time (the runtime is then `custom`).
+The CPU and memory are the instance job's limits; the WiredTiger cache (`cacheSizeGB`) is 50% of (memory limit - 1 GiB), at least 0.25 GB. Memory below
+512 MB is refused. Check it with `db.serverStatus().wiredTiger.cache['maximum bytes configured']`. See
+[database runtimes](../databases.html.md) for the rules.
+
 ## Usage
 
 ### Adding a database to an app

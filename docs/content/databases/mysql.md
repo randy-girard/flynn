@@ -46,6 +46,16 @@ Instances run with `performance_schema` on. The dashboard resource page has a
 latency (or, when `performance_schema` is off, queries running longer than
 500 ms). Instances created earlier enable it on their next restart.
 
+## Size
+
+`flynn addons:create mysql --runtime <name>` takes CPU, memory, and disk from a
+database runtime (`flynn addons:types`; default `small`). After
+`flynn-host db-runtime:allow-custom`, `--cpu`, `--memory`, and `--disk`
+override the runtime's values one at a time (the runtime is then `custom`).
+The CPU and memory are the instance job's limits; `innodb_buffer_pool_size` is 50% of the memory limit. Memory below
+256 MB is refused. Check it with `SELECT @@innodb_buffer_pool_size;`. See
+[database runtimes](../databases.html.md) for the rules.
+
 ## Usage
 
 ### Adding a database to an app

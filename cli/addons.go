@@ -43,7 +43,12 @@ usage: flynn addons:create <type> [--as <name>] [--follow <resource>] [--runtime
 Provision an add-on of <type>. Options after <type> come from the installed
 plugin. --runtime is offered only when that type declares runtimes. Omitting
 it uses the type's default. --cpu, --memory, and --disk are rejected unless
-the type allows custom sizes and a cluster admin has allowed them.
+the type allows custom sizes and a cluster admin has allowed them. They
+override the runtime's values (default small) one at a time, so --memory
+alone keeps that runtime's CPU and disk; the instance's runtime is then
+"custom". Each engine has a memory minimum (redis 64MB, postgres 128MB,
+mysql 256MB, mongodb and kafka 512MB, clickhouse 1GB) and --cpu is at
+least 100.
 
 With no -a and no flynn git remote, the resource is created without an app.
 --unattached does that even when an app is selected. It is owned by --owner
@@ -65,6 +70,7 @@ Examples:
 	$ flynn addons:create postgres --unattached --owner acme
 	$ flynn addons:create postgres --as ANALYTICS
 	$ flynn addons:create postgres --as AMBER
+	$ flynn addons:create redis --cpu 300 --memory 384MB
 	$ flynn addons:create scheduler
 `)
 	register("addons:attach", runAddonsAttach, `

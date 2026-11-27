@@ -39,6 +39,16 @@ each controller process already caps itself with a small pgx pool, and an
 HA cluster runs several of those processes. Tenant Postgres still applies
 `CONNECTION LIMIT` on the plugin appliance.
 
+## Size
+
+`flynn addons:create postgres --runtime <name>` takes CPU, memory, and disk from a
+database runtime (`flynn addons:types`; default `small`). After
+`flynn-host db-runtime:allow-custom`, `--cpu`, `--memory`, and `--disk`
+override the runtime's values one at a time (the runtime is then `custom`).
+The CPU and memory are the instance job's limits; `shared_buffers` is 25% of the memory limit and `effective_cache_size` 75%. Memory below
+128 MB is refused. Check it with `SHOW shared_buffers;`. See
+[database runtimes](../databases.html.md) for the rules.
+
 ## Usage
 
 ### Adding a database to an app

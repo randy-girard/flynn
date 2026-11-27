@@ -32,6 +32,16 @@ Each resource is its own Redis instance and must have a password (`requirepass`)
 Provision fails if that password would be empty. The provider sets `tenant_safe`.
 See [Plugins](../plugins.md).
 
+## Size
+
+`flynn addons:create redis --runtime <name>` takes CPU, memory, and disk from a
+database runtime (`flynn addons:types`; default `small`). After
+`flynn-host db-runtime:allow-custom`, `--cpu`, `--memory`, and `--disk`
+override the runtime's values one at a time (the runtime is then `custom`).
+The CPU and memory are the instance job's limits; `maxmemory` is 75% of the memory limit (the rest is replication and fork headroom); writes past it get an OOM error under the default `noeviction` policy instead of the job being killed. Memory below
+64 MB is refused. Check it with `CONFIG GET maxmemory`. See
+[database runtimes](../databases.html.md) for the rules.
+
 ## Usage
 
 ### Adding a server to an app

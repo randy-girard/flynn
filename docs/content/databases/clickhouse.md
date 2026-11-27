@@ -33,6 +33,16 @@ provisioned with `ON CLUSTER` DDL and the `Replicated` database engine.
 database, with a memory and query quota. The app receives that user, not the
 cluster `default` user. The provider sets `tenant_safe`. See [Plugins](../plugins.md).
 
+## Size
+
+`flynn addons:create clickhouse --runtime <name>` takes CPU, memory, and disk from a
+database runtime (`flynn addons:types`; default `small`). After
+`flynn-host db-runtime:allow-custom`, `--cpu`, `--memory`, and `--disk`
+override the runtime's values one at a time (the runtime is then `custom`).
+The CPU and memory are the instance job's limits; `max_server_memory_usage` is 80% of the memory limit. Memory below
+1 GB is refused. Check it with `SELECT value FROM system.server_settings WHERE name = 'max_server_memory_usage'`. See
+[database runtimes](../databases.html.md) for the rules.
+
 ## Usage
 
 ### Adding a cluster to an app
