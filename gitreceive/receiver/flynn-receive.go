@@ -654,23 +654,28 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	}
 	receivePrintf("-----> Creating release...\n")
 
-	release := &ct.Release{
-		ArtifactIDs: []string{slugRunnerID, slugImageID},
-		Env:         releaseEnv,
-		Meta:        prevRelease.Meta,
-	}
-	if release.Meta == nil {
-		release.Meta = make(map[string]string, len(meta))
+	release := slugRelease(app.Name, prevRelease, slugRunnerID, slugImageID, releaseEnv, meta, stackName, artifact.Meta)
+	return finishDeploy(client, app, prevRelease, release, release.Processes, placeholderID)
+}
+
+// slugRelease is the release of a buildpack build: the slugrunner and slug
+// artifacts, the previous release's meta (copied, never written into) with
+// the push meta and the stack on top, and the processes the slug declares.
+func slugRelease(appName string, prev *ct.Release, slugRunnerID, slugImageID string, releaseEnv, meta map[string]string, stackName string, artifactMeta map[string]string) *ct.Release {
+	releaseMeta := make(map[string]string, len(prev.Meta)+len(meta)+1)
+	for k, v := range prev.Meta {
+		releaseMeta[k] = v
 	}
 	for k, v := range meta {
-		release.Meta[k] = v
+		releaseMeta[k] = v
 	}
-	release.Meta["slugrunner.stack"] = stackName
-
-	procs := slugReleaseProcesses(processCommandsFromMeta(artifact.Meta), prevRelease, app.Name)
-	release.Processes = procs
-
-	return finishDeploy(client, app, prevRelease, release, procs, placeholderID)
+	releaseMeta["slugrunner.stack"] = stackName
+	return &ct.Release{
+		ArtifactIDs: []string{slugRunnerID, slugImageID},
+		Env:         releaseEnv,
+		Meta:        releaseMeta,
+		Processes:   slugReleaseProcesses(processCommandsFromMeta(artifactMeta), prev, appName),
+	}
 }
 
 func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string, pushEnv map[string]string) error {
@@ -701,17 +706,7 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	// Build-job capabilities (CAP_SYS_ADMIN/NET_ADMIN/NET_RAW etc.) are applied
 	// centrally by flynn-host for dockerbuilder jobs; see isBuildJob in
 	// host/libcontainer_backend.go.
-	resources := resource.Defaults()
-	if limit, err := resource.ParseLimit(resource.TypeTempDisk, "4G"); err == nil {
-		resources[resource.TypeTempDisk] = resource.Spec{Limit: &limit, Request: &limit}
-	}
-	if db, ok := prevRelease.Processes["dockerbuilder"]; ok && db.Resources != nil {
-		resources = db.Resources
-	} else if rawLimit := os.Getenv("DOCKERBUILDER_DEFAULT_MEMORY_LIMIT"); rawLimit != "" {
-		if limit, err := resource.ParseLimit(resource.TypeMemory, rawLimit); err == nil {
-			resources[resource.TypeMemory] = resource.Spec{Limit: &limit, Request: &limit}
-		}
-	}
+	resources := containerBuildResources(prevRelease)
 
 	// Build-job capabilities are applied by flynn-host for dockerbuilder jobs.
 	// Merge stderr into stdout so build output goes through the git hook pipe.
@@ -730,31 +725,21 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 
 	receivePrintf("-----> Creating release...\n")
 
-	releaseMeta := prevRelease.Meta
-	if releaseMeta == nil {
-		releaseMeta = make(map[string]string, len(meta))
-	}
-	for k, v := range meta {
-		releaseMeta[k] = v
-	}
-	releaseMeta["git"] = "true"
-	releaseMeta["slugrunner.stack"] = stackContainer
+	release := dockerfileRelease(app.Name, prevRelease, artifact, releaseEnv, meta)
+	return finishDeploy(client, app, prevRelease, release, release.Processes, placeholderID)
+}
 
-	extra := map[string]ct.ProcessType{}
-	if db, ok := prevRelease.Processes["dockerbuilder"]; ok {
-		extra["dockerbuilder"] = db
-	}
-
-	release := dockerimage.NewAppReleaseFromArtifact(app.Name, prevRelease, artifact, dockerimage.ReleaseOptions{
+// dockerfileRelease is the release of a Dockerfile build (no flynn.yml). Its
+// meta and extra processes come from the helpers the flynn.yml path uses
+// (BUILD-15), so the previous release's meta is copied, not written into.
+func dockerfileRelease(appName string, prev *ct.Release, artifact *ct.Artifact, releaseEnv, meta map[string]string) *ct.Release {
+	return dockerimage.NewAppReleaseFromArtifact(appName, prev, artifact, dockerimage.ReleaseOptions{
 		Env:                releaseEnv,
-		Meta:               releaseMeta,
-		ProcessName:        dockerimage.GitProcessName(prevRelease),
+		Meta:               containerReleaseMeta(prev, meta),
+		ProcessName:        dockerimage.GitProcessName(prev),
 		ServiceHealthCheck: true,
-		ExtraProcesses:     extra,
+		ExtraProcesses:     containerExtraProcesses(prev),
 	})
-
-	procs := release.Processes
-	return finishDeploy(client, app, prevRelease, release, procs, placeholderID)
 }
 
 func localHostID() string {
