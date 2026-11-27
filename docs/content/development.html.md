@@ -81,8 +81,8 @@ GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
 `util/commit-validator/validate-gofmt` and fail if changed Go is not formatted.
 GitHub Actions and `script/run-unit-tests` also run
 `util/commit-validator/validate-govet`, which fails on any `go vet` finding in
-discoverd and the edge packages (router, blobstore, gitreceive, logaggregator,
-tarreceive, cli, slugbuilder), and `make test-scripts` (see
+discoverd, the edge packages (router, blobstore, gitreceive, logaggregator,
+tarreceive, cli, slugbuilder), controller and pkg, and `make test-scripts` (see
 [Smoke script regressions](#smoke-script-regressions)).
 
 ## Building
@@ -246,7 +246,7 @@ This writes an owner-only local archive with secrets redacted and prints its pat
 ## Tests
 
 There are several layers. CI on pushes and pull requests to `main` (and `develop`, while that
-branch exists) runs **gofmt**, **go vet** (discoverd), **bats**, and the **Linux unit suite**. Integration tests and Vagrant
+branch exists) runs **gofmt**, **go vet** (discoverd, edge packages, controller, pkg), **bats**, and the **Linux unit suite**. Integration tests and Vagrant
 smoke are local (or a dedicated machine). They are the right gate for scheduler,
 network, datastore, upgrade, and CLI behavior.
 
@@ -280,10 +280,12 @@ $ util/commit-validator/validate-govet
 ```
 
 CI and `make test-unit` / `script/run-unit-tests` run `go vet` over
-`./discoverd/...`, `./router/...`, `./blobstore/...`, `./gitreceive/...`, `./logaggregator/...`, `./tarreceive/...`, `./cli/...` and `./slugbuilder/...` and fail on any finding. Pass package patterns to vet other packages
-(`util/commit-validator/validate-govet ./controller/...`). Copy a
+`./discoverd/...`, `./router/...`, `./blobstore/...`, `./gitreceive/...`, `./logaggregator/...`, `./tarreceive/...`, `./cli/...`, `./slugbuilder/...`, `./controller/...` and `./pkg/...` and fail on any finding. Pass package patterns to vet other packages
+(`util/commit-validator/validate-govet ./host/...`). Copy a
 `discoverd.Instance` with `Copy()` or `Clone()`, not `*inst`: it holds a
-`sync.Once`, and vet's copylocks check rejects the plain copy.
+`sync.Once`, and vet's copylocks check rejects the plain copy. The same goes
+for `ct.ImageManifest` (call `RawManifest` on a pointer), scheduler `Host`
+(copy its exported fields) and `tls.Config` (use `Clone()`).
 
 ### bats (shell)
 

@@ -338,9 +338,9 @@ func (s *S) TestUpdateAppMeta(c *C) {
 func (s *S) createTestArtifact(c *C, in *ct.Artifact) *ct.Artifact {
 	if in.Type == "" {
 		in.Type = ct.ArtifactTypeFlynn
-		in.RawManifest = ct.ImageManifest{
+		in.RawManifest = (&ct.ImageManifest{
 			Type: ct.ImageManifestTypeV1,
-		}.RawManifest()
+		}).RawManifest()
 	}
 	if in.URI == "" {
 		in.URI = fmt.Sprintf("https://example.com/%s", random.String(8))
@@ -354,9 +354,9 @@ func (s *S) TestCreateArtifact(c *C) {
 		in := &ct.Artifact{
 			ID:   id,
 			Type: ct.ArtifactTypeFlynn,
-			RawManifest: ct.ImageManifest{
+			RawManifest: (&ct.ImageManifest{
 				Type: ct.ImageManifestTypeV1,
-			}.RawManifest(),
+			}).RawManifest(),
 			URI: fmt.Sprintf("https://example.com/manifest%d.json", i),
 		}
 		out := s.createTestArtifact(c, in)

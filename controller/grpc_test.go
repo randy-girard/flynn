@@ -184,7 +184,8 @@ func (s *GRPCSuite) createTestApp(c *C, app *api.App) *api.App {
 }
 
 func (s *GRPCSuite) updateTestApp(c *C, app *api.App) *api.App {
-	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	app, err := s.grpc.UpdateApp(ctx, &api.UpdateAppRequest{App: app})
 	c.Assert(err, IsNil)
 	return app
@@ -229,9 +230,9 @@ func (s *GRPCSuite) createTestDeploymentEvent(c *C, d *api.ExpandedDeployment, e
 func (s *GRPCSuite) createTestArtifact(c *C, in *ct.Artifact) *ct.Artifact {
 	if in.Type == "" {
 		in.Type = ct.ArtifactTypeFlynn
-		in.RawManifest = ct.ImageManifest{
+		in.RawManifest = (&ct.ImageManifest{
 			Type: ct.ImageManifestTypeV1,
-		}.RawManifest()
+		}).RawManifest()
 	}
 	if in.URI == "" {
 		in.URI = fmt.Sprintf("https://example.com/%s", random.String(8))
@@ -274,7 +275,8 @@ func (s *GRPCSuite) TestOptionsRequest(c *C) { // grpc-web
 }
 
 func (s *GRPCSuite) TestUnauthenticated(c *C) {
-	ctx, _ := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
+	defer cancel()
 	stream, err := s.grpcNoAuth.StreamApps(ctx, &api.StreamAppsRequest{})
 	c.Assert(err, IsNil)
 	_, err = stream.Recv()

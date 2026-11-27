@@ -110,10 +110,11 @@ workflow_job() {
   fi
 }
 
-# Packages validate-govet checks when called with no arguments (EDGE-18).
-GOVET_PACKAGES="./discoverd/... ./router/... ./blobstore/... ./gitreceive/... ./logaggregator/... ./tarreceive/... ./cli/... ./slugbuilder/..."
+# Packages validate-govet checks when called with no arguments (EDGE-18
+# added discoverd and the edge services, NEW-23 the controller and pkg).
+GOVET_PACKAGES="./discoverd/... ./router/... ./blobstore/... ./gitreceive/... ./logaggregator/... ./tarreceive/... ./cli/... ./slugbuilder/... ./controller/... ./pkg/..."
 
-@test "unit workflow, run-unit-tests and the unit container run go vet on discoverd and the edge packages" {
+@test "unit workflow, run-unit-tests and the unit container run go vet on discoverd, the edge packages, controller and pkg" {
   validator="${ROOT}/util/commit-validator/validate-govet"
   [[ -x "${validator}" ]]
   for pkg in ${GOVET_PACKAGES}; do

@@ -47,9 +47,11 @@ func (c *Config) DialOnce(network, addr string) (net.Conn, error) {
 }
 
 func (c *Config) dial(dial func(network, addr string) (net.Conn, error), network, addr string) (net.Conn, error) {
-	var conf tls.Config
+	// Clone, never copy: tls.Config holds a mutex, so a value copy races
+	// with (and can corrupt) the caller's config.
+	conf := &tls.Config{}
 	if c.Config != nil {
-		conf = *c.Config
+		conf = c.Config.Clone()
 	}
 	conf.InsecureSkipVerify = true
 
@@ -59,7 +61,7 @@ func (c *Config) dial(dial func(network, addr string) (net.Conn, error), network
 	}
 
 	conn := Conn{
-		Conn: tls.Client(cn, &conf),
+		Conn: tls.Client(cn, conf),
 		Wire: cn,
 	}
 

@@ -1353,7 +1353,10 @@ func (i *ImageManifest) ID() string {
 	return i.Hashes()["sha512_256"]
 }
 
-func (i ImageManifest) RawManifest() json.RawMessage {
+// RawManifest is the canonical JSON of the manifest. It takes a pointer:
+// ImageManifest holds a sync.Once, so a value receiver copied the lock on
+// every call (go vet copylocks). Only the exported fields are encoded.
+func (i *ImageManifest) RawManifest() json.RawMessage {
 	data, _ := cjson.Marshal(i)
 	return data
 }

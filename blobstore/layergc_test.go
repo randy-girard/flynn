@@ -218,10 +218,10 @@ func TestLayerGCKeepsLayerReusedDuringTheRun(t *testing.T) {
 }
 
 func TestLiveLayerPaths(t *testing.T) {
-	manifest := ct.ImageManifest{Type: ct.ImageManifestTypeV1, Rootfs: []*ct.ImageRootfs{
+	manifest := (&ct.ImageManifest{Type: ct.ImageManifestTypeV1, Rootfs: []*ct.ImageRootfs{
 		{Layers: []*ct.ImageLayer{{ID: "a"}, {ID: "b"}}},
 		{Layers: []*ct.ImageLayer{{ID: "c"}}},
-	}}.RawManifest()
+	}}).RawManifest()
 	paths, err := liveLayerPaths([]*ct.Artifact{
 		{Type: ct.ArtifactTypeFlynn, RawManifest: manifest, LayerURLTemplate: "http://blobstore.discoverd/tarreceive/apps/app-1/layers/{id}.squashfs",
 			Meta: map[string]string{"layer_url.c": "http://blobstore.discoverd/tarreceive/layers/c.squashfs"}},

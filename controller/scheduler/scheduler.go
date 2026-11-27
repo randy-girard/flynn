@@ -1884,12 +1884,21 @@ func (s *Scheduler) HandleInternalStateRequest(req *InternalStateRequest) {
 	}
 
 	for id, host := range s.hosts {
-		h := *host
-		h.Tags = make(map[string]string, len(host.Tags))
+		// Copy the exported fields only: Host holds sync.Once values, so a
+		// struct copy would copy their locks (go vet copylocks).
+		h := &Host{
+			ID:               host.ID,
+			Tags:             make(map[string]string, len(host.Tags)),
+			Healthy:          host.Healthy,
+			Checks:           host.Checks,
+			Shutdown:         host.Shutdown,
+			MemoryTotalBytes: host.MemoryTotalBytes,
+			CPUMilli:         host.CPUMilli,
+		}
 		for key, val := range host.Tags {
 			h.Tags[key] = val
 		}
-		req.State.Hosts[id] = &h
+		req.State.Hosts[id] = h
 	}
 
 	for id, job := range s.jobs {

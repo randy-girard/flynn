@@ -4,8 +4,9 @@
 # script/run-unit-tests call this; it fails on any vet finding.
 #
 # Usage: util/commit-validator/validate-govet [packages...]
-#   default packages: discoverd and the edge services (router, blobstore,
-#   gitreceive, logaggregator, tarreceive, cli, slugbuilder)
+#   default packages: discoverd, the edge services (router, blobstore,
+#   gitreceive, logaggregator, tarreceive, cli, slugbuilder), controller
+#   and pkg
 #
 set -eo pipefail
 
@@ -22,7 +23,9 @@ if [ $# -eq 0 ]; then
     ./logaggregator/... \
     ./tarreceive/... \
     ./cli/... \
-    ./slugbuilder/...
+    ./slugbuilder/... \
+    ./controller/... \
+    ./pkg/...
 fi
 
 echo "==> go vet $*"
