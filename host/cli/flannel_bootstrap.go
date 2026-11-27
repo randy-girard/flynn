@@ -14,7 +14,7 @@ import (
 
 // applyFlannelRestoreEnv copies install-time flannel settings into the
 // restored release. Empty variables leave the release alone. Values are
-// checked before they are interpolated into SQL. These variables do not
+// checked and then written as quoted SQL literals (releaseEnvKeySQL). These variables do not
 // change discoverd metadata that already exists.
 func applyFlannelRestoreEnv(app *ct.ExpandedFormation, sqlBuf *bytes.Buffer) error {
 	updates, err := flannelRestoreUpdates()
@@ -29,10 +29,7 @@ func applyFlannelRestoreEnv(app *ct.ExpandedFormation, sqlBuf *bytes.Buffer) err
 	}
 	for _, u := range updates {
 		app.Release.Env[u.key] = u.val
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = pg_temp.json_object_update_key(env, '%s', '%s')
-WHERE release_id = (SELECT release_id FROM apps WHERE name = 'flannel' AND deleted_at IS NULL);
-		`, u.key, u.val))
+		sqlBuf.WriteString(releaseEnvKeySQL("flannel", u.key, u.val))
 	}
 	return nil
 }

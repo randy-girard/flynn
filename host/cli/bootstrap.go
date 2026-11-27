@@ -256,26 +256,12 @@ func runBootstrapBackup(manifest []byte, backupFile string, ch chan *bootstrap.S
 	// add buffer to the end of the SQL import containing commands that rewrite data in the controller db
 	sqlBuf := &bytes.Buffer{}
 	db = io.MultiReader(db, sqlBuf)
-	sqlBuf.WriteString(fmt.Sprintf("\\connect %s\n", controllerApp.Release.Env["PGDATABASE"]))
-	sqlBuf.WriteString(`
-CREATE FUNCTION pg_temp.json_object_update_key(
-  "json"          jsonb,
-  "key_to_set"    TEXT,
-  "value_to_set"  TEXT
-)
-  RETURNS jsonb
-  LANGUAGE sql
-  IMMUTABLE
-  STRICT
-AS $function$
-     SELECT ('{' || string_agg(to_json("key") || ':' || "value", ',') || '}')::jsonb
-       FROM (SELECT *
-               FROM json_each("json"::json)
-              WHERE "key" <> "key_to_set"
-              UNION ALL
-             SELECT "key_to_set", to_json("value_to_set")) AS "fields"
-$function$;
-`)
+	connectLine, err := psqlConnectLine(controllerApp.Release.Env["PGDATABASE"])
+	if err != nil {
+		return err
+	}
+	sqlBuf.WriteString(connectLine)
+	sqlBuf.WriteString(restoreSQLFunctions)
 
 	type manifestStep struct {
 		ID        string
@@ -349,18 +335,12 @@ $function$;
 
 	// set TELEMETRY_CLUSTER_ID
 	telemetryClusterID := random.UUID()
-	sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = jsonb_set(env, '{TELEMETRY_CLUSTER_ID}', '%q')
-WHERE release_id = (SELECT release_id FROM apps WHERE name = 'controller' AND deleted_at IS NULL);
-`, telemetryClusterID))
+	sqlBuf.WriteString(releaseEnvJSONSetSQL("controller", "TELEMETRY_CLUSTER_ID", telemetryClusterID))
 	controllerApp.Release.Env["TELEMETRY_CLUSTER_ID"] = telemetryClusterID
 
 	// set TELEMETRY_BOOTSTRAP_ID if unset
 	if controllerApp.Release.Env["TELEMETRY_BOOTSTRAP_ID"] == "" {
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = jsonb_set(env, '{TELEMETRY_BOOTSTRAP_ID}', '%q')
-WHERE release_id = (SELECT release_id FROM apps WHERE name = 'controller' AND deleted_at IS NULL);
-`, telemetryClusterID))
+		sqlBuf.WriteString(releaseEnvJSONSetSQL("controller", "TELEMETRY_BOOTSTRAP_ID", telemetryClusterID))
 		controllerApp.Release.Env["TELEMETRY_BOOTSTRAP_ID"] = telemetryClusterID
 	}
 
@@ -416,7 +396,7 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'gitreceive' AND d
 	if cfg.Singleton {
 		singleton := strconv.FormatBool(true)
 		postgresApp.Release.Env["SINGLETON"] = singleton
-		sireniaSQLNames := []string{"'postgres'"}
+		sireniaApps := []string{"postgres"}
 		for _, p := range installed {
 			f := data[p.Name]
 			if f == nil || f.Release == nil {
@@ -426,7 +406,7 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'gitreceive' AND d
 			if !p.Sirenia && (spec == nil || !spec.Sirenia) && !f.Release.IsSirenia() {
 				continue
 			}
-			sireniaSQLNames = append(sireniaSQLNames, "'"+p.Name+"'")
+			sireniaApps = append(sireniaApps, p.Name)
 			f.Release.Env["SINGLETON"] = singleton
 			proc := f.Release.Env["SIRENIA_PROCESS"]
 			if proc == "" {
@@ -436,20 +416,9 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'gitreceive' AND d
 				delete(pt.Env, "SINGLETON")
 				f.Release.Processes[proc] = pt
 			}
-			sqlBuf.WriteString(fmt.Sprintf(`
-DO $$
-  BEGIN
-    IF (SELECT processes->'%s' ? 'env' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL)) THEN
-      UPDATE releases SET processes = jsonb_set(processes, '{%s,env}', (processes #> '{%s,env}')::jsonb - 'SINGLETON')
-      WHERE release_id IN (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL);
-    END IF;
-  END;
-$$;`, proc, p.Name, proc, proc, p.Name))
+			sqlBuf.WriteString(dropProcessSingletonSQL(proc, p.Name))
 		}
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = jsonb_set(env, '{SINGLETON}', '%q')
-WHERE release_id IN (SELECT release_id FROM apps WHERE name IN (%s));
-`, singleton, strings.Join(sireniaSQLNames, ", ")))
+		sqlBuf.WriteString(setSingletonSQL(singleton, sireniaApps))
 
 		webN, dataN := 1, 1
 		scale := map[string]map[string]int{
@@ -486,10 +455,7 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name IN (%s));
 		}
 		for app, procs := range scale {
 			for typ, count := range procs {
-				sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE formations SET processes = jsonb_set(processes, '{%s}', '%d')
-WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL);
-`, typ, count, app))
+				sqlBuf.WriteString(formationScaleSQL(app, typ, count))
 			}
 		}
 	}
@@ -529,10 +495,7 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at
 	}
 
 	// set DISCOVERD_PEERS in release
-	sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = pg_temp.json_object_update_key(env, 'DISCOVERD_PEERS', '%s')
-WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND deleted_at IS NULL);
-`, state.StepData["discoverd"].(*bootstrap.RunAppState).Release.Env["DISCOVERD_PEERS"]))
+	sqlBuf.WriteString(releaseEnvKeySQL("discoverd", "DISCOVERD_PEERS", state.StepData["discoverd"].(*bootstrap.RunAppState).Release.Env["DISCOVERD_PEERS"]))
 
 	// load data into postgres
 	cmd := exec.JobUsingHost(state.Hosts[0], artifacts["postgres"], nil)
@@ -731,10 +694,6 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	// now that the controller and blobstore are up and controller
 	// migrations have run (so we know artifacts have a manifest column),
 	// migrate all artifacts to Flynn images
-	jsonb := func(v interface{}) []byte {
-		data, _ := json.Marshal(v)
-		return data
-	}
 	sqlBuf.Reset()
 	for _, step := range manifestSteps {
 		artifact, ok := artifacts[step.ID]
@@ -743,45 +702,17 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 		}
 
 		// update current artifact in database for service
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s', size = %d, layer_url_template = '%s', meta = '%s' WHERE artifact_id = (
-  SELECT artifact_id FROM release_artifacts WHERE release_id = (
-    SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL
-  )
-);`, artifact.URI, jsonb(&artifact.RawManifest), jsonb(artifact.Hashes), artifact.Size, artifact.LayerURLTemplate, jsonb(artifact.Meta), step.ID))
+		sqlBuf.WriteString(restoreArtifactSQL(step.ID, artifact))
 	}
 
 	// update redis artifacts from a restored backup only when this tarball
 	// still ships a redis image (plugin-managed redis uses blobstore layers).
 	if redisImage := artifacts["redis-image"]; redisImage != nil {
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s', size = %d, layer_url_template = '%s', meta = '%s'
-WHERE artifact_id = (SELECT (env->>'REDIS_IMAGE_ID')::uuid FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'redis' AND deleted_at IS NULL))
-OR uri = (SELECT env->>'REDIS_IMAGE_URI' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'redis' AND deleted_at IS NULL));`,
-			redisImage.URI, jsonb(&redisImage.RawManifest), jsonb(redisImage.Hashes), redisImage.Size, redisImage.LayerURLTemplate, jsonb(redisImage.Meta)))
-
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = jsonb_set(env, '{REDIS_IMAGE_ID}', ('"' || (SELECT artifact_id::text FROM artifacts WHERE uri = '%s') || '"')::jsonb, true)
-WHERE env->>'REDIS_IMAGE_URI' IS NOT NULL;`,
-			redisImage.URI))
+		sqlBuf.WriteString(restoreRedisArtifactSQL(redisImage))
 	}
 
 	// remove job and volume records created by previous clusters
-	sqlBuf.WriteString(fmt.Sprintf(`
-DELETE FROM events WHERE object_type IN ('job', 'volume') AND created_at < '%s';`,
-		startedAt))
-	sqlBuf.WriteString(fmt.Sprintf(`
-DELETE FROM job_volumes USING job_cache WHERE job_volumes.job_id = job_cache.job_id AND job_cache.created_at < '%s';`,
-		startedAt))
-	sqlBuf.WriteString(fmt.Sprintf(`
-DELETE FROM job_volumes USING volumes WHERE job_volumes.volume_id = volumes.volume_id AND volumes.created_at < '%s';`,
-		startedAt))
-	sqlBuf.WriteString(fmt.Sprintf(`
-DELETE FROM job_cache WHERE created_at < '%s';`,
-		startedAt))
-	sqlBuf.WriteString(fmt.Sprintf(`
-DELETE FROM volumes WHERE created_at < '%s';`,
-		startedAt))
+	sqlBuf.WriteString(removeStaleRecordsSQL(startedAt))
 
 	// run the above artifact migration SQL against the controller database
 	cmd = exec.JobUsingHost(state.Hosts[0], artifacts["postgres"], nil)
