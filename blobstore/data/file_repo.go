@@ -92,7 +92,18 @@ func (r *FileRepo) DefaultBackend() backend.Backend {
 }
 
 func (r *FileRepo) List(dir string) ([]string, error) {
-	rows, err := r.db.Query("SELECT substring(name FROM '^' || $1 || '/[^/]+/?') AS path FROM files WHERE name LIKE $1 || '%' AND deleted_at IS NULL GROUP BY path", strings.TrimSuffix(dir, "/"))
+	// The directory is compared as a literal string (NEW-48): it is never
+	// put into a regular expression or a LIKE pattern. Each child is the
+	// first path segment after "{dir}/", with a trailing "/" when it has
+	// children of its own.
+	rows, err := r.db.Query(`
+SELECT $1::text || '/' || CASE WHEN strpos(rest, '/') > 0 THEN left(rest, strpos(rest, '/')) ELSE rest END AS path
+FROM (
+  SELECT substr(name, length($1::text) + 2) AS rest FROM files
+  WHERE left(name, length($1::text) + 1) = $1::text || '/' AND deleted_at IS NULL
+) children
+WHERE rest <> '' AND left(rest, 1) <> '/'
+GROUP BY path`, strings.TrimSuffix(dir, "/"))
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +128,7 @@ type BackendFile struct {
 
 func (r *FileRepo) ListFilesExcludingDefaultBackend(prefix string) ([]BackendFile, error) {
 	rows, err := r.db.Query(
-		"SELECT file_id, file_oid, external_id, backend, name, type, size, sha512, updated_at FROM files WHERE backend != $1 AND NAME LIKE $2 || '%' AND deleted_at IS NULL",
+		"SELECT file_id, file_oid, external_id, backend, name, type, size, sha512, updated_at FROM files WHERE backend != $1 AND left(name, length($2::text)) = $2::text AND deleted_at IS NULL",
 		r.defaultBackend.Name(), prefix,
 	)
 	if err != nil {
@@ -667,12 +678,13 @@ func (r *FileRepo) Delete(name string) error {
 	if err != nil {
 		return err
 	}
-	// use a regular expression so that either a file with the name is
-	// deleted, or any file prefixed with "{name}/" is deleted (so in other
-	// words, mimic either deleting a file or recursively deleting a
-	// directory)
+	// Delete either the file with the name, or every file prefixed with
+	// "{name}/" (so in other words, mimic either deleting a file or
+	// recursively deleting a directory). The name is compared as a literal
+	// string, never as a regular expression or LIKE pattern (NEW-48), so a
+	// name such as "a.b" or "a+*" matches only itself.
 	rows, err := tx.Query(
-		"UPDATE files SET deleted_at = now() WHERE name ~ ('^' || $1 || '(/.*)?$') AND deleted_at IS NULL RETURNING file_id, external_id, backend, name", name,
+		"UPDATE files SET deleted_at = now() WHERE (name = $1::text OR left(name, length($1::text) + 1) = $1::text || '/') AND deleted_at IS NULL RETURNING file_id, external_id, backend, name", name,
 	)
 	if err != nil {
 		tx.Rollback()
@@ -819,6 +831,37 @@ func (r *FileRepo) ListLayerObjects() ([]LayerObject, error) {
 SELECT f.name, COALESCE(f.size, 0)::bigint, EXTRACT(EPOCH FROM now() - f.created_at)::float8,
   EXISTS (SELECT 1 FROM uploads u WHERE regexp_replace(u.name, '\.(squashfs|json)$', '') = regexp_replace(f.name, '\.(squashfs|json)$', ''))
 FROM files f WHERE f.deleted_at IS NULL AND f.name ~ $1 ORDER BY f.name`, layerNamePattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var res []LayerObject
+	for rows.Next() {
+		var o LayerObject
+		var age float64
+		if err := rows.Scan(&o.Name, &o.Size, &age, &o.Uploading); err != nil {
+			return nil, err
+		}
+		o.Age = time.Duration(age * float64(time.Second))
+		res = append(res, o)
+	}
+	return res, rows.Err()
+}
+
+// legacyNamePattern matches the objects stored in the legacy shared
+// directories, before slugs and image manifests went under per-app prefixes
+// (NEW-05, EDGE-35): /slugs/layers/<id>.squashfs, /slugs/images/<id>.json and
+// /tarreceive/images/<id>.json. The shared /tarreceive/layers store is the
+// layer GC's (cleanup-layers).
+const legacyNamePattern = `^/(slugs/layers/[^/]+\.squashfs|(slugs|tarreceive)/images/[^/]+\.json)$`
+
+// ListLegacyObjects lists the live objects in the legacy shared directories,
+// for `flynn-blobstore cleanup-legacy` (NEW-48).
+func (r *FileRepo) ListLegacyObjects() ([]LayerObject, error) {
+	rows, err := r.db.Query(`
+SELECT f.name, COALESCE(f.size, 0)::bigint, EXTRACT(EPOCH FROM now() - f.created_at)::float8,
+  EXISTS (SELECT 1 FROM uploads u WHERE u.name = f.name)
+FROM files f WHERE f.deleted_at IS NULL AND f.name ~ $1 ORDER BY f.name`, legacyNamePattern)
 	if err != nil {
 		return nil, err
 	}
