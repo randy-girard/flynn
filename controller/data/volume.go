@@ -108,8 +108,15 @@ func (r *VolumeRepo) AppList(appID string) ([]*ct.Volume, error) {
 	return scanVolumes(rows)
 }
 
+// ListSince is the first list of the scheduler's volume stream, bounded on
+// the server by streamListTimeout.
 func (r *VolumeRepo) ListSince(since time.Time) ([]*ct.Volume, error) {
-	rows, err := r.db.Query("volume_list_since", since)
+	tx, err := beginBoundedRead(r.db, streamListTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query("volume_list_since", since)
 	if err != nil {
 		return nil, err
 	}

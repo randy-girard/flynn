@@ -126,10 +126,15 @@ func (r *ArtifactRepo) List() (interface{}, error) {
 }
 
 func (r *ArtifactRepo) ListIDs(ids ...string) (map[string]*ct.Artifact, error) {
+	return listArtifactIDs(r.db, ids)
+}
+
+// listArtifactIDs is ListIDs on q, which may be a bounded transaction.
+func listArtifactIDs(q rowsQuerier, ids []string) (map[string]*ct.Artifact, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	rows, err := r.db.Query("artifact_list_ids", fmt.Sprintf("{%s}", strings.Join(ids, ",")))
+	rows, err := q.Query("artifact_list_ids", fmt.Sprintf("{%s}", strings.Join(ids, ",")))
 	if err != nil {
 		return nil, err
 	}

@@ -334,7 +334,7 @@ func (r *FormationRepo) GetExpanded(appID, releaseID string, includeDeleted bool
 		return nil, err
 	}
 	populateFormationArtifacts(ef, artifacts)
-	if err := r.populateDiscoverdAllow([]*ct.ExpandedFormation{ef}); err != nil {
+	if err := r.populateDiscoverdAllow(r.db, []*ct.ExpandedFormation{ef}); err != nil {
 		return nil, err
 	}
 	return ef, nil
@@ -344,7 +344,7 @@ func (r *FormationRepo) GetExpanded(appID, releaseID string, includeDeleted bool
 // of the resources attached to its app. Resource rows are written by a
 // provider or the cluster key, so a tenant's release env cannot add a
 // datastore here. One query covers every app in the list.
-func (r *FormationRepo) populateDiscoverdAllow(formations []*ct.ExpandedFormation) error {
+func (r *FormationRepo) populateDiscoverdAllow(q rowsQuerier, formations []*ct.ExpandedFormation) error {
 	if len(formations) == 0 {
 		return nil
 	}
@@ -362,7 +362,7 @@ func (r *FormationRepo) populateDiscoverdAllow(formations []*ct.ExpandedFormatio
 	}
 	envs := make(map[string][]map[string]string, len(appIDs))
 	if len(appIDs) > 0 {
-		rows, err := r.db.Query("resource_env_list_by_apps", fmt.Sprintf("{%s}", strings.Join(appIDs, ",")))
+		rows, err := q.Query("resource_env_list_by_apps", fmt.Sprintf("{%s}", strings.Join(appIDs, ",")))
 		if err != nil {
 			return err
 		}
@@ -403,19 +403,28 @@ func (r *FormationRepo) ListActive() ([]*ct.ExpandedFormation, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return r.listExpanded(rows)
+	return r.listExpanded(r.db, rows)
 }
 
+// ListSince is the first list of the scheduler's formation stream. Its
+// queries run in a transaction bounded by streamListTimeout.
 func (r *FormationRepo) ListSince(since time.Time) ([]*ct.ExpandedFormation, error) {
-	rows, err := r.db.Query("formation_list_since", since)
+	tx, err := beginBoundedRead(r.db, streamListTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.Query("formation_list_since", since)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return r.listExpanded(rows)
+	return r.listExpanded(tx, rows)
 }
 
-func (r *FormationRepo) listExpanded(rows *pgx.Rows) ([]*ct.ExpandedFormation, error) {
+// listExpanded reads rows and fills artifacts and DiscoverdAllow with
+// further queries on q, the same connection or transaction as rows.
+func (r *FormationRepo) listExpanded(q rowsQuerier, rows *pgx.Rows) ([]*ct.ExpandedFormation, error) {
 	var formations []*ct.ExpandedFormation
 
 	// artifactIDs is a list of artifact IDs related to the formation list
@@ -440,7 +449,7 @@ func (r *FormationRepo) listExpanded(rows *pgx.Rows) ([]*ct.ExpandedFormation, e
 		for id := range artifactIDs {
 			ids = append(ids, id)
 		}
-		artifacts, err := r.artifacts.ListIDs(ids...)
+		artifacts, err := listArtifactIDs(q, ids)
 		if err != nil {
 			return nil, err
 		}
@@ -451,7 +460,7 @@ func (r *FormationRepo) listExpanded(rows *pgx.Rows) ([]*ct.ExpandedFormation, e
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := r.populateDiscoverdAllow(formations); err != nil {
+	if err := r.populateDiscoverdAllow(q, formations); err != nil {
 		return nil, err
 	}
 	return formations, nil
