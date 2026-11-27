@@ -246,3 +246,56 @@ func TestRouteAuthzGolden(t *testing.T) {
 	}
 	t.Fatalf("route authz changed (- golden, + now):\n%s", strings.Join(diff, "\n"))
 }
+
+// TestEveryRouteHasExplicitRequirement walks the routes registerRoutes adds
+// to the real router. Each one declares a requirement, the router serves
+// it, and the authz table resolves every concrete path of the route to
+// that same row (no other row shadows it).
+func TestEveryRouteHasExplicitRequirement(t *testing.T) {
+	rt := registeredTestRoutes(t)
+	if len(rt.routes) < 150 {
+		t.Fatalf("only %d routes registered; registerRoutes did not run", len(rt.routes))
+	}
+	for _, r := range rt.routes {
+		if !r.Req.Declared() {
+			t.Errorf("%s %s has no authz requirement", r.Method, r.Pattern)
+		}
+		for _, path := range expandPattern(r.Pattern) {
+			if h, _, _ := rt.router.Lookup(r.Method, path); h == nil {
+				t.Errorf("%s %s: the router does not serve %s", r.Method, r.Pattern, path)
+			}
+			if got := rt.authz.Pattern(r.Method, path); got != r.Pattern {
+				t.Errorf("%s %s: authz resolves to row %q", r.Method, path, got)
+			}
+		}
+	}
+	var rows int
+	rt.authz.Each(func(string, string, authz.Requirement) { rows++ })
+	if rows != len(rt.routes) {
+		t.Fatalf("authz table has %d rows for %d routes", rows, len(rt.routes))
+	}
+}
+
+// TestRoutesRegisterOnlyThroughTheTable keeps routes from bypassing the
+// authz table: no controller source outside route_table.go builds an
+// httprouter or adds a route to one.
+func TestRoutesRegisterOnlyThroughTheTable(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || f == "route_table.go" {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []string{"httprouter.New(", ".router.Handle(", ".router.GET(", ".router.POST(", ".router.PUT(", ".router.PATCH(", ".router.DELETE(", "*httprouter.Router"} {
+			if strings.Contains(string(src), bad) {
+				t.Errorf("%s contains %q: register routes with routeTable so each declares its authz", f, bad)
+			}
+		}
+	}
+}

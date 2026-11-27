@@ -2,7 +2,7 @@ package authz
 
 // Named app roles used by the dashboard Team picker and documented for
 // `flynn login` tokens. Selecting a role grants these controller permissions
-// on that app; HTTPAllowed (and the CLI, which calls the same API) then
+// on that app; the route requirements (and the CLI, which calls the same API) then
 // enforce the grants. OSS Flynn freezes these four roles; custom
 // function/action bundles require the enterprise plugin (see oss.go).
 const (

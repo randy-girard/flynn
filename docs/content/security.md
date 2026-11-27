@@ -213,6 +213,20 @@ the GitHub webhook, and `GET /ca-cert` are unlimited because they run
 before authentication. There is no per-IP limit: external clients arrive
 through the router. Hosted and self-hosted clusters use the same limits.
 
+## Controller API authorization
+
+Each controller HTTP route names who may call it where it is registered
+(`registerRoutes` in `controller/controller.go`): cluster-only (the cluster
+key or a `cluster:admin` token), any credential, a user session, a
+permission on the app in the path, or a public route with its reason
+(`/ca-cert`, the OAuth login endpoints, `GET /cluster/region`, the GitHub
+webhook). A service token (`account:quota`, `acme:issue`,
+`gitreceive:build`) reaches only the routes that list its scope. A request
+that no route serves is cluster-only: the cluster key gets the router's
+404 and every other caller gets 403. A route cannot be registered without a
+requirement, and `controller/testdata/route_authz.golden` records, for every
+route and a matrix of callers, who gets through.
+
 ## Browser login (OAuth authorize)
 
 `GET /oauth/authorize` on `auth.<domain>` (used by `flynn login --oauth`)

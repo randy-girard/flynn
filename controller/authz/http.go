@@ -1,9 +1,7 @@
 package authz
 
 import (
-	"net/http"
 	"sort"
-	"strings"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
 )
@@ -25,7 +23,7 @@ const (
 	// profiles that app operators must list in order to apply them.
 	rkAnyAuth
 	// rkCreateRelease is POST /releases. The app id is in the body, so
-	// HTTPAllowed only checks that the caller can mint a release for some
+	// the route check only verifies that the caller can mint a release for some
 	// app (env:write, or cluster admin). CreateRelease then requires app_id
 	// for non-admin tokens and enforces the specific app.
 	rkCreateRelease
@@ -108,104 +106,6 @@ const ScopeAccountQuota = "account:quota"
 // It does not read release env or change formations.
 const ScopeACMEIssue = "acme:issue"
 
-// ClusterRegionPublic is the unauthenticated peer read. The body is only
-// this cluster's region name. Linking does not send CONTROLLER_KEY.
-func ClusterRegionPublic(method, path string) bool {
-	return method == http.MethodGet && path == "/cluster/region"
-}
-
-// HTTPAllowed returns false if the principal may not call this controller route.
-func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
-	return HTTPAllowedResolved(tok, method, rawPath, nil)
-}
-
-// HTTPAllowedResolved is HTTPAllowed with a resolver that turns the app
-// reference in the path (a name or an id) into the app id. Grants are keyed by
-// id, so the check runs on the resolved id. A nil resolver, or one that returns
-// "", checks the path reference as given.
-func HTTPAllowedResolved(tok *authorizer.Token, method, rawPath string, resolve func(ref string) string) bool {
-	if tok == nil {
-		return false
-	}
-	kind, appID, perm := httpRequirement(method, rawPath)
-	// grantID is the app id the grants are checked against. It is resolved
-	// lazily so routes that never reach a grant check cost no lookup.
-	grantID := func() string {
-		if resolve != nil && appID != "" {
-			if id := resolve(appID); id != "" {
-				return id
-			}
-		}
-		return appID
-	}
-	// Checked before the cluster-admin short-circuit so a cluster:admin JWT
-	// cannot create compiles. The cluster key still can.
-	if kind == rkGitreceiveBuild {
-		if tok.ClusterKey {
-			return true
-		}
-		return hasScope(tok, ScopeGitreceiveBuild) && grantCovers(tok, grantID(), PermAppWrite)
-	}
-	if tok.HasClusterAdmin() {
-		return true
-	}
-	// flynn-receiver reads the buildpack allowlist before it starts a
-	// compile. Read-only, and only for the receive credential.
-	if hasScope(tok, ScopeGitreceiveBuild) && (method == http.MethodGet || method == http.MethodHead) && strings.Trim(rawPath, "/") == "cluster/policy" {
-		return true
-	}
-	if kind == rkBuildArtifact {
-		return hasScopedBuildArtifact(tok)
-	}
-	if kind == rkAnyAuth {
-		return true
-	}
-	if kind == rkCreateRelease {
-		return hasAnyReleaseWrite(tok)
-	}
-	if kind == rkGitHubCatalog {
-		return hasAnyGitHubWrite(tok)
-	}
-	// Service tokens reach only their own routes. This runs before the
-	// user-session and provider checks so a caller label in UserID cannot
-	// open them.
-	if IsServiceCredential(tok) && (kind == rkUserSession || kind == rkManageProvider) {
-		return (hasScope(tok, ScopeAccountQuota) && accountQuotaRead(method, rawPath)) ||
-			(hasScope(tok, ScopeACMEIssue) && acmeIssueAllowed(method, rawPath))
-	}
-	if kind == rkUserSession {
-		return UserBound(tok)
-	}
-	if kind == rkManageProvider {
-		return UserBound(tok) || tokenCanManageSomeApp(tok)
-	}
-	if kind == rkEvents {
-		return hasScope(tok, ScopeEventsRead) && hasEventsGrant(tok)
-	}
-	if kind == rkArtifactGet {
-		return hasScope(tok, ScopeGitreceiveBuild) && hasAnyGrantedApp(tok)
-	}
-	if kind == rkAccountQuota {
-		return hasScope(tok, ScopeAccountQuota)
-	}
-	if hasScope(tok, ScopeAccountQuota) && accountQuotaRead(method, rawPath) {
-		return true
-	}
-	if hasScope(tok, ScopeACMEIssue) && acmeIssueAllowed(method, rawPath) {
-		return true
-	}
-	if kind == rkCluster {
-		return false
-	}
-	// Platform apps hold cluster state (controller/blobstore/postgres, …).
-	// App-scoped dashboard tokens must not open their consoles or read env
-	// even if someone granted the token that app id/name.
-	if IsPlatformAppName(appID) {
-		return false
-	}
-	return grantCovers(tok, grantID(), perm)
-}
-
 // TokenContextKey stores the request principal on the handler context.
 type tokenContextKey struct{}
 
@@ -224,7 +124,7 @@ func TokenFromContext(ctx interface {
 }
 
 // SystemAppAllowed reports whether tok may operate on a flynn-system-app.
-// User apps are always allowed at this layer (HTTPAllowed already scoped them).
+// User apps are always allowed at this layer (the route requirement already scoped them).
 // A nil token cannot touch system apps.
 func SystemAppAllowed(tok *authorizer.Token, systemApp bool) bool {
 	if !systemApp {
@@ -309,7 +209,7 @@ func TarreceiveAllowed(tok *authorizer.Token) bool {
 // GitPushAllowed reports whether tok may git-push (git-receive-pack) to the
 // given app. Cluster admins, including the cluster controller key, may push
 // anywhere. App-scoped tokens need app:deploy on that app — the same grant
-// HTTPAllowed requires for POST /apps/:id/deploy. Coarser aliases that expand
+// the POST /apps/:id/deploy route requires. Coarser aliases that expand
 // to app:deploy (app:write, app:admin) also qualify, so flynn-receive build
 // tokens (app:write on their app) can push only that app.
 func GitPushAllowed(tok *authorizer.Token, appID, appName string) bool {
@@ -361,22 +261,6 @@ func hasScopedBuildArtifact(tok *authorizer.Token) bool {
 	return false
 }
 
-func accountQuotaRead(method, rawPath string) bool {
-	m := strings.ToUpper(method)
-	if m != http.MethodGet && m != http.MethodHead {
-		return false
-	}
-	path := strings.Trim(rawPath, "/")
-	parts := strings.Split(path, "/")
-	if len(parts) == 1 && parts[0] == "apps" {
-		return true
-	}
-	// GET /apps/:id/formations lists process counts per release. It carries
-	// no release env; single formations are not opened because
-	// ?expand=true embeds the release.
-	return len(parts) == 3 && parts[0] == "apps" && parts[1] != "" && parts[2] == "formations"
-}
-
 // HasAccountQuota reports whether tok is the billing quota credential.
 func HasAccountQuota(tok *authorizer.Token) bool {
 	return hasScope(tok, ScopeAccountQuota)
@@ -385,36 +269,6 @@ func HasAccountQuota(tok *authorizer.Token) bool {
 // HasACMEIssue reports whether tok is the ACME issuance credential.
 func HasACMEIssue(tok *authorizer.Token) bool {
 	return hasScope(tok, ScopeACMEIssue)
-}
-
-func acmeIssueAllowed(method, rawPath string) bool {
-	m := strings.ToUpper(method)
-	parts := strings.Split(strings.Trim(rawPath, "/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		return false
-	}
-	switch parts[0] {
-	case "managed-certificates":
-		if len(parts) == 1 {
-			return m == http.MethodGet || m == http.MethodHead
-		}
-		return len(parts) == 2 && (m == http.MethodGet || m == http.MethodHead || m == http.MethodPut)
-	case "acme":
-		return len(parts) == 2 && parts[1] == "config" && (m == http.MethodGet || m == http.MethodHead)
-	case "routes":
-		return len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead)
-	case "apps":
-		if len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead) {
-			return true
-		}
-		if len(parts) >= 3 && parts[2] == "routes" {
-			switch m {
-			case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func hasAnyGrantedApp(tok *authorizer.Token) bool {
@@ -443,295 +297,6 @@ func GitreceiveBuildAllowed(tok *authorizer.Token, appID, appName string) bool {
 		return false
 	}
 	return grantCovers(tok, appID, PermAppWrite)
-}
-
-func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string) {
-	path := strings.Trim(rawPath, "/")
-	if path == "" {
-		return rkCluster, "", ""
-	}
-	parts := strings.Split(path, "/")
-	m := strings.ToUpper(method)
-
-	if len(parts) == 0 || parts[0] == "" {
-		return rkCluster, "", ""
-	}
-
-	switch parts[0] {
-	case "events":
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkEvents, "", ""
-		}
-		return rkCluster, "", ""
-	case "tenancy":
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkAnyAuth, "", ""
-		}
-		return rkCluster, "", ""
-	case "whoami", "tokens", "domains":
-		return rkUserSession, "", ""
-	case "users":
-		// POST /users creates a pre-verified account for any email. Only a
-		// cluster admin may do that: a user session could squat an address
-		// and receive the grants made when its owner is later invited.
-		return rkCluster, "", ""
-	case "handles":
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkUserSession, "", ""
-		}
-		return rkCluster, "", ""
-	case "accounts":
-		if len(parts) >= 3 && parts[2] == "collaborators" {
-			return rkUserSession, "", ""
-		}
-		if len(parts) == 3 && parts[2] == "quota" && (m == http.MethodGet || m == http.MethodHead || m == http.MethodPut) {
-			return rkAccountQuota, "", ""
-		}
-		if len(parts) == 3 && (parts[2] == "suspend" || parts[2] == "unsuspend") && m == http.MethodPost {
-			return rkAccountQuota, "", ""
-		}
-		return rkCluster, "", ""
-	case "providers":
-		if len(parts) == 4 && parts[2] == "resources" {
-			// One resource carries its credentials. Reading it is for a user
-			// or an app grant (the handler checks the owner). Writing it is
-			// bootstrap, migration and plugin controller keys only.
-			switch m {
-			case http.MethodGet, http.MethodHead:
-				return rkManageProvider, "", ""
-			case http.MethodPut:
-				return rkCluster, "", ""
-			}
-		}
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkAnyAuth, "", ""
-		}
-		if len(parts) >= 3 && parts[2] == "resources" {
-			return rkManageProvider, "", ""
-		}
-		return rkCluster, "", ""
-	case "routes":
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkUserSession, "", ""
-		}
-		return rkCluster, "", ""
-	case "hosts":
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkAnyAuth, "", ""
-		}
-		return rkCluster, "", ""
-	case "runtimes":
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkAnyAuth, "", ""
-		}
-		return rkCluster, "", ""
-	case "db-runtimes":
-		// List is for anyone who can provision. Creates are flynn-host
-		// (cluster key, including plugin jobs) or a cluster admin on the web.
-		if m == http.MethodGet || m == http.MethodHead {
-			return rkAnyAuth, "", ""
-		}
-		return rkCluster, "", ""
-	case "cluster":
-		// GET /cluster/regions is the list the dashboard and CLI show. Linking
-		// stays cluster-admin. GET /cluster/region (singular) is public and
-		// is served before this check.
-		if len(parts) == 2 && parts[1] == "regions" && (m == http.MethodGet || m == http.MethodHead) {
-			return rkAnyAuth, "", ""
-		}
-		if len(parts) >= 2 && (parts[1] == "runtime-settings" || parts[1] == "app-domain" || parts[1] == "placement" || parts[1] == "postgres-availability" || parts[1] == "mysql-availability" || parts[1] == "redis-availability" || parts[1] == "mongodb-availability" || parts[1] == "kafka-availability" || parts[1] == "clickhouse-availability") {
-			if m == http.MethodGet || m == http.MethodHead {
-				return rkAnyAuth, "", ""
-			}
-			return rkCluster, "", ""
-		}
-		return rkCluster, "", ""
-	case "github":
-		if len(parts) >= 2 && parts[1] == "webhook" {
-			return rkAnyAuth, "", ""
-		}
-		if len(parts) >= 2 && parts[1] == "export" {
-			return rkCluster, "", ""
-		}
-		if m == http.MethodGet || m == http.MethodHead {
-			if len(parts) >= 2 && parts[1] == "installations" {
-				return rkGitHubCatalog, "", ""
-			}
-			// GET /github/app stays any-auth so the dashboard can show
-			// "GitHub App is not configured" vs the connect panel.
-			return rkAnyAuth, "", ""
-		}
-		return rkCluster, "", ""
-	case "artifacts":
-		// POST /artifacts is the build artifact-creation route. Only the
-		// method matters; the artifact is not app-scoped in the URL.
-		if m == http.MethodPost {
-			return rkBuildArtifact, "", ""
-		}
-		if (m == http.MethodGet || m == http.MethodHead) && len(parts) == 2 && parts[1] != "" {
-			return rkArtifactGet, "", ""
-		}
-		return rkCluster, "", ""
-	case "tenant-backups":
-		return rkCluster, "", ""
-	case "resources":
-		// GET /resources is every resource the caller may see. The handler
-		// keeps a user's list to the resources its accounts own (flynn
-		// resource and plugin commands find a resource by name here). Only a
-		// user session may ask; app-scoped and compile tokens use
-		// /apps/:id/resources.
-		if len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead) {
-			return rkUserSession, "", ""
-		}
-		return rkCluster, "", ""
-	case "plugin-catalog":
-		// GET /plugin-catalog is the plugin commands and add-on types a
-		// user may use (no secrets). The handler hides providers a hosted
-		// tenant cannot provision.
-		if len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead) {
-			return rkUserSession, "", ""
-		}
-		return rkCluster, "", ""
-	case "releases":
-		if m == http.MethodPost {
-			return rkCreateRelease, "", ""
-		}
-		return rkCluster, "", ""
-
-	case "apps":
-		if len(parts) == 1 {
-			if m == http.MethodGet || m == http.MethodHead || m == http.MethodPost {
-				return rkUserSession, "", ""
-			}
-			return rkCluster, "", ""
-		}
-		appID := parts[1]
-		// POST /apps/:id/builds is the cluster key or a gitreceive:build
-		// token for that app. Spec, token mint, and other methods stay
-		// cluster-only. The handler also rejects a cluster:admin JWT.
-		// The build lease (EDGE-09) is gitreceive's and flynn-receiver's
-		// with the cluster key. A tenant holding it could block every deploy.
-		if len(parts) >= 3 && parts[2] == "build-lock" {
-			return rkCluster, "", ""
-		}
-		if len(parts) >= 3 && parts[2] == "builds" {
-			if m == http.MethodPost && len(parts) == 3 {
-				return rkGitreceiveBuild, appID, ""
-			}
-			return rkCluster, "", ""
-		}
-		// PUT/PATCH /apps/:id/jobs/:job is the scheduler's job-state upsert,
-		// not a tenant operation. A tenant's app:jobs:run grant may start
-		// jobs (POST) but must not forge job rows.
-		if len(parts) >= 3 && parts[2] == "jobs" && (m == http.MethodPut || m == http.MethodPatch) {
-			return rkCluster, "", ""
-		}
-		if len(parts) >= 3 && (parts[2] == "collaborators" || parts[2] == "transfer") {
-			return rkUserSession, appID, ""
-		}
-		if len(parts) == 2 {
-			switch m {
-			case http.MethodGet, http.MethodHead:
-				return rkAppAccess, appID, ""
-			case http.MethodDelete:
-				return rkAppAccess, appID, PermAppDelete
-			default:
-				return rkAppAccess, appID, PermAppWrite
-			}
-		}
-		return rkAppAccess, appID, appSubPerm(m, parts[2:])
-
-	default:
-		return rkCluster, "", ""
-	}
-}
-
-func appSubPerm(method string, rest []string) string {
-	if len(rest) == 0 {
-		return PermAppRead
-	}
-	res := rest[0]
-	write := method != http.MethodGet && method != http.MethodHead
-	switch res {
-	case "log":
-		return PermAppLogsRead
-	case "formations", "scale":
-		if write {
-			return PermAppScaleWrite
-		}
-		return PermAppScaleRead
-	case "jobs":
-		if len(rest) >= 3 && rest[2] == "output" && (method == http.MethodGet || method == http.MethodHead) {
-			return PermAppLogsRead
-		}
-		switch method {
-		case http.MethodPost, http.MethodPut, http.MethodPatch:
-			return PermAppJobsRun
-		case http.MethodDelete:
-			return PermAppJobsStop
-		default:
-			return PermAppJobsRead
-		}
-	case "jobs-stats":
-		return PermAppMetricsRead
-	case "deploy":
-		return PermAppDeploy
-	case "deployments":
-		return PermAppActivityRead
-	case "release":
-		if write {
-			return permSharedReleaseWrite
-		}
-		return ""
-	case "releases":
-		if len(rest) >= 3 && rest[2] == "output" {
-			if write {
-				return PermAppWrite
-			}
-			return PermAppLogsRead
-		}
-		if write {
-			return PermAppWrite
-		}
-		return PermAppActivityRead
-	case "resources", "plugin-addons":
-		if write {
-			return PermAppResourcesWrite
-		}
-		return PermAppResourcesRead
-	case "routes":
-		if write {
-			return PermAppRoutesWrite
-		}
-		return PermAppRoutesRead
-	case "github":
-		if len(rest) >= 2 && rest[1] == "deploy" {
-			return PermAppDeploy
-		}
-		if write {
-			return PermAppGitHubWrite
-		}
-		return PermAppGitHubRead
-	case "volumes":
-		if write {
-			return PermAppResourcesWrite
-		}
-		return PermAppResourcesRead
-	case "gc":
-		return PermAppDelete
-	case "meta":
-		return PermAppWrite
-	case "scheduler-events":
-		if write {
-			return PermAppSchedulerWrite
-		}
-		return PermAppSchedulerRead
-	default:
-		if write {
-			return PermAppWrite
-		}
-		return PermAppRead
-	}
 }
 
 func hasAnyReleaseWrite(tok *authorizer.Token) bool {

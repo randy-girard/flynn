@@ -323,13 +323,15 @@ func TestMintBuildToken(t *testing.T) {
 		t.Fatalf("user id = %q, want empty when the app has no owner", tok.UserID)
 	}
 	// The token must satisfy both build routes for its own app only.
-	if !authz.HTTPAllowed(tok, "POST", "/artifacts") {
+	// These are the requirements of POST /artifacts and of an app write
+	// route (controller registerRoutes).
+	if !authz.BuildArtifact().Allows(tok, "", nil) {
 		t.Fatal("minted token should be allowed to POST /artifacts")
 	}
 	if !authz.TarreceiveAllowed(tok) {
 		t.Fatal("minted token should be allowed to push to tarreceive")
 	}
-	if authz.HTTPAllowed(tok, "POST", "/apps/other/releases") {
+	if authz.App(authz.PermAppWrite).Allows(tok, "other", nil) {
 		t.Fatal("minted token must not write to other apps")
 	}
 }

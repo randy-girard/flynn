@@ -22,20 +22,26 @@ type Remover interface {
 	Remove(string) error
 }
 
-func crud(r *routeTable, resource string, example interface{}, repo Repository) {
-	crudRegister(r, resource, example, repo, true)
+// crudAuthz is the requirement of each route crud registers. Remove is
+// needed only when the repository is a Remover.
+type crudAuthz struct {
+	Create, Get, List, Remove authz.Requirement
 }
 
-func crudNoCreate(r *routeTable, resource string, example interface{}, repo Repository) {
-	crudRegister(r, resource, example, repo, false)
+func crud(r *routeTable, resource string, example interface{}, repo Repository, req crudAuthz) {
+	crudRegister(r, resource, example, repo, true, req)
 }
 
-func crudRegister(r *routeTable, resource string, example interface{}, repo Repository, create bool) {
+func crudNoCreate(r *routeTable, resource string, example interface{}, repo Repository, req crudAuthz) {
+	crudRegister(r, resource, example, repo, false, req)
+}
+
+func crudRegister(r *routeTable, resource string, example interface{}, repo Repository, create bool, req crudAuthz) {
 	resourceType := reflect.TypeOf(example)
 	prefix := "/" + resource
 
 	if create {
-		r.POST(prefix, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
+		r.POST(prefix, req.Create, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
 			thing := reflect.New(resourceType).Interface()
 			if err := httphelper.DecodeJSON(req, thing); err != nil {
 				respondWithError(rw, err)
@@ -80,7 +86,7 @@ func crudRegister(r *routeTable, resource string, example interface{}, repo Repo
 	}
 
 	singletonPath := prefix + "/:" + resource + "_id"
-	r.GET(singletonPath, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, _ *http.Request) {
+	r.GET(singletonPath, req.Get, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, _ *http.Request) {
 		thing, err := lookup(ctx)
 		if err != nil {
 			respondWithError(rw, err)
@@ -96,7 +102,7 @@ func crudRegister(r *routeTable, resource string, example interface{}, repo Repo
 		httphelper.JSON(rw, 200, thing)
 	}))
 
-	r.GET(prefix, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
+	r.GET(prefix, req.List, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
 		if resource == "apps" {
 			if api := apiFromContext(ctx); api != nil {
 				page, err := parseListPage(req)
@@ -134,7 +140,7 @@ func crudRegister(r *routeTable, resource string, example interface{}, repo Repo
 	}))
 
 	if remover, ok := repo.(Remover); ok {
-		r.DELETE(singletonPath, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, _ *http.Request) {
+		r.DELETE(singletonPath, req.Remove, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, _ *http.Request) {
 			_, err := lookup(ctx)
 			if err != nil {
 				respondWithError(rw, err)
