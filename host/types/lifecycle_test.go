@@ -1,6 +1,9 @@
 package host
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func sampleJob(reason, profile, procType string) *ActiveJob {
 	meta := map[string]string{
@@ -223,3 +226,21 @@ func sampleStopJob(reason, procType string) *ActiveJob {
 }
 
 func strPtr(s string) *string { return &s }
+
+// NEW-67: the start/stop lines go to the app log. A URL password or a
+// password= conninfo field on argv (an older CLI's `pg:psql`) is masked.
+func TestFormatJobLifecycleLogRedactsPasswords(t *testing.T) {
+	job := sampleJob("", "", "")
+	job.Job.Config.Args = []string{"psql", "postgres://app_x:apppw_secret67@leader.pg-x.discoverd:5432/db?sslmode=require", "-c", "host=h user=u password=conn_secret67 dbname=d"}
+	got := FormatJobLifecycleLog(JobEventStart, job)
+	if strings.Contains(got, "apppw_secret67") || strings.Contains(got, "conn_secret67") {
+		t.Fatalf("lifecycle log carries a password: %q", got)
+	}
+	if !strings.Contains(got, "postgres://app_x:***@leader.pg-x.discoverd:5432/db?sslmode=require") || !strings.Contains(got, "password=*** dbname=d") {
+		t.Fatalf("redacted line lost its shape: %q", got)
+	}
+	StampJobCommand(job.Job, "run redis://:redispw_secret67@leader.r.discoverd:6379")
+	if got := FormatJobLifecycleLog(JobEventStart, job); strings.Contains(got, "redispw_secret67") {
+		t.Fatalf("procfile command password logged: %q", got)
+	}
+}

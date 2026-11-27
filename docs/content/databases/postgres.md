@@ -272,7 +272,11 @@ prefer a VPN when you can. See
 To connect to a `psql` console for **your app's** database, install the postgres
 plugin and run `flynn pg:psql`. That command is the plugin, not a built-in
 `flynn` command. It runs in a container on the cluster and uses the same
-controller credential as other `flynn` commands.
+controller credential as other `flynn` commands. The CLI passes your
+`DATABASE_URL` to `psql` without its password and puts the password in
+`PGPASSWORD`, so neither the job's process list nor the app log's "started
+with command" line shows it (flynn-host also masks URL and `password=`
+values in that line).
 
 The platform database (controller, blobstore, and the built-in appliance) is
 not that console. On a cluster host, run `flynn-host pg:psql`, `flynn-host

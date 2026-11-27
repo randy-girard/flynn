@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -380,9 +381,21 @@ func JobCommand(job *ActiveJob) string {
 	return JobArgvCommand(job)
 }
 
+var (
+	logURLPasswordRe  = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^\s:/@]*):[^\s@/]+@`)
+	logConnPasswordRe = regexp.MustCompile(`(?i)\b(password)=('[^']*'|\S+)`)
+)
+
+// redactCommandPasswords masks URL and conninfo passwords in a command shown
+// in the app log (NEW-67: an older CLI's pg:psql put DATABASE_URL on argv).
+func redactCommandPasswords(cmd string) string {
+	cmd = logURLPasswordRe.ReplaceAllString(cmd, "$1:***@")
+	return logConnPasswordRe.ReplaceAllString(cmd, "$1=***")
+}
+
 func withCommand(msg string, job *ActiveJob) string {
-	proc := JobProcfileCommand(job)
-	argv := JobArgvCommand(job)
+	proc := redactCommandPasswords(JobProcfileCommand(job))
+	argv := redactCommandPasswords(JobArgvCommand(job))
 	switch {
 	case proc != "" && argv != "" && proc != argv:
 		return msg + " with command `" + proc + "` (`" + argv + "`)"

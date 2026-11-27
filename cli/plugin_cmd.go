@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"regexp"
@@ -626,6 +627,7 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 		env["REDISCLI_AUTH"] = in.App["REDIS_PASSWORD"]
 	}
 	jobArgs, env = quietRedisCLIAuth(jobArgs, env)
+	jobArgs, env = quietPsqlPassword(jobArgs, env)
 	// Appliance admin routes require CONTROLLER_KEY. Isolated database
 	// releases deliberately do not have it, and the task job runs on the
 	// user app (a shell on the plugin app is refused). Copy the plugin
@@ -714,6 +716,36 @@ func quietRedisCLIAuth(args []string, env map[string]string) ([]string, map[stri
 	}
 	if env["REDISCLI_AUTH"] == "" && env["REDIS_PASSWORD"] != "" {
 		env["REDISCLI_AUTH"] = env["REDIS_PASSWORD"]
+	}
+	return out, env
+}
+
+// quietPsqlPassword moves the password of a postgres:// URL on a psql argv
+// into PGPASSWORD. The job argv is logged by flynn-host ("started with
+// command ...") and readable by every process on the host (NEW-67).
+func quietPsqlPassword(args []string, env map[string]string) ([]string, map[string]string) {
+	if len(args) == 0 || path.Base(args[0]) != "psql" {
+		return args, env
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	out := append([]string(nil), args...)
+	for i := 1; i < len(out); i++ {
+		u, err := url.Parse(out[i])
+		if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil {
+			continue
+		}
+		pw, ok := u.User.Password()
+		if !ok {
+			continue
+		}
+		if cur := env["PGPASSWORD"]; cur != "" && cur != pw {
+			continue
+		}
+		env["PGPASSWORD"] = pw
+		u.User = url.User(u.User.Username())
+		out[i] = u.String()
 	}
 	return out, env
 }

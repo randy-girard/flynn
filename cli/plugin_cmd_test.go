@@ -1083,8 +1083,12 @@ func TestPluginJobConfigNoTenantReleaseUsesPluginImage(t *testing.T) {
 	if cfg.App != "demo" || cfg.Release != "plugin-rel" {
 		t.Fatalf("%+v", cfg)
 	}
-	if got := strings.Join(cfg.Args, " "); !strings.Contains(got, url) {
+	// The URL is on argv without its password, which is in PGPASSWORD (NEW-67).
+	if got := strings.Join(cfg.Args, " "); !strings.Contains(got, strings.Replace(url, "app:pw@", "app@", 1)) || strings.Contains(got, ":pw@") {
 		t.Fatalf("psql args %q", cfg.Args)
+	}
+	if cfg.Env["PGPASSWORD"] != "pw" {
+		t.Fatalf("PGPASSWORD %q", cfg.Env["PGPASSWORD"])
 	}
 	if cfg.Env["PGHOST"] != "leader."+leader+".discoverd" {
 		t.Fatalf("pghost %q", cfg.Env["PGHOST"])
