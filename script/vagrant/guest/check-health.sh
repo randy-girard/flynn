@@ -1,7 +1,8 @@
 #!/bin/bash
 # Run on a cluster node as root. One health sample for script/vagrant.sh
 # monitor and chaos: cluster probe (hosts, controller, scheduler, postgres
-# peers, every service at its formation count, status), tenant HTTP, plugin
+# peers and sirenia membership, every service at its formation count,
+# status), tenant HTTP, plugin
 # APIs, the dashboard, and every provider resource's connection endpoint.
 # Prints "ok <section>" or "FAIL <section>: <reason>" per section and exits 1
 # if any section failed. Never prints credentials or resource env values.

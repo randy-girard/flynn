@@ -6,6 +6,7 @@ DOMAIN="${CLUSTER_DOMAIN:-1.localflynn.com}"
 IP="${CLUSTER_IP:-}"
 MIN_HOSTS="${MIN_HOSTS:-1}"
 BUILDER_IP="${BUILDER_IP:-192.168.57.10}"
+export HOST_JSON="${HOST_JSON:-/etc/flynn/host.json}"
 
 if ! command -v flynn-host >/dev/null 2>&1; then
   echo "flynn-host is not installed on this node" >&2
@@ -46,7 +47,7 @@ echo "controller HTTP ${code} hosts=${count} domain=${DOMAIN}"
 
 # Scheduler places tenant jobs after a host reboot. Without it, app-one stays 503
 # even when controller.<domain> answers 401.
-discoverd_key="$(python3 -c 'import json; print((json.load(open("/etc/flynn/host.json")).get("env") or {}).get("DISCOVERD_AUTH_KEY") or "")' 2>/dev/null || true)"
+discoverd_key="$(python3 -c 'import json, os; print((json.load(open(os.environ["HOST_JSON"])).get("env") or {}).get("DISCOVERD_AUTH_KEY") or "")' 2>/dev/null || true)"
 sched_json="$(mktemp)"
 status_json="$(mktemp)"
 trap 'rm -f "${status_json}" "${sched_json}"' EXIT
@@ -104,6 +105,62 @@ if [[ "${PROBE_SIRENIA:-}" == "1" ]]; then
     exit 1
   fi
   echo "postgres peers healthy (${pg_have})"
+
+  # Each peer answering its own status is not enough: chaos once reported
+  # recovered while one peer was listed twice in State.Async (its own
+  # downstream). Check the sirenia chain in the service meta: every peer
+  # once (by POSTGRES_ID, then by address), a sync when there is more than
+  # one peer, and the chain is exactly the registered peers.
+  pg_meta="$(mktemp)"
+  trap 'rm -f "${status_json}" "${sched_json}" "${pg_json}" "${pg_meta}"' EXIT
+  pg_meta_code="$(curl -sf --max-time 3 -o "${pg_meta}" -w '%{http_code}' \
+    -H "Auth-Key: ${discoverd_key}" \
+    "http://127.0.0.1:1111/services/postgres/meta" || true)"
+  if [[ "${pg_meta_code}" != "200" ]]; then
+    echo "postgres service meta is unavailable (HTTP ${pg_meta_code:-none})" >&2
+    exit 1
+  fi
+  if ! python3 - "${pg_meta}" "${pg_json}" "${pg_want}" <<'PY'
+import json, sys
+
+meta = json.load(open(sys.argv[1], encoding="utf-8")) or {}
+registered = json.load(open(sys.argv[2], encoding="utf-8")) or []
+want = int(sys.argv[3])
+st = meta.get("data")
+if not isinstance(st, dict) or not st.get("primary"):
+    raise SystemExit("sirenia: no sirenia state in the postgres service meta")
+
+
+def key(inst):
+    return (inst.get("meta") or {}).get("POSTGRES_ID") or inst.get("addr") or "?"
+
+
+chain = [("primary", st.get("primary")), ("sync", st.get("sync"))]
+chain += [("async[%d]" % i, a) for i, a in enumerate(st.get("async") or [])]
+chain = [(pos, inst) for pos, inst in chain if inst]
+problems = []
+for what, get in (("", key), (" at address", lambda i: i.get("addr") or "?")):
+    seen = {}
+    for pos, inst in chain:
+        seen.setdefault(get(inst), []).append(pos)
+    for k, where in seen.items():
+        if len(where) > 1:
+            problems.append("peer%s %s listed twice (%s)" % (what, k, ", ".join(where)))
+if not st.get("singleton") and not st.get("sync") and (len(registered) > 1 or want > 1):
+    problems.append("no sync")
+members = {key(inst) for _, inst in chain}
+live = {key(inst) for inst in registered}
+for k in sorted(live - members):
+    problems.append("peer %s is registered but not in the sirenia chain" % k)
+for k in sorted(members - live):
+    problems.append("peer %s is in the sirenia chain but not registered" % k)
+if problems:
+    raise SystemExit("sirenia: " + "; ".join(problems))
+print("sirenia membership ok (generation %s, %d async)" % (st.get("generation"), len(st.get("async") or [])))
+PY
+  then
+    exit 1
+  fi
 fi
 
 # Rolling reloads must not reboot the next node while any service is below its
@@ -112,10 +169,10 @@ fi
 # formation's discoverd instances with its process count (omni x hosts).
 if [[ "${PROBE_FULL_STRENGTH:-}" == "1" ]]; then
   if ! python3 - "${count}" <<'PY'
-import base64, json, sys, urllib.request
+import base64, json, os, sys, urllib.request
 
 hosts = int(sys.argv[1])
-env = json.load(open("/etc/flynn/host.json")).get("env") or {}
+env = json.load(open(os.environ["HOST_JSON"])).get("env") or {}
 ckey, dkey = env.get("CONTROLLER_KEY") or "", env.get("DISCOVERD_AUTH_KEY") or ""
 
 
