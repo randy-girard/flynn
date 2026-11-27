@@ -427,8 +427,10 @@ func UnsetAttachment(release, resource map[string]string) map[string]*string {
 	if release == nil || resource == nil {
 		return env
 	}
+	// MergeAttachment copies trimmed values (a PEM loses its final newline),
+	// so a trimmed match counts (DATA-67).
 	for k, v := range resource {
-		if release[k] == v {
+		if rv, ok := release[k]; ok && (rv == v || rv == strings.TrimSpace(v)) {
 			env[k] = nil
 		}
 	}
@@ -437,7 +439,7 @@ func UnsetAttachment(release, resource map[string]string) map[string]*string {
 			continue
 		}
 		for _, rv := range resource {
-			if v == rv {
+			if v == rv || v == strings.TrimSpace(rv) {
 				env[k] = nil
 				break
 			}
@@ -855,4 +857,43 @@ func splitAppName(resourceApp string) (prefix, word, suffix string, ok bool) {
 		return "", "", "", false
 	}
 	return prefix, word, suffix, true
+}
+
+// UnsetAttachmentKeeping is UnsetAttachment for an app that keeps other
+// resources (remaining, their resource env). A shared attachment key that is
+// not a URL (FLYNN_MYSQL_TLS_ENABLED, FLYNN_MYSQL_ROLE, FLYNN_REDIS_LEADER)
+// stays when a remaining resource provides the value the app has, and is set
+// to a remaining resource's value when one provides the key with another
+// value (a primary's ROLE after its follower goes). Otherwise it is unset.
+func UnsetAttachmentKeeping(release, resource map[string]string, remaining []map[string]string) map[string]*string {
+	env := UnsetAttachment(release, resource)
+	for k, v := range env {
+		if v != nil || strings.HasSuffix(k, "_URL") || !isAttachmentEnvKey(k) {
+			continue
+		}
+		cur := strings.TrimSpace(release[k])
+		replacement := ""
+		kept := false
+		for _, r := range remaining {
+			rv := strings.TrimSpace(r[k])
+			if rv == "" {
+				continue
+			}
+			if rv == cur {
+				kept = true
+				break
+			}
+			if replacement == "" {
+				replacement = rv
+			}
+		}
+		switch {
+		case kept:
+			delete(env, k)
+		case replacement != "":
+			r := replacement
+			env[k] = &r
+		}
+	}
+	return env
 }

@@ -709,3 +709,77 @@ func TestUnsetAttachmentDropsAttachmentKeysNamingTheResource(t *testing.T) {
 		t.Fatalf("keys that do not name the resource must stay: %#v", got)
 	}
 }
+
+// DATA-67: MergeAttachment copies trimmed values onto the app (a PEM loses
+// its final newline), so UnsetAttachment must match the trimmed copy too.
+func TestUnsetAttachmentMatchesTrimmedCopy(t *testing.T) {
+	pem := "-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----\n"
+	resource := map[string]string{
+		"FLYNN_MONGODB":              "mongodb-harbor-48291",
+		"FLYNN_MONGODB_TRUSTED_CERT": pem,
+		"FLYNN_MONGODB_TLS_ENABLED":  "true",
+		"MONGO_URL":                  "mongodb://u:p@leader.mongodb-harbor-48291.discoverd:27017/db",
+	}
+	release := MergeAttachment(map[string]string{"KEEP": "yes"}, resource, "", true)
+	if release["FLYNN_MONGODB_TRUSTED_CERT"] == pem {
+		t.Fatalf("test needs the trimmed copy on the app: %q", release["FLYNN_MONGODB_TRUSTED_CERT"])
+	}
+	got := UnsetAttachment(release, resource)
+	if v, ok := got["FLYNN_MONGODB_TRUSTED_CERT"]; !ok || v != nil {
+		t.Fatalf("trimmed trusted cert must be unset: %#v", got)
+	}
+	if _, ok := got["KEEP"]; ok {
+		t.Fatalf("must leave unrelated env: %#v", got)
+	}
+}
+
+// DATA-72: destroying one of two MySQL resources on an app must keep the
+// shared (non-URL) attachment keys a remaining resource also provides, and
+// restore FLYNN_MYSQL_ROLE from what is left.
+func TestUnsetAttachmentKeepingSharedKeysOfRemainingResources(t *testing.T) {
+	primary := map[string]string{
+		"FLYNN_MYSQL":             "mysql-prairie-90441",
+		"FLYNN_MYSQL_GREEN_URL":   "mysql://a:p@leader.mysql-prairie-90441.discoverd:3306/db",
+		"DATABASE_URL":            "mysql://a:p@leader.mysql-prairie-90441.discoverd:3306/db",
+		"FLYNN_MYSQL_ROLE":        "primary",
+		"FLYNN_MYSQL_TLS_ENABLED": "true",
+	}
+	follower := map[string]string{
+		"FLYNN_MYSQL":             "mysql-pond-58191",
+		"FLYNN_MYSQL_GRAY_URL":    "mysql://b:q@leader.mysql-pond-58191.discoverd:3306/db",
+		"FLYNN_MYSQL_ROLE":        "follower",
+		"FLYNN_MYSQL_LEADER":      "mysql-prairie-90441",
+		"FLYNN_MYSQL_TLS_ENABLED": "true",
+	}
+	release := map[string]string{
+		"DATABASE_URL":            primary["DATABASE_URL"],
+		"FLYNN_MYSQL_GREEN_URL":   primary["FLYNN_MYSQL_GREEN_URL"],
+		"FLYNN_MYSQL_GRAY_URL":    follower["FLYNN_MYSQL_GRAY_URL"],
+		"FLYNN_MYSQL_ROLE":        "follower",
+		"FLYNN_MYSQL_LEADER":      "mysql-prairie-90441",
+		"FLYNN_MYSQL_TLS_ENABLED": "true",
+	}
+	got := UnsetAttachmentKeeping(release, follower, []map[string]string{primary})
+	if v, ok := got["FLYNN_MYSQL_GRAY_URL"]; !ok || v != nil {
+		t.Fatalf("the follower's own URL must be unset: %#v", got)
+	}
+	if _, ok := got["FLYNN_MYSQL_TLS_ENABLED"]; ok {
+		t.Fatalf("TLS_ENABLED is still provided by the primary and must stay: %#v", got)
+	}
+	if v := got["FLYNN_MYSQL_ROLE"]; v == nil || *v != "primary" {
+		t.Fatalf("ROLE must be restored from the remaining primary: %#v", got)
+	}
+	if v, ok := got["FLYNN_MYSQL_LEADER"]; !ok || v != nil {
+		t.Fatalf("LEADER is provided by no remaining resource and must be unset: %#v", got)
+	}
+	for _, k := range []string{"DATABASE_URL", "FLYNN_MYSQL_GREEN_URL"} {
+		if _, ok := got[k]; ok {
+			t.Fatalf("%s belongs to the primary and must stay: %#v", k, got)
+		}
+	}
+	// With no other resource the follower's keys all go.
+	all := UnsetAttachmentKeeping(release, follower, nil)
+	if v, ok := all["FLYNN_MYSQL_TLS_ENABLED"]; !ok || v != nil {
+		t.Fatalf("with no remaining resource TLS_ENABLED goes: %#v", all)
+	}
+}
