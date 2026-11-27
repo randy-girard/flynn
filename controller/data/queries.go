@@ -131,6 +131,8 @@ var preparedStatements = map[string]string{
 	"volume_select":                            volumeSelectQuery,
 	"volume_insert":                            volumeInsertQuery,
 	"volume_decommission":                      volumeDecommissionQuery,
+	"volume_decommission_app":                  volumeDecommissionAppQuery,
+	"volume_list_orphaned":                     volumeListOrphanedQuery,
 	"http_route_list":                          httpRouteListQuery,
 	"http_route_list_by_ids":                   httpRouteListByIDsQuery,
 	"http_route_list_by_parent_ref":            httpRouteListByParentRefQuery,
@@ -1047,10 +1049,29 @@ SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, pa
 SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at FROM volumes WHERE updated_at >= $1 ORDER BY updated_at DESC`
 	volumeSelectQuery = `
 SELECT volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at FROM volumes WHERE app_id = $1 AND volume_id = $2`
+	// The scheduler persists state through this upsert. destroyed is final,
+	// so a late "created" from a stale scheduler view cannot bring a
+	// destroyed row back.
 	volumeInsertQuery = `
 INSERT INTO volumes (volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-ON CONFLICT (volume_id) DO UPDATE SET job_id = $7, updated_at = now()
+ON CONFLICT (volume_id) DO UPDATE SET job_id = $7,
+  state = CASE WHEN volumes.state = 'destroyed' THEN volumes.state ELSE EXCLUDED.state END,
+  updated_at = now()
 RETURNING created_at, updated_at`
+	volumeDecommissionAppQuery = `
+UPDATE volumes SET updated_at = now(), decommissioned_at = now()
+WHERE app_id = $1 AND decommissioned_at IS NULL AND state <> 'destroyed'
+RETURNING volume_id, host_id, type, state, app_id, release_id, job_id, job_type, path, delete_on_stop, meta, created_at, updated_at, decommissioned_at`
+	// Volumes of apps deleted more than $1 seconds ago that were never
+	// decommissioned (apps deleted before NEW-35, or kept volumes once the
+	// keep-volumes meta is gone). Apps with keep-volumes stay out.
+	volumeListOrphanedQuery = `
+SELECT v.volume_id, v.host_id, v.type, v.state, v.app_id, v.release_id, v.job_id, v.job_type, v.path, v.delete_on_stop, v.meta, v.created_at, v.updated_at, v.decommissioned_at
+FROM volumes v JOIN apps a ON a.app_id = v.app_id
+WHERE a.deleted_at IS NOT NULL AND a.deleted_at <= now() - ($1::bigint * interval '1 second')
+  AND COALESCE(a.meta->>'flynn-controller.keep-volumes', '') <> 'true'
+  AND v.decommissioned_at IS NULL AND v.state <> 'destroyed'
+ORDER BY v.created_at`
 	volumeDecommissionQuery = `
 UPDATE volumes SET updated_at = now(), decommissioned_at = now() WHERE app_id = $1 AND volume_id = $2 RETURNING updated_at, decommissioned_at`
 	httpRouteListQuery = `

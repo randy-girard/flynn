@@ -52,7 +52,9 @@ func JobHandler(db *postgres.DB, client controller.Client, logger log15.Logger) 
 //  3. delete the app's routes
 //  4. unset the current release and delete every release (their slugs go
 //     through release_cleanup)
-//  5. delete the app row, formations and resource attachments
+//  5. delete the app row, formations and resource attachments, and
+//     decommission the app's volumes (the scheduler destroys them once no
+//     job holds them; ct.AppMetaKeepVolumes keeps them)
 //
 // A failed step leaves the later ones untouched: the app keeps its routes,
 // releases and current release while a provider or the blobstore is down.
@@ -87,7 +89,9 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 		return getErr
 	}
 	name := strings.TrimSpace(app.Name)
+	keepVolumes := false
 	if got != nil {
+		keepVolumes = got.Meta[ct.AppMetaKeepVolumes] == "true"
 		if app.ID == "" {
 			app.ID = got.ID
 		}
@@ -145,7 +149,48 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	if err := c.decommissionVolumes(log, tx, &a, keepVolumes); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		a.DecommissionedVolumes, a.KeptVolumes = nil, nil
+		return err
+	}
+	return nil
+}
+
+// decommissionVolumes hands the app's data volumes to the scheduler, which
+// destroys each one on its host once no job holds it (NEW-35). It runs in
+// the transaction that deletes the app row, so a failed earlier step leaves
+// the volumes of a still-serving app alone. An app with
+// ct.AppMetaKeepVolumes=true keeps them; they are listed as kept.
+func (c *context) decommissionVolumes(log log15.Logger, tx *postgres.DBTx, a *ct.AppDeletion, keep bool) error {
+	if keep {
+		vols, err := data.NewVolumeRepo(c.db).AppList(a.AppID)
+		if err != nil {
+			log.Error("error listing app volumes", "err", err)
+			return err
+		}
+		for _, vol := range vols {
+			if vol.State == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
+				continue
+			}
+			log.Warn("keeping volume of deleted app ("+ct.AppMetaKeepVolumes+")", "volume_id", vol.ID, "host_id", vol.HostID)
+			a.KeptVolumes = append(a.KeptVolumes, vol)
+		}
+		return nil
+	}
+	vols, err := data.DecommissionAppVolumes(tx, a.AppID)
+	if err != nil {
+		log.Error("error decommissioning app volumes", "err", err)
+		return err
+	}
+	for _, vol := range vols {
+		log.Info("decommissioned volume of deleted app", "volume_id", vol.ID, "host_id", vol.HostID, "job_type", vol.JobType)
+	}
+	a.DecommissionedVolumes = vols
+	return nil
 }
 
 // followersFirst orders resources that follow a leader (a FLYNN_<ENGINE>_LEADER

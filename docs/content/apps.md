@@ -68,7 +68,20 @@ order:
 2. delete the app's git repo and build cache from the blobstore
 3. delete its routes
 4. delete its releases, and through them its slugs
-5. delete the app record
+5. delete the app record and decommission the app's data volumes
+
+A decommissioned volume is destroyed on its host by the scheduler once no
+job holds it and 10 minutes have passed since the deletion. This is what
+removes a datastore's data when you delete its instance app, or when
+`addons:destroy` makes the provider delete it. The `app_deletion` event
+lists the decommissioned volumes, and the scheduler logs each destroy
+(`destroyed decommissioned volume`). To keep the data of an app you are
+deleting, a cluster admin sets `flynn -a <app> meta:set
+flynn-controller.keep-volumes=true` first; its volumes are then left in
+place and listed as kept in the event. Volumes of apps deleted before this
+behaviour (or with that key set) can be listed and removed with
+`flynn-host volume:gc --deleted-apps --dry-run` (see
+[CLI](cli.md#flynn-host)).
 
 The add-on and blobstore steps call other services and are the ones that can
 fail, so they come first. If a provider refuses or is down, or the blobstore

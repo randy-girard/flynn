@@ -137,6 +137,11 @@ const MetaAppBuilding = "flynn-controller.building"
 // shows the value. It is a reserved key, so a tenant cannot clear it.
 const AppMetaDeletionError = "flynn-controller.deletion-error"
 
+// AppMetaKeepVolumes set to "true" keeps the app's data volumes when the app
+// is deleted (NEW-35). Without it, deleting an app decommissions its volumes
+// and the scheduler destroys them once no job holds them.
+const AppMetaKeepVolumes = "flynn-controller.keep-volumes"
+
 // AppBuildingMetaTTL is how long a git-push building mark stays valid if
 // gitreceive is killed before it can clear the key.
 const AppBuildingMetaTTL = 30 * time.Minute
@@ -1247,6 +1252,11 @@ type AppDeletion struct {
 	DeletedRoutes    []*router.Route `json:"deleted_routes"`
 	DeletedResources []*Resource     `json:"deleted_resources"`
 	DeletedReleases  []*Release      `json:"deleted_releases"`
+	// DecommissionedVolumes are the app's volumes the deletion handed to
+	// the scheduler to destroy. KeptVolumes stayed because the app had
+	// AppMetaKeepVolumes set.
+	DecommissionedVolumes []*Volume `json:"decommissioned_volumes,omitempty"`
+	KeptVolumes           []*Volume `json:"kept_volumes,omitempty"`
 }
 
 type AppDeletionEvent struct {
